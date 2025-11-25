@@ -49,7 +49,7 @@ extern "C" void app_main(void)
     gpio_set_pull_mode(GPIO_NUM_4, GPIO_PULLUP_ONLY);   // CS
     
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
+    host.slot = SPI2_HOST;  // Use SPI2 to avoid conflict with M5Unified's SPI3
     host.max_freq_khz = 400;  // SD card standard init frequency
     host.command_timeout_ms = 5000;  // Long timeout for slow cards
     host.io_voltage = 3.3f;  // M5Paper uses 3.3V
@@ -64,7 +64,7 @@ extern "C" void app_main(void)
         .flags = SPICOMMON_BUSFLAG_MASTER,
     };
     
-    ret = spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+    ret = spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
     } else {
