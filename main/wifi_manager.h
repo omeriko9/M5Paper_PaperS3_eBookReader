@@ -1,0 +1,19 @@
+#pragma once
+#include <string>
+#include "esp_wifi.h"
+
+class WifiManager {
+public:
+    void init();
+    bool connect(); // Try to connect with stored creds
+    void startAP(); // Start Access Point for config
+    bool isConnected();
+    std::string getIpAddress();
+    int getRssi();
+    
+    // Save credentials
+    void saveCredentials(const char* ssid, const char* password);
+    
+    void startDNS();
+    void stopDNS();
+};

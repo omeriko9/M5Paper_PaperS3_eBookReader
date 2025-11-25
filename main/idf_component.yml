@@ -1,0 +1,5 @@
+dependencies:
+  m5stack/m5unified: "*"
+  espressif/zlib: "*"
+  m5stack/m5gfx:
+    git: https://github.com/m5stack/M5GFX.git
