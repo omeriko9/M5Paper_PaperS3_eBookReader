@@ -62,30 +62,57 @@ bool ZipReader::parseCentralDirectory() {
     
     // Limit search to last 64KB (comment max size is 65535)
     long searchLimit = (fileSize > 65536) ? fileSize - 65536 : 0;
-    size_t searchSize = fileSize - searchLimit;
     
-    uint8_t* searchBuf = (uint8_t*)malloc(searchSize);
+    // Use a smaller buffer to avoid OOM (4KB)
+    const size_t BUF_SIZE = 4096;
+    uint8_t* searchBuf = (uint8_t*)heap_caps_malloc(BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!searchBuf) {
+        // Fallback to internal RAM if SPIRAM alloc fails
+        searchBuf = (uint8_t*)malloc(BUF_SIZE);
+    }
+    
     if (!searchBuf) {
         ESP_LOGE(TAG, "Failed to allocate search buffer");
         fclose(f);
         return false;
     }
 
-    fseek(f, searchLimit, SEEK_SET);
-    if (fread(searchBuf, 1, searchSize, f) != searchSize) {
-        ESP_LOGE(TAG, "Failed to read search area");
-        free(searchBuf);
-        fclose(f);
-        return false;
-    }
-    
-    // Search backwards in buffer
-    for (long i = searchSize - 22; i >= 0; i--) {
-        uint32_t sig = searchBuf[i] | (searchBuf[i+1] << 8) | (searchBuf[i+2] << 16) | (searchBuf[i+3] << 24);
-        if (sig == EOCD_SIGNATURE) {
-            eocdOffset = searchLimit + i;
-            break;
+    long currentPos = fileSize;
+    while (currentPos > searchLimit) {
+        long readSize = BUF_SIZE;
+        if (currentPos - readSize < searchLimit) {
+            readSize = currentPos - searchLimit;
         }
+        
+        long readStart = currentPos - readSize;
+        fseek(f, readStart, SEEK_SET);
+        if (fread(searchBuf, 1, readSize, f) != readSize) {
+            ESP_LOGE(TAG, "Failed to read search area");
+            free(searchBuf);
+            fclose(f);
+            return false;
+        }
+
+        // Search backwards in buffer
+        // We need to be careful about the boundary. 
+        // If signature is split between chunks, we might miss it.
+        // But since we are searching for EOCD which is at the END, 
+        // and we iterate backwards, we just need to ensure we overlap or handle it.
+        // Easiest is to overlap by 3 bytes.
+        
+        for (long i = readSize - 4; i >= 0; i--) {
+            uint32_t sig = searchBuf[i] | (searchBuf[i+1] << 8) | (searchBuf[i+2] << 16) | (searchBuf[i+3] << 24);
+            if (sig == EOCD_SIGNATURE) {
+                eocdOffset = readStart + i;
+                break;
+            }
+        }
+        
+        if (eocdOffset != 0) break;
+        
+        // Move back, overlapping by 3 bytes to catch split signatures
+        currentPos -= (readSize - 3);
+        if (currentPos <= searchLimit + 3) break; // Avoid infinite loop if stuck
     }
     
     free(searchBuf);

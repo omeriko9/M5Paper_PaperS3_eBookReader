@@ -254,7 +254,9 @@ void GUI::drawStatusBar() {
     if (currentFont == "Default") {
         M5.Display.setFont(&lgfx::v1::fonts::Font2);
     } else {
-        if (!fontData.empty()) {
+        if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+            M5.Display.loadFont(fontDataHebrew.data());
+        } else if (!fontData.empty()) {
             M5.Display.loadFont(fontData.data());
         } else {
             M5.Display.setFont(&lgfx::v1::fonts::Font2);
@@ -735,120 +737,122 @@ void GUI::loadSettings() {
 }
 
 void GUI::loadFonts() {
+    // Clear buffers to ensure we don't hold two fonts at once if possible
     fontData.clear();
+    fontDataHebrew.clear();
     M5.Display.unloadFont();
     
     if (currentFont == "Default") {
-        // Use built-in
         return;
     }
     
-    std::string path;
     if (currentFont == "Hebrew") {
-        path = "/spiffs/fonts/hebrew.vlw"; 
-    } else if (currentFont == "Roboto") {
-        path = "/spiffs/fonts/roboto.vlw"; 
-    } else {
-        path = "/spiffs/fonts/" + currentFont + ".vlw";
+        ensureHebrewFontLoaded();
+        if (!fontDataHebrew.empty()) {
+            M5.Display.loadFont(fontDataHebrew.data());
+        }
+        return;
     }
     
-    ESP_LOGI(TAG, "Attempting to load font from: %s", path.c_str());
-
+    // Load other font (e.g. Roboto)
+    std::string path = "/spiffs/fonts/" + currentFont + ".vlw";
+    if (currentFont == "Roboto") path = "/spiffs/fonts/Roboto-Regular.vlw";
+    
+    ESP_LOGI(TAG, "Loading font: %s", path.c_str());
     FILE* f = fopen(path.c_str(), "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         size_t size = ftell(f);
         fseek(f, 0, SEEK_SET);
-        
-        ESP_LOGI(TAG, "Font file found, size: %u bytes", (unsigned int)size);
-
         fontData.resize(size);
-        size_t read = fread(fontData.data(), 1, size, f);
+        fread(fontData.data(), 1, size, f);
         fclose(f);
-        
-        if (read == size) {
-            if (M5.Display.loadFont(fontData.data())) {
-                 ESP_LOGI(TAG, "Font loaded successfully");
-            } else {
-                 ESP_LOGE(TAG, "M5.Display.loadFont failed");
-            }
-        } else {
-             ESP_LOGE(TAG, "Failed to read full font file. Read %u of %u", (unsigned int)read, (unsigned int)size);
-        }
+        M5.Display.loadFont(fontData.data());
     } else {
-        ESP_LOGW(TAG, "Failed to load font: %s (errno: %d - %s)", path.c_str(), errno, strerror(errno));
-        if (currentFont != "Default") {
-             currentFont = "Default";
-        }
+        ESP_LOGW(TAG, "Failed to load font: %s", path.c_str());
+        currentFont = "Default";
     }
 }
 
 void GUI::ensureHebrewFontLoaded() {
-    if (!fontDataHebrew.empty()) return;
+    if (!fontDataHebrew.empty()) {
+        ESP_LOGI(TAG, "Hebrew font already loaded");
+        return;
+    }
     
-    const char* path = "/spiffs/fonts/hebrew.vlw";
+    // CRITICAL: Free other font memory before loading Hebrew to avoid OOM
+    if (!fontData.empty()) {
+        ESP_LOGI(TAG, "Unloading primary font to make room for Hebrew");
+        fontData.clear();
+        M5.Display.unloadFont();
+    }
+    
+    const char* path = "/spiffs/fonts/Hebrew-Merged.vlw";
+    ESP_LOGI(TAG, "Attempting to load Hebrew font from: %s", path);
     FILE* f = fopen(path, "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         size_t size = ftell(f);
         fseek(f, 0, SEEK_SET);
-        fontDataHebrew.resize(size);
-        fread(fontDataHebrew.data(), 1, size, f);
+        
+        // Try to allocate in PSRAM first if available
+        // We use resize() which uses default allocator, but we can reserve first?
+        // std::vector doesn't support custom allocators easily without changing type.
+        // But we can try to force heap caps if we used a custom allocator.
+        // For now, let's just rely on system malloc. If PSRAM is configured, large blocks go there.
+        // But if not, we might fail.
+        
+        try {
+            fontDataHebrew.resize(size);
+        } catch (const std::bad_alloc& e) {
+            ESP_LOGE(TAG, "Failed to allocate memory for Hebrew font (%u bytes)", (unsigned int)size);
+            fclose(f);
+            return;
+        }
+        
+        size_t read = fread(fontDataHebrew.data(), 1, size, f);
         fclose(f);
-        ESP_LOGI(TAG, "Hebrew font cached (%u bytes)", (unsigned int)size);
+        ESP_LOGI(TAG, "Hebrew font loaded: %u bytes read (expected %u)", (unsigned int)read, (unsigned int)size);
+        
+        // Verify the font data starts with a valid header
+        if (read >= 24) {
+            uint32_t glyph_count = (fontDataHebrew[0] << 24) | (fontDataHebrew[1] << 16) | 
+                                   (fontDataHebrew[2] << 8) | fontDataHebrew[3];
+            ESP_LOGI(TAG, "Hebrew font header: glyph_count=%u", glyph_count);
+        }
     } else {
-        ESP_LOGW(TAG, "Failed to cache Hebrew font");
+        ESP_LOGE(TAG, "Failed to open Hebrew font file: %s (errno=%d)", path, errno);
     }
 }
 
 void GUI::drawStringMixed(const std::string& text, int x, int y) {
-    // Split text into segments of Hebrew vs Non-Hebrew
-    // Draw each segment with appropriate font
+    // Simplified: if text contains Hebrew, use Hebrew font for the whole string
+    // This avoids complex font-switching mid-string which can cause rendering issues
     
-    ensureHebrewFontLoaded();
-    
-    int currentX = x;
-    std::string currentSegment;
-    bool isHebrewSegment = false;
-    
-    auto flushSegment = [&](bool hebrew) {
-        if (currentSegment.empty()) return;
-        
-        if (hebrew && !fontDataHebrew.empty()) {
+    if (isHebrew(text)) {
+        // Load Hebrew font
+        ensureHebrewFontLoaded();
+        if (!fontDataHebrew.empty()) {
             M5.Display.loadFont(fontDataHebrew.data());
+            M5.Display.drawString(text.c_str(), x, y);
         } else {
-            // Load current selected font or default
-            if (!fontData.empty()) M5.Display.loadFont(fontData.data());
-            else M5.Display.unloadFont(); // Default
+            ESP_LOGW(TAG, "Hebrew font not loaded, using default");
+            M5.Display.unloadFont();
+            M5.Display.drawString(text.c_str(), x, y);
         }
         
-        M5.Display.drawString(currentSegment.c_str(), currentX, y);
-        currentX += M5.Display.textWidth(currentSegment.c_str());
-        currentSegment.clear();
-    };
-    
-    for (size_t i = 0; i < text.length(); ++i) {
-        unsigned char c = (unsigned char)text[i];
-        bool isHebrewChar = (c >= 0xD6 && c <= 0xD7); // Simple check
-        
-        // Treat spaces/punctuation as "same as previous" to avoid fragmentation
-        // unless we are switching scripts
-        if (!isalnum(c) && c < 128) {
-             // Punctuation/Space
-             // Keep with current segment
+        // Restore previous font
+        if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+            M5.Display.loadFont(fontDataHebrew.data());
+        } else if (currentFont != "Default" && !fontData.empty()) {
+            M5.Display.loadFont(fontData.data());
         } else {
-            if (isHebrewChar != isHebrewSegment) {
-                flushSegment(isHebrewSegment);
-                isHebrewSegment = isHebrewChar;
-            }
+            M5.Display.unloadFont();
         }
-        currentSegment += text[i];
+    } else {
+        // Non-Hebrew text - use current font
+        M5.Display.drawString(text.c_str(), x, y);
     }
-    flushSegment(isHebrewSegment);
-    
-    // Restore current font
-    if (!fontData.empty()) M5.Display.loadFont(fontData.data());
-    else M5.Display.unloadFont();
 }
 
 
