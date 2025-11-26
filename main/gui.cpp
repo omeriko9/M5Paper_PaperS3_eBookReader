@@ -11,6 +11,9 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include <dirent.h>
+#include <errno.h>
+#include <string.h>
 
 static const char *TAG = "GUI";
 
@@ -114,13 +117,7 @@ static std::string processTextForDisplay(const std::string& text) {
 }
 
 static bool isHebrewString(const std::string& text) {
-    for (size_t i = 0; i < text.length(); ++i) {
-        unsigned char c = (unsigned char)text[i];
-        if (c >= 0xD6 && c <= 0xD7) {
-            return true;
-        }
-    }
-    return false;
+    return isHebrew(text);
 }
 
 void GUI::init() {
@@ -282,35 +279,25 @@ void GUI::drawLibrary() {
     
     auto books = bookIndex.getBooks();
     
-    // Check if we need to switch to Hebrew font for the library list
-    bool needHebrew = false;
-    for (const auto& book : books) {
-        if (isHebrewString(book.title)) {
-            needHebrew = true;
-            break;
-        }
-    }
-    
-    if (needHebrew && currentFont != "Hebrew") {
-        // We need to switch font, but we can't do it inside draw loop easily without recursion issues
-        // if we are not careful.
-        // However, setFont sets fontChanged=true and needsRedraw=true.
-        // If we return here, the main loop will pick it up.
-        setFont("Hebrew");
-        return;
-    }
+    // Removed global font switch logic to support mixed content
 
     int y = LIBRARY_LIST_START_Y;
     M5.Display.setTextSize(itemSize);
     for (const auto& book : books) {
-        M5.Display.setCursor(20, y);
-        // Truncate display name if too long
+        // Truncate display title if too long
         std::string displayTitle = book.title;
         if (displayTitle.length() > 20) displayTitle = displayTitle.substr(0, 17) + "...";
         
         displayTitle = processTextForDisplay(displayTitle);
         
-        M5.Display.printf("- %s", displayTitle.c_str());
+        // Draw bullet
+        M5.Display.setCursor(20, y);
+        M5.Display.print("- ");
+        
+        // Draw title with mixed font support
+        int titleX = 20 + M5.Display.textWidth("- ");
+        drawStringMixed(displayTitle, titleX, y);
+        
         y += LIBRARY_LINE_HEIGHT;
     }
     
@@ -765,23 +752,103 @@ void GUI::loadFonts() {
         path = "/spiffs/fonts/" + currentFont + ".vlw";
     }
     
+    ESP_LOGI(TAG, "Attempting to load font from: %s", path.c_str());
+
     FILE* f = fopen(path.c_str(), "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         size_t size = ftell(f);
         fseek(f, 0, SEEK_SET);
         
+        ESP_LOGI(TAG, "Font file found, size: %u bytes", (unsigned int)size);
+
         fontData.resize(size);
-        fread(fontData.data(), 1, size, f);
+        size_t read = fread(fontData.data(), 1, size, f);
         fclose(f);
         
-        M5.Display.loadFont(fontData.data());
+        if (read == size) {
+            if (M5.Display.loadFont(fontData.data())) {
+                 ESP_LOGI(TAG, "Font loaded successfully");
+            } else {
+                 ESP_LOGE(TAG, "M5.Display.loadFont failed");
+            }
+        } else {
+             ESP_LOGE(TAG, "Failed to read full font file. Read %u of %u", (unsigned int)read, (unsigned int)size);
+        }
     } else {
-        ESP_LOGW(TAG, "Failed to load font: %s", path.c_str());
+        ESP_LOGW(TAG, "Failed to load font: %s (errno: %d - %s)", path.c_str(), errno, strerror(errno));
         if (currentFont != "Default") {
              currentFont = "Default";
         }
     }
+}
+
+void GUI::ensureHebrewFontLoaded() {
+    if (!fontDataHebrew.empty()) return;
+    
+    const char* path = "/spiffs/fonts/hebrew.vlw";
+    FILE* f = fopen(path, "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        size_t size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        fontDataHebrew.resize(size);
+        fread(fontDataHebrew.data(), 1, size, f);
+        fclose(f);
+        ESP_LOGI(TAG, "Hebrew font cached (%u bytes)", (unsigned int)size);
+    } else {
+        ESP_LOGW(TAG, "Failed to cache Hebrew font");
+    }
+}
+
+void GUI::drawStringMixed(const std::string& text, int x, int y) {
+    // Split text into segments of Hebrew vs Non-Hebrew
+    // Draw each segment with appropriate font
+    
+    ensureHebrewFontLoaded();
+    
+    int currentX = x;
+    std::string currentSegment;
+    bool isHebrewSegment = false;
+    
+    auto flushSegment = [&](bool hebrew) {
+        if (currentSegment.empty()) return;
+        
+        if (hebrew && !fontDataHebrew.empty()) {
+            M5.Display.loadFont(fontDataHebrew.data());
+        } else {
+            // Load current selected font or default
+            if (!fontData.empty()) M5.Display.loadFont(fontData.data());
+            else M5.Display.unloadFont(); // Default
+        }
+        
+        M5.Display.drawString(currentSegment.c_str(), currentX, y);
+        currentX += M5.Display.textWidth(currentSegment.c_str());
+        currentSegment.clear();
+    };
+    
+    for (size_t i = 0; i < text.length(); ++i) {
+        unsigned char c = (unsigned char)text[i];
+        bool isHebrewChar = (c >= 0xD6 && c <= 0xD7); // Simple check
+        
+        // Treat spaces/punctuation as "same as previous" to avoid fragmentation
+        // unless we are switching scripts
+        if (!isalnum(c) && c < 128) {
+             // Punctuation/Space
+             // Keep with current segment
+        } else {
+            if (isHebrewChar != isHebrewSegment) {
+                flushSegment(isHebrewSegment);
+                isHebrewSegment = isHebrewChar;
+            }
+        }
+        currentSegment += text[i];
+    }
+    flushSegment(isHebrewSegment);
+    
+    // Restore current font
+    if (!fontData.empty()) M5.Display.loadFont(fontData.data());
+    else M5.Display.unloadFont();
 }
 
 

@@ -42,6 +42,8 @@ private:
     std::string currentFont = "Default";
     bool fontChanged = false;
     std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
+    std::vector<uint8_t> fontDataHebrew; // Cache for Hebrew font
+    
     size_t lastPageChars = 0;
     int lastPageTotal = 1;
     
@@ -54,6 +56,9 @@ private:
     void handleTouch();
     
     void loadFonts();
+    void ensureHebrewFontLoaded();
+    void drawStringMixed(const std::string& text, int x, int y);
+    
     void saveSettings();
     void loadSettings();
     void goToSleep();

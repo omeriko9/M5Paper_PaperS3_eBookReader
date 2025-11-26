@@ -236,10 +236,9 @@ extern "C" void app_main(void)
     while (1) {
         M5.update();
         
-        // Use built-in power key state to restart on wheel press
-        uint8_t keyState = M5.Power.getKeyState();
-        if (keyState) {
-            ESP_LOGI(TAG, "Power key event (%u) - Restarting...", keyState);
+        // Check buttons for restart
+        if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed() || M5.BtnPWR.wasClicked()) {
+            ESP_LOGI(TAG, "Button pressed - Restarting...");
             M5.Display.clear();
             M5.Display.setCursor(0, 100);
             M5.Display.println("Restarting...");
