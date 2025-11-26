@@ -90,6 +90,7 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
     <label>Font Size: <span id="sizeVal"></span></label>
     <div style="display: flex; gap: 10px; margin-top: 5px;">
         <button onclick="changeSize(-0.1)">-</button>
+        <input type="number" id="customSize" step="0.1" style="width: 80px; margin:0;" onchange="setCustomSize()">
         <button onclick="changeSize(0.1)">+</button>
     </div>
   </div>
@@ -120,6 +121,7 @@ function fetchSettings() {
     fetch('/api/settings').then(r => r.json()).then(s => {
         currentSize = s.fontSize;
         document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
+        document.getElementById('customSize').value = currentSize.toFixed(1);
         document.getElementById('fontSel').value = s.font;
     });
 }
@@ -131,6 +133,16 @@ function changeSize(delta) {
     updateSettings();
 }
 
+function setCustomSize() {
+    const val = parseFloat(document.getElementById('customSize').value);
+    if(!isNaN(val)) {
+        currentSize = val;
+        if(currentSize < 0.5) currentSize = 0.5;
+        if(currentSize > 5.0) currentSize = 5.0;
+        updateSettings();
+    }
+}
+
 function changeFont() {
     updateSettings();
 }
@@ -138,6 +150,7 @@ function changeFont() {
 function updateSettings() {
     const font = document.getElementById('fontSel').value;
     document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
+    document.getElementById('customSize').value = currentSize.toFixed(1);
     
     fetch('/api/settings', {
         method: 'POST',

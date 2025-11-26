@@ -19,6 +19,10 @@ bool wifiConnected = false;
 int wifiRssi = 0;
 extern WifiManager wifiManager;
 
+static constexpr int STATUS_BAR_HEIGHT = 44;
+static constexpr int LIBRARY_LIST_START_Y = 120;
+static constexpr int LIBRARY_LINE_HEIGHT = 48;
+
 // Helper to split string by delimiters but keep delimiters if needed
 // For word wrapping, we split by space.
 std::vector<std::string> splitWords(const std::string& text) {
@@ -45,28 +49,17 @@ std::vector<std::string> splitWords(const std::string& text) {
 }
 
 // Simple Hebrew detection and reversal for visual display
-static std::string processTextForDisplay(const std::string& text) {
-    // Check if string contains Hebrew (0xD6 0x90 to 0xD7 0xAA in UTF-8)
-    bool hasHebrew = false;
-    for (size_t i = 0; i < text.length(); ++i) {
-        unsigned char c = (unsigned char)text[i];
-        if (c >= 0xD6 && c <= 0xD7) {
-            hasHebrew = true;
-            break;
-        }
+static bool isHebrew(const std::string& word) {
+    for (size_t i = 0; i < word.length(); ++i) {
+        unsigned char c = (unsigned char)word[i];
+        if (c >= 0xD6 && c <= 0xD7) return true;
     }
-    
-    if (!hasHebrew) return text;
-    
-    // If Hebrew, reverse the string?
-    // This is a very naive implementation.
-    // A proper implementation would use a BiDi algorithm (like FriBidi).
-    // For now, we just reverse the whole string if it contains Hebrew.
-    // Note: This reverses UTF-8 characters correctly.
-    
+    return false;
+}
+
+static std::string reverseHebrewWord(const std::string& text) {
     std::string reversed;
     reversed.reserve(text.length());
-    
     for (size_t i = 0; i < text.length(); ) {
         unsigned char c = (unsigned char)text[i];
         size_t charLen = 1;
@@ -75,13 +68,47 @@ static std::string processTextForDisplay(const std::string& text) {
         else if ((c & 0xF0) == 0xE0) charLen = 3;
         else if ((c & 0xF8) == 0xF0) charLen = 4;
         
-        if (i + charLen > text.length()) break; // Error
-        
+        if (i + charLen > text.length()) break;
         reversed.insert(0, text.substr(i, charLen));
         i += charLen;
     }
-    
     return reversed;
+}
+
+static std::string processTextForDisplay(const std::string& text) {
+    if (!isHebrew(text)) return text;
+
+    // Split into words (space separated)
+    // We want to reverse the order of words for RTL.
+    // And for each word, if it is Hebrew, reverse the letters.
+    // If it is English/Number, keep letters as is.
+    
+    std::vector<std::string> words;
+    std::string current;
+    for (char c : text) {
+        if (c == ' ' || c == '\n') {
+            if (!current.empty()) words.push_back(current);
+            std::string delim(1, c);
+            words.push_back(delim);
+            current.clear();
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) words.push_back(current);
+    
+    // Reverse word order
+    std::reverse(words.begin(), words.end());
+    
+    std::string result;
+    for (const auto& word : words) {
+        if (isHebrew(word)) {
+            result += reverseHebrewWord(word);
+        } else {
+            result += word;
+        }
+    }
+    return result;
 }
 
 static bool isHebrewString(const std::string& text) {
@@ -107,7 +134,7 @@ void GUI::init() {
     loadFonts();
     bookIndex.init();
 
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextColor(TFT_BLACK);
 
     // Check wakeup
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
@@ -188,36 +215,65 @@ void GUI::update() {
 }
 
 void GUI::drawStatusBar() {
-    M5.Display.fillRect(0, 0, M5.Display.width(), 40, TFT_LIGHTGREY);
-    M5.Display.setCursor(10, 10);
-    M5.Display.setTextSize(2);
+    // Use system font for status bar to ensure it fits
+    M5.Display.setFont(&lgfx::v1::fonts::Font2);
+    M5.Display.setTextSize(1.6f); // Larger, easier to read
+
+    M5.Display.fillRect(0, 0, M5.Display.width(), STATUS_BAR_HEIGHT, TFT_LIGHTGREY);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    const int centerY = STATUS_BAR_HEIGHT / 2;
     
     // Time
+    M5.Display.setTextDatum(textdatum_t::middle_left);
     auto dt = M5.Rtc.getDateTime();
-    M5.Display.printf("%02d:%02d", dt.time.hours, dt.time.minutes);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%02d:%02d", dt.time.hours, dt.time.minutes);
+    M5.Display.drawString(buf, 10, centerY);
     
-    // Wifi
-    M5.Display.setCursor(M5.Display.width() - 200, 10);
+    // Battery (Right aligned)
+    M5.Display.setTextDatum(textdatum_t::middle_right);
+    int bat = M5.Power.getBatteryLevel();
+    snprintf(buf, sizeof(buf), "%d%%", bat);
+    int batteryX = M5.Display.width() - 10;
+    int batteryTextWidth = M5.Display.textWidth(buf);
+    M5.Display.drawString(buf, batteryX, centerY);
+    
+    // Wifi (Left of Battery)
     if (wifiConnected) {
-        M5.Display.printf("WiFi %d dBm", wifiRssi);
+        snprintf(buf, sizeof(buf), "WiFi %d dBm", wifiRssi);
     } else {
-        M5.Display.print("No WiFi");
+        snprintf(buf, sizeof(buf), "No WiFi");
+    }
+    // Give enough space for battery reading
+    int wifiX = batteryX - batteryTextWidth - 12;
+    M5.Display.drawString(buf, wifiX, centerY);
+    
+    // Restore font
+    if (currentFont == "Default") {
+        M5.Display.setFont(&lgfx::v1::fonts::Font2);
+    } else {
+        if (!fontData.empty()) {
+            M5.Display.loadFont(fontData.data());
+        } else {
+            M5.Display.setFont(&lgfx::v1::fonts::Font2);
+        }
     }
     
-    // Battery
-    int bat = M5.Power.getBatteryLevel();
-    M5.Display.setCursor(M5.Display.width() - 80, 10);
-    M5.Display.printf("%d%%", bat);
+    // Reset datum to default for other drawing functions
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.setTextColor(TFT_BLACK); // Transparent background for the rest of the UI
 }
 
 void GUI::drawLibrary() {
     M5.Display.fillScreen(TFT_WHITE);
     drawStatusBar();
     
-    M5.Display.setCursor(10, 60);
-    M5.Display.setTextSize(3);
-    M5.Display.println("Library:");
-    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(TFT_BLACK);
+    const float headingSize = 2.4f;
+    const float itemSize = 2.0f;
+    M5.Display.setTextSize(headingSize);
+    M5.Display.setCursor(16, 58);
+    M5.Display.println("Library");
     
     auto books = bookIndex.getBooks();
     
@@ -239,7 +295,8 @@ void GUI::drawLibrary() {
         return;
     }
 
-    int y = 100;
+    int y = LIBRARY_LIST_START_Y;
+    M5.Display.setTextSize(itemSize);
     for (const auto& book : books) {
         M5.Display.setCursor(20, y);
         // Truncate display name if too long
@@ -249,15 +306,15 @@ void GUI::drawLibrary() {
         displayTitle = processTextForDisplay(displayTitle);
         
         M5.Display.printf("- %s", displayTitle.c_str());
-        y += 40;
+        y += LIBRARY_LINE_HEIGHT;
     }
     
     if (books.empty()) {
-        M5.Display.setCursor(20, 100);
+        M5.Display.setCursor(20, LIBRARY_LIST_START_Y);
         M5.Display.println("No books found.");
-        M5.Display.setCursor(20, 140);
+        M5.Display.setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
         M5.Display.println("Upload via WiFi:");
-        M5.Display.setCursor(20, 180);
+        M5.Display.setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT * 2);
         if (wifiConnected) {
             M5.Display.printf("http://%s/", wifiManager.getIpAddress().c_str());
         } else {
@@ -272,10 +329,10 @@ void GUI::drawLibrary() {
 size_t GUI::drawPageContent(bool draw) {
     M5.Display.setTextSize(fontSize);
     
-    int x = 15; // Margin
-    int y = 50; // Top margin
-    int rightMargin = 15;
-    int bottomMargin = 40;
+    int x = 20; // Margin
+    int y = STATUS_BAR_HEIGHT + 12; // Top margin below status bar
+    int rightMargin = 20;
+    int bottomMargin = 80; // Leave room for footer/status text
     int width = M5.Display.width();
     int height = M5.Display.height();
     int maxWidth = width - rightMargin; // Absolute X limit
@@ -343,10 +400,12 @@ void GUI::drawReader() {
     M5.Display.fillScreen(TFT_WHITE);
     drawStatusBar();
     
+    M5.Display.setTextColor(TFT_BLACK); // Clear any background color from status bar
     drawPageContent(true);
     
-    M5.Display.setTextSize(1);
-    M5.Display.setCursor(10, M5.Display.height() - 25);
+    const int footerY = M5.Display.height() - 50;
+    M5.Display.setTextSize(1.4f);
+    M5.Display.setCursor(16, footerY);
     M5.Display.printf("Ch %d - %.1f%%", epubLoader.getCurrentChapterIndex() + 1, 
         (float)currentTextOffset / epubLoader.getChapterSize() * 100.0f);
         
@@ -406,7 +465,7 @@ void GUI::drawSettings() {
     M5.Display.drawRect(40, 240, 100, 40, TFT_BLACK);
     M5.Display.drawString("Close", 60, 250);
     
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE); // Reset
+    M5.Display.setTextColor(TFT_BLACK); // Reset
     M5.Display.display();
 }
 
@@ -424,9 +483,9 @@ void GUI::handleTouch() {
         if (t.wasPressed()) {
             if (currentState == AppState::LIBRARY) {
                 auto books = bookIndex.getBooks();
-                int y = 100;
+                int y = LIBRARY_LIST_START_Y;
                 for (const auto& book : books) {
-                    if (t.y >= y && t.y < y + 40) {
+                    if (t.y >= y && t.y < y + LIBRARY_LINE_HEIGHT) {
                         currentBook = book;
                         if (epubLoader.load(currentBook.path.c_str())) {
                             currentState = AppState::READER;
@@ -458,7 +517,7 @@ void GUI::handleTouch() {
                         }
                         break;
                     }
-                    y += 40;
+                    y += LIBRARY_LINE_HEIGHT;
                 }
             } else if (currentState == AppState::READER) {
                 // Top tap to exit
@@ -551,10 +610,27 @@ void GUI::setFontSize(float size) {
 
 void GUI::setFont(const std::string& fontName) {
     if (currentFont != fontName) {
+        // Save current settings (including size of old font)
+        saveSettings();
+        
         currentFont = fontName;
         fontChanged = true;
+        
+        // Load settings for new font (size)
+        nvs_handle_t my_handle;
+        if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK) {
+             std::string key = "sz_" + currentFont;
+             uint32_t sizeInt = 0;
+             if (nvs_get_u32(my_handle, key.c_str(), &sizeInt) == ESP_OK) {
+                 fontSize = sizeInt / 10.0f;
+             } else {
+                 fontSize = 2.0f; // Default
+             }
+             nvs_close(my_handle);
+        }
+        
         loadFonts();
-        saveSettings();
+        saveSettings(); // Save new font name
         needsRedraw = true;
     }
 }
@@ -564,11 +640,6 @@ void GUI::loadSettings() {
     esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
     if (err == ESP_OK) {
         size_t size = 0;
-        // Font Size
-        uint32_t sizeInt = 20; // Default 2.0 * 10
-        nvs_get_u32(my_handle, "font_size", &sizeInt);
-        fontSize = sizeInt / 10.0f;
-        
         // Font Name
         if (nvs_get_str(my_handle, "font_name", NULL, &size) == ESP_OK) {
             char* name = new char[size];
@@ -576,6 +647,16 @@ void GUI::loadSettings() {
             currentFont = name;
             delete[] name;
         }
+        
+        // Font Size for THIS font
+        std::string key = "sz_" + currentFont;
+        uint32_t sizeInt = 0;
+        if (nvs_get_u32(my_handle, key.c_str(), &sizeInt) == ESP_OK) {
+            fontSize = sizeInt / 10.0f;
+        } else {
+            fontSize = 2.0f;
+        }
+        
         nvs_close(my_handle);
     }
 }
@@ -584,7 +665,10 @@ void GUI::saveSettings() {
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
     if (err == ESP_OK) {
-        nvs_set_u32(my_handle, "font_size", (uint32_t)(fontSize * 10));
+        // Save size for CURRENT font
+        std::string key = "sz_" + currentFont;
+        nvs_set_u32(my_handle, key.c_str(), (uint32_t)(fontSize * 10));
+        
         nvs_set_str(my_handle, "font_name", currentFont.c_str());
         nvs_commit(my_handle);
         nvs_close(my_handle);
@@ -613,6 +697,7 @@ static bool hasExtension(const std::string& path, const std::string& ext) {
 
 void GUI::loadFonts() {
     M5.Display.unloadFont();
+    fontData.clear(); // Free previous font memory
     
     if (currentFont == "Default") {
         M5.Display.setFont(&lgfx::v1::fonts::Font2);
@@ -631,11 +716,43 @@ void GUI::loadFonts() {
             }
         }
 
-        if (!M5.Display.loadFont(fontPath.c_str())) {
-             ESP_LOGE(TAG, "Failed to load font %s, falling back to default", fontPath.c_str());
-             currentFont = "Default";
-             M5.Display.setFont(&lgfx::v1::fonts::Font2);
+        // Load file into memory to avoid WDT timeouts during rendering
+        FILE* f = fopen(fontPath.c_str(), "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            size_t size = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            
+            ESP_LOGI(TAG, "Loading font %s into memory (%d bytes)", fontPath.c_str(), (int)size);
+            
+            try {
+                fontData.resize(size);
+                size_t read = fread(fontData.data(), 1, size, f);
+                fclose(f);
+                
+                if (read == size) {
+                    if (M5.Display.loadFont(fontData.data())) {
+                        ESP_LOGI(TAG, "Font loaded successfully");
+                        return;
+                    } else {
+                        ESP_LOGE(TAG, "Failed to parse font data");
+                    }
+                } else {
+                    ESP_LOGE(TAG, "Failed to read full font file");
+                }
+            } catch (const std::exception& ee) {
+                ESP_LOGE(TAG, "Failed to allocate memory for font: %s", ee.what());
+                if (f) fclose(f);
+            }
+        } else {
+            ESP_LOGE(TAG, "Failed to open font file %s", fontPath.c_str());
         }
+
+        // Fallback
+        ESP_LOGE(TAG, "Falling back to default font");
+        currentFont = "Default";
+        M5.Display.setFont(&lgfx::v1::fonts::Font2);
+        fontData.clear();
     }
 }
 

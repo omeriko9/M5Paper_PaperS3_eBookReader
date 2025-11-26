@@ -37,6 +37,7 @@ private:
     float fontSize = 1.0f; // Scale factor
     std::string currentFont = "Default";
     bool fontChanged = false;
+    std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
     
     void drawStatusBar();
     void drawLibrary();

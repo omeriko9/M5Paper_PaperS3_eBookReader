@@ -56,7 +56,11 @@ def build_vlw(ttf_path: Path, out_path: Path, size: int) -> None:
             continue  # skip empty glyphs
         bbox = draw.textbbox((0, 0), ch, font=font)
         x_advance = bbox[2] - bbox[0]
-        d_y = ascent  # baseline from top of bitmap
+        # d_y is the vertical offset from the baseline to the top of the glyph bitmap.
+        # In PIL, if we draw at (0,0), the baseline is at y=ascent.
+        # The top of the glyph is at bbox[1].
+        # So the distance from baseline to top is ascent - bbox[1].
+        d_y = ascent - bbox[1]
         g_dx = bbox[0]
         glyphs.append((cp, h, w, x_advance, d_y, g_dx, bytes(mask)))
 
