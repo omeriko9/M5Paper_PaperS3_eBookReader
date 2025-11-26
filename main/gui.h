@@ -28,6 +28,7 @@ private:
     AppState previousState = AppState::LIBRARY; // For returning from settings
     bool needsRedraw = true;
     BookEntry currentBook;
+    struct PageInfo { int current = 1; int total = 1; };
     
     // Reader State
     size_t currentTextOffset = 0;
@@ -38,6 +39,8 @@ private:
     std::string currentFont = "Default";
     bool fontChanged = false;
     std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
+    size_t lastPageChars = 0;
+    int lastPageTotal = 1;
     
     void drawStatusBar();
     void drawLibrary();
@@ -53,4 +56,7 @@ private:
     void goToSleep();
     
     size_t drawPageContent(bool draw);
+    size_t drawPageContentAt(size_t startOffset, bool draw);
+    PageInfo calculatePageInfo();
+    void resetPageInfoCache();
 };

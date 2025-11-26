@@ -10,6 +10,7 @@
 #include "esp_sleep.h" // Added include
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 
 static const char *TAG = "GUI";
 
@@ -22,6 +23,7 @@ extern WifiManager wifiManager;
 static constexpr int STATUS_BAR_HEIGHT = 44;
 static constexpr int LIBRARY_LIST_START_Y = 120;
 static constexpr int LIBRARY_LINE_HEIGHT = 48;
+static constexpr int PAGEINFO_ESTIMATE_MIN_CHARS = 50;
 
 // Helper to split string by delimiters but keep delimiters if needed
 // For word wrapping, we split by space.
@@ -133,6 +135,7 @@ void GUI::init() {
     loadSettings();
     loadFonts();
     bookIndex.init();
+    resetPageInfoCache();
 
     M5.Display.setTextColor(TFT_BLACK);
 
@@ -160,6 +163,7 @@ void GUI::init() {
                 
                 // Restore progress
                 currentTextOffset = currentBook.currentOffset;
+                resetPageInfoCache();
                 if (currentBook.currentChapter > 0) {
                     while(epubLoader.getCurrentChapterIndex() < currentBook.currentChapter) {
                         if (!epubLoader.nextChapter()) break;
@@ -193,6 +197,7 @@ void GUI::update() {
     if (fontChanged) {
         loadFonts();
         fontChanged = false;
+        resetPageInfoCache();
     }
     
     if (needsRedraw) {
@@ -327,6 +332,10 @@ void GUI::drawLibrary() {
 
 // Returns number of characters that fit on the page
 size_t GUI::drawPageContent(bool draw) {
+    return drawPageContentAt(currentTextOffset, draw);
+}
+
+size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
     M5.Display.setTextSize(fontSize);
     
     int x = 20; // Margin
@@ -340,7 +349,7 @@ size_t GUI::drawPageContent(bool draw) {
     int lineHeight = M5.Display.fontHeight() * 1.4; // More breathing room
     
     // Fetch a large chunk
-    std::string text = epubLoader.getText(currentTextOffset, 3000);
+    std::string text = epubLoader.getText(startOffset, 3000);
     if (text.empty()) return 0;
     
     // Process text for display (e.g., Hebrew reversal)
@@ -396,18 +405,58 @@ size_t GUI::drawPageContent(bool draw) {
     return i;
 }
 
+GUI::PageInfo GUI::calculatePageInfo() {
+    // Current page is tracked via history stack
+    PageInfo info{};
+    info.current = static_cast<int>(pageHistory.size()) + 1;
+
+    // Ensure we have a recent char count for this font/layout
+    if (lastPageChars < PAGEINFO_ESTIMATE_MIN_CHARS) {
+        size_t chars = drawPageContentAt(currentTextOffset, false);
+        if (chars > 0) {
+            lastPageChars = chars;
+        }
+    }
+
+    size_t chapterSize = epubLoader.getChapterSize();
+    if (lastPageChars > 0) {
+        lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
+    } else {
+        lastPageTotal = 1;
+    }
+
+    if (lastPageTotal < 1) lastPageTotal = 1;
+    if (info.current > lastPageTotal) info.current = lastPageTotal;
+    info.total = lastPageTotal;
+    return info;
+}
+
 void GUI::drawReader() {
     M5.Display.fillScreen(TFT_WHITE);
     drawStatusBar();
     
     M5.Display.setTextColor(TFT_BLACK); // Clear any background color from status bar
-    drawPageContent(true);
+    size_t charsDrawn = drawPageContent(true);
+    if (charsDrawn > 0) {
+        lastPageChars = charsDrawn;
+        size_t chapterSize = epubLoader.getChapterSize();
+        lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
+        if (lastPageTotal < 1) lastPageTotal = 1;
+    }
     
+    PageInfo pageInfo = calculatePageInfo();
+
     const int footerY = M5.Display.height() - 50;
     M5.Display.setTextSize(1.4f);
     M5.Display.setCursor(16, footerY);
     M5.Display.printf("Ch %d - %.1f%%", epubLoader.getCurrentChapterIndex() + 1, 
         (float)currentTextOffset / epubLoader.getChapterSize() * 100.0f);
+
+    char pageBuf[24];
+    snprintf(pageBuf, sizeof(pageBuf), "Pg %d/%d", pageInfo.current, pageInfo.total);
+    M5.Display.setTextDatum(textdatum_t::top_right);
+    M5.Display.drawString(pageBuf, M5.Display.width() - 16, footerY);
+    M5.Display.setTextDatum(textdatum_t::top_left);
         
     M5.Display.display();
     
@@ -417,15 +466,32 @@ void GUI::drawReader() {
 void GUI::goToSleep() {
     // Save progress
     bookIndex.updateProgress(currentBook.id, epubLoader.getCurrentChapterIndex(), currentTextOffset);
-    
-    // Enable touch wakeup (EXT0 on GPIO 36 for M5Paper)
-    // Note: M5Paper touch INT is GPIO 36.
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_36, 0); // 0 = Low level trigger
-    
-    // Use Light Sleep instead of Deep Sleep
-    // This avoids rebooting, which fixes the display driver timeout issues
-    // and provides a faster resume experience.
-    esp_light_sleep_start();
+
+    // Flush any pending display operations before sleeping
+    M5.Display.waitDisplay();
+
+    // Turn off WiFi to save power while sleeping
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    bool shouldReconnect = false;
+    if (esp_wifi_get_mode(&mode) == ESP_OK) {
+        shouldReconnect = (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA);
+    }
+    esp_wifi_stop();
+
+    // Light sleep with touch wakeup handled by M5.Power
+    M5.Power.lightSleep(0, true);
+
+    // Resume WiFi after wake
+    esp_wifi_start();
+    if (shouldReconnect) {
+        esp_wifi_connect();
+    }
+}
+
+void GUI::resetPageInfoCache() {
+    lastPageChars = 0;
+    lastPageTotal = 1;
+    pageHistory.clear();
 }
 
 void GUI::drawSettings() {
@@ -498,6 +564,7 @@ void GUI::handleTouch() {
                             
                             // Restore progress
                             currentTextOffset = currentBook.currentOffset;
+                            resetPageInfoCache();
                             if (currentBook.currentChapter > 0) {
                                 while(epubLoader.getCurrentChapterIndex() < currentBook.currentChapter) {
                                     if (!epubLoader.nextChapter()) break;
@@ -543,6 +610,7 @@ void GUI::handleTouch() {
                     if (chars > 0) {
                         pageHistory.push_back(currentTextOffset);
                         currentTextOffset += chars;
+                        lastPageChars = chars;
                         needsRedraw = true;
                     } else {
                         // Try next chapter
@@ -552,6 +620,7 @@ void GUI::handleTouch() {
                             // Simplified: Clear history on chapter change or push a marker?
                             // For now, just reset offset.
                             currentTextOffset = 0;
+                            resetPageInfoCache();
                             needsRedraw = true;
                         }
                     }
@@ -560,12 +629,14 @@ void GUI::handleTouch() {
                     if (!pageHistory.empty()) {
                         currentTextOffset = pageHistory.back();
                         pageHistory.pop_back();
+                        // keep lastPageChars as hint
                         needsRedraw = true;
                     } else {
                         // Prev Chapter
                         if (epubLoader.prevChapter()) {
                             currentTextOffset = 0; // Should go to end, but that requires calculating all pages.
                             // Simplified: Go to start of prev chapter.
+                            resetPageInfoCache();
                             needsRedraw = true;
                         }
                     }
@@ -604,6 +675,7 @@ void GUI::setFontSize(float size) {
     if (fontSize != size) {
         fontSize = size;
         saveSettings();
+        resetPageInfoCache();
         needsRedraw = true;
     }
 }
@@ -631,6 +703,7 @@ void GUI::setFont(const std::string& fontName) {
         
         loadFonts();
         saveSettings(); // Save new font name
+        resetPageInfoCache();
         needsRedraw = true;
     }
 }

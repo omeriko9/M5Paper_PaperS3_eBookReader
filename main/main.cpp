@@ -13,6 +13,23 @@
 #include <dirent.h>
 #include <errno.h>
 #include "driver/gpio.h"
+#include <time.h>
+
+#if __has_include(<esp_sntp.h>)
+#include "esp_sntp.h"
+#define SNTP_CLIENT_AVAILABLE 1
+#elif __has_include(<sntp.h>)
+#include "sntp.h"
+#define SNTP_CLIENT_AVAILABLE 1
+#else
+#define SNTP_CLIENT_AVAILABLE 0
+#endif
+
+#if SNTP_CLIENT_AVAILABLE
+// Provide a weak stub for SDK variants that lack sntp_stop; strong symbol (if present) will override.
+extern "C" void sntp_stop(void) __attribute__((weak));
+extern "C" void sntp_stop(void) {}
+#endif
 
 static const char *TAG = "MAIN";
 
@@ -20,6 +37,43 @@ WifiManager wifiManager;
 WebServer webServer;
 GUI gui;
 BookIndex bookIndex; // Global instance
+
+static inline void stopSntpClient() {
+#if SNTP_CLIENT_AVAILABLE
+    sntp_stop();
+#endif
+}
+
+static void syncRtcFromNtp() {
+    // Configure SNTP
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
+
+    time_t now = 0;
+    struct tm timeinfo = {0};
+    const int maxRetries = 10;
+    for (int i = 0; i < maxRetries; ++i) {
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        if (timeinfo.tm_year > (2020 - 1900)) {
+            break;
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
+    if (timeinfo.tm_year > (2020 - 1900)) {
+        M5.Rtc.setDateTime(&timeinfo);
+        ESP_LOGI(TAG, "RTC synced from NTP: %04d-%02d-%02d %02d:%02d:%02d",
+                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+        ESP_LOGW(TAG, "Failed to sync RTC from NTP");
+    }
+
+    // Stop SNTP to avoid background polling
+    stopSntpClient();
+}
 
 extern "C" void app_main(void)
 {
@@ -170,33 +224,27 @@ extern "C" void app_main(void)
     wifiManager.init();
     
     // Try to connect, if fails, start AP
-    if (!wifiManager.connect()) {
+    bool wifiOk = wifiManager.connect();
+    if (!wifiOk) {
         wifiManager.startAP();
+    } else {
+        syncRtcFromNtp();
     }
     
     webServer.init("/spiffs");
 
-    static uint32_t btnPressTime = 0;
-    static bool btnPressed = false;
-    
     while (1) {
         M5.update();
         
-        // Check for long press on BtnPWR (wheel button) to restart
-        if (M5.BtnPWR.isPressed()) {
-            if (!btnPressed) {
-                btnPressed = true;
-                btnPressTime = xTaskGetTickCount();
-            } else if ((xTaskGetTickCount() - btnPressTime) * portTICK_PERIOD_MS > 3000) {
-                ESP_LOGI(TAG, "Long press detected - Restarting...");
-                M5.Display.clear();
-                M5.Display.setCursor(0, 100);
-                M5.Display.println("Restarting...");
-                vTaskDelay(500 / portTICK_PERIOD_MS);
-                esp_restart();
-            }
-        } else {
-            btnPressed = false;
+        // Use built-in power key state to restart on wheel press
+        uint8_t keyState = M5.Power.getKeyState();
+        if (keyState) {
+            ESP_LOGI(TAG, "Power key event (%u) - Restarting...", keyState);
+            M5.Display.clear();
+            M5.Display.setCursor(0, 100);
+            M5.Display.println("Restarting...");
+            vTaskDelay(200 / portTICK_PERIOD_MS);
+            esp_restart();
         }
         
         gui.setWifiStatus(wifiManager.isConnected(), wifiManager.getRssi());
