@@ -1,4 +1,5 @@
 #include "book_index.h"
+#include "epub_loader.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <algorithm>
@@ -46,6 +47,17 @@ void BookIndex::scanDirectory(const char* basePath) {
                     int id = getNextId();
                     // Use filename as title initially
                     std::string title = fname.substr(0, fname.length() - 5);
+                    
+                    // Try to load title from metadata
+                    EpubLoader loader;
+                    if (loader.load(fullPath.c_str())) {
+                        std::string metaTitle = loader.getTitle();
+                        if (!metaTitle.empty() && metaTitle != "Unknown Title") {
+                            title = metaTitle;
+                        }
+                        loader.close();
+                    }
+
                     books.push_back({id, title, fullPath, 0, 0});
                     ESP_LOGI(TAG, "Found new book: %s", title.c_str());
                 }

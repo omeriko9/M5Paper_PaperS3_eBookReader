@@ -3,7 +3,7 @@ build/
 build
 build/*
 managed-componponents/
-
+*.epub
 bootloader-prefix/
 
 # ESP-IDF specific

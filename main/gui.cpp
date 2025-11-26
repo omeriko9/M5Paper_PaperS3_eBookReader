@@ -116,10 +116,6 @@ static std::string processTextForDisplay(const std::string& text) {
     return result;
 }
 
-static bool isHebrewString(const std::string& text) {
-    return isHebrew(text);
-}
-
 void GUI::init() {
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -333,7 +329,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
     int bottomMargin = 80; // Leave room for footer/status text
     int width = M5.Display.width();
     int height = M5.Display.height();
-    int maxWidth = width - rightMargin; // Absolute X limit
+    int maxWidth = width - rightMargin - x; // Width available for text
     int maxY = height - bottomMargin;
     int lineHeight = M5.Display.fontHeight() * 1.4; // More breathing room
     
@@ -341,14 +337,45 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
     std::string text = epubLoader.getText(startOffset, 3000);
     if (text.empty()) return 0;
     
-    // Process text for display (e.g., Hebrew reversal)
-    text = processTextForDisplay(text);
-    
     if (draw) M5.Display.startWrite();
 
-    size_t i = 0;
-    int currentX = x;
+    std::vector<std::string> currentLine;
+    int currentLineWidth = 0;
     int currentY = y;
+    size_t i = 0;
+    
+    auto drawLine = [&](const std::vector<std::string>& line) {
+        if (!draw || line.empty()) return;
+        
+        bool isRTL = false;
+        if (currentFont == "Hebrew") {
+            isRTL = true;
+        } else {
+            for (const auto& w : line) {
+                if (isHebrew(w)) { isRTL = true; break; }
+            }
+        }
+        
+        int startX = isRTL ? (width - rightMargin) : x;
+        int spaceW = M5.Display.textWidth(" ");
+        
+        for (const auto& word : line) {
+            std::string displayWord = word;
+            if (isHebrew(displayWord)) {
+                displayWord = reverseHebrewWord(displayWord);
+            }
+            
+            int w = M5.Display.textWidth(displayWord.c_str());
+            
+            if (isRTL) {
+                M5.Display.drawString(displayWord.c_str(), startX - w, currentY);
+                startX -= (w + spaceW);
+            } else {
+                M5.Display.drawString(displayWord.c_str(), startX, currentY);
+                startX += (w + spaceW);
+            }
+        }
+    };
     
     while (i < text.length()) {
         // Find next word boundary
@@ -358,35 +385,48 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
         bool isNewline = (nextSpace < text.length() && text[nextSpace] == '\n');
         
         std::string word = text.substr(i, nextSpace - i);
-        int w = M5.Display.textWidth(word.c_str());
+        
+        // Measure word (using reversed version for accuracy if needed)
+        std::string measureWord = word;
+        if (isHebrew(measureWord)) measureWord = reverseHebrewWord(measureWord);
+        int w = M5.Display.textWidth(measureWord.c_str());
+        int spaceW = M5.Display.textWidth(" ");
         
         // Check if word fits
-        if (currentX + w > maxWidth) {
+        if (currentLineWidth + w > maxWidth) {
+            drawLine(currentLine);
+            currentLine.clear();
+            currentLineWidth = 0;
             currentY += lineHeight;
-            currentX = x;
+            
+            if (currentY + lineHeight > maxY) {
+                break; // Page full
+            }
         }
         
-        // Check if line fits vertically
-        if (currentY + lineHeight > maxY) {
-            break; // Page full
-        }
+        currentLine.push_back(word);
+        currentLineWidth += w + spaceW;
         
-        if (draw) {
-            M5.Display.drawString(word.c_str(), currentX, currentY);
-        }
-        
-        currentX += w;
-        
-        if (isNewline) {
-            currentY += lineHeight; // New paragraph
-            currentX = x;
+        if (nextSpace < text.length()) {
             i = nextSpace + 1;
         } else {
-            // Add space
-            int spaceW = M5.Display.textWidth(" ");
-            currentX += spaceW;
-            i = nextSpace + 1;
+            i = nextSpace;
         }
+        
+        if (isNewline) {
+            drawLine(currentLine);
+            currentLine.clear();
+            currentLineWidth = 0;
+            currentY += lineHeight;
+            if (currentY + lineHeight > maxY) {
+                break; // Page full
+            }
+        }
+    }
+    
+    // Flush remaining line
+    if (!currentLine.empty() && currentY + lineHeight <= maxY) {
+        drawLine(currentLine);
     }
     
     if (draw) M5.Display.endWrite();

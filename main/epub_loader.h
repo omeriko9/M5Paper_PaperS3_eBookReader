@@ -27,6 +27,7 @@ public:
 private:
     std::string currentPath;
     std::string language;
+    std::string title; // Added title
     ZipReader zip;
     bool isOpen = false;
     

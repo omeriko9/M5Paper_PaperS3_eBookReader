@@ -99,8 +99,8 @@ void EpubLoader::close() {
 }
 
 std::string EpubLoader::getTitle() {
-    // Simplified: just return filename or parse metadata if needed
-    return "Book";
+    if (title.empty()) return "Unknown Title";
+    return title;
 }
 
 std::string EpubLoader::readFileFromZip(const std::string& path) {
@@ -137,6 +137,20 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     std::string xml = readFileFromZip(opfPath);
     if (xml.empty()) return false;
     
+    // Parse Title
+    title = "";
+    size_t titlePos = xml.find("<dc:title");
+    if (titlePos != std::string::npos) {
+        size_t close = xml.find(">", titlePos);
+        if (close != std::string::npos) {
+            size_t end = xml.find("</dc:title>", close);
+            if (end != std::string::npos) {
+                title = xml.substr(close + 1, end - (close + 1));
+            }
+        }
+    }
+    if (title.empty()) title = "Unknown Title";
+
     // Parse Language
     language = "en"; // Default
     size_t langPos = xml.find("<dc:language");
