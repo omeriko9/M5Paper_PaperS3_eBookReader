@@ -1,0 +1,43 @@
+# Build directories
+build/
+bootloader-prefix/
+
+# ESP-IDF specific
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults  # Uncomment if you want to ignore defaults, but usually keep it
+
+# Logs
+*.log
+log/
+
+# IDE
+.vscode/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Compiled binaries
+*.elf
+*.bin
+*.map
+
+# Partition table
+partition_table/
+
+# SPIFFS image
+spiffs_image/
+
+# Tools output
+tools/*.vlw

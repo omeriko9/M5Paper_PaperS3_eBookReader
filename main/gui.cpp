@@ -9,6 +9,9 @@
 #include <lgfx/v1/lgfx_fonts.hpp>
 #include "esp_sleep.h" // Added include
 #include "driver/gpio.h"
+#include "esp_log.h"
+
+static const char *TAG = "GUI";
 
 EpubLoader epubLoader;
 extern BookIndex bookIndex;
@@ -547,10 +550,10 @@ void GUI::setFontSize(float size) {
 }
 
 void GUI::setFont(const std::string& fontName) {
-    // Force the built-in default font for now (custom fonts are disabled).
-    if (currentFont != "Default") {
-        currentFont = "Default";
+    if (currentFont != fontName) {
+        currentFont = fontName;
         fontChanged = true;
+        loadFonts();
         saveSettings();
         needsRedraw = true;
     }
@@ -609,10 +612,31 @@ static bool hasExtension(const std::string& path, const std::string& ext) {
 }
 
 void GUI::loadFonts() {
-    // Always unload first to avoid memory issues or conflicts
     M5.Display.unloadFont();
-    currentFont = "Default";
-    M5.Display.setFont(&lgfx::v1::fonts::Font2);
+    
+    if (currentFont == "Default") {
+        M5.Display.setFont(&lgfx::v1::fonts::Font2);
+    } else {
+        std::string fontPath;
+        if (currentFont == "Hebrew") {
+            fontPath = "/spiffs/fonts/NotoSansHebrew-Regular.vlw";
+        } else if (currentFont == "Roboto") {
+            fontPath = "/spiffs/fonts/Roboto-Regular.vlw";
+        } else {
+            // Try to construct path if it's just a name
+            if (currentFont.find("/") == std::string::npos) {
+                 fontPath = "/spiffs/fonts/" + currentFont + ".vlw";
+            } else {
+                 fontPath = currentFont;
+            }
+        }
+
+        if (!M5.Display.loadFont(fontPath.c_str())) {
+             ESP_LOGE(TAG, "Failed to load font %s, falling back to default", fontPath.c_str());
+             currentFont = "Default";
+             M5.Display.setFont(&lgfx::v1::fonts::Font2);
+        }
+    }
 }
 
 void GUI::refreshLibrary() {
