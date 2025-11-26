@@ -23,6 +23,9 @@ public:
     float getFontSize() const { return fontSize; }
     std::string getFont() const { return currentFont; }
     
+    void jumpTo(float percent);
+    void jumpToChapter(int chapter);
+    
 private:
     AppState currentState = AppState::LIBRARY;
     AppState previousState = AppState::LIBRARY; // For returning from settings

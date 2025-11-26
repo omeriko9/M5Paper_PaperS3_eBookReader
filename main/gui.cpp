@@ -602,65 +602,63 @@ void GUI::handleTouch() {
                     needsRedraw = true;
                     return;
                 }
-
-                // Left/Right tap
-                if (t.x > M5.Display.width() / 2) {
-                    // Next Page
-                    size_t chars = drawPageContent(false);
-                    if (chars > 0) {
-                        pageHistory.push_back(currentTextOffset);
-                        currentTextOffset += chars;
-                        lastPageChars = chars;
-                        needsRedraw = true;
-                    } else {
-                        // Try next chapter
-                        if (epubLoader.nextChapter()) {
-                            pageHistory.push_back(currentTextOffset); // Save end of prev chapter? No, start of new.
-                            // Actually history logic across chapters is tricky.
-                            // Simplified: Clear history on chapter change or push a marker?
-                            // For now, just reset offset.
-                            currentTextOffset = 0;
+                
+                // Left/Right tap for page turn
+                if (t.x < M5.Display.width() / 2) {
+                    // Prev Page
+                    if (pageHistory.empty()) {
+                        // Try prev chapter
+                        if (epubLoader.prevChapter()) {
+                            currentTextOffset = epubLoader.getChapterSize(); // Go to end? No, usually start.
+                            // Actually, usually when going back to prev chapter, we want to go to the END of that chapter.
+                            // But for now let's go to start or we need to calculate pages.
+                            // Let's go to start for simplicity or 0.
+                            currentTextOffset = 0; 
+                            pageHistory.clear();
                             resetPageInfoCache();
                             needsRedraw = true;
                         }
-                    }
-                } else {
-                    // Prev Page
-                    if (!pageHistory.empty()) {
+                    } else {
                         currentTextOffset = pageHistory.back();
                         pageHistory.pop_back();
-                        // keep lastPageChars as hint
                         needsRedraw = true;
-                    } else {
-                        // Prev Chapter
-                        if (epubLoader.prevChapter()) {
-                            currentTextOffset = 0; // Should go to end, but that requires calculating all pages.
-                            // Simplified: Go to start of prev chapter.
+                    }
+                } else {
+                    // Next Page
+                    size_t charsOnPage = drawPageContent(false);
+                    if (currentTextOffset + charsOnPage >= epubLoader.getChapterSize()) {
+                        // Next chapter
+                        if (epubLoader.nextChapter()) {
+                            currentTextOffset = 0;
+                            pageHistory.clear();
                             resetPageInfoCache();
                             needsRedraw = true;
                         }
+                    } else {
+                        pageHistory.push_back(currentTextOffset);
+                        currentTextOffset += charsOnPage;
+                        needsRedraw = true;
                     }
                 }
             } else if (currentState == AppState::SETTINGS) {
-                // Handle Settings Clicks
-                // Size -
-                if (t.y >= 95 && t.y <= 125 && t.x >= 160 && t.x <= 200) {
+                // Check buttons
+                // -
+                if (t.x >= 160 && t.x <= 200 && t.y >= 95 && t.y <= 125) {
                     setFontSize(fontSize - 0.1f);
                 }
-                // Size +
-                if (t.y >= 95 && t.y <= 125 && t.x >= 210 && t.x <= 250) {
+                // +
+                else if (t.x >= 210 && t.x <= 250 && t.y >= 95 && t.y <= 125) {
                     setFontSize(fontSize + 0.1f);
                 }
-                // Change Font
-                if (t.y >= 180 && t.y <= 220 && t.x >= 40 && t.x <= 160) {
-                    std::string nextFont;
-                    if (currentFont == "Default") nextFont = "Hebrew";
-                    else if (currentFont == "Hebrew") nextFont = "Roboto";
-                    else nextFont = "Default";
-                    setFont(nextFont);
+                // Font
+                else if (t.x >= 40 && t.x <= 160 && t.y >= 180 && t.y <= 220) {
+                    // Cycle fonts
+                    if (currentFont == "Default") setFont("Hebrew");
+                    else if (currentFont == "Hebrew") setFont("Roboto");
+                    else setFont("Default");
                 }
                 // Close
-                if (t.y >= 240 && t.y <= 280 && t.x >= 40 && t.x <= 140) {
+                else if (t.x >= 40 && t.x <= 140 && t.y >= 240 && t.y <= 280) {
                     currentState = previousState;
                     needsRedraw = true;
                 }
@@ -669,169 +667,120 @@ void GUI::handleTouch() {
     }
 }
 
-void GUI::setFontSize(float size) {
-    if (size < 0.5f) size = 0.5f;
-    if (size > 5.0f) size = 5.0f;
-    if (fontSize != size) {
-        fontSize = size;
-        saveSettings();
-        resetPageInfoCache();
-        needsRedraw = true;
-    }
-}
-
-void GUI::setFont(const std::string& fontName) {
-    if (currentFont != fontName) {
-        // Save current settings (including size of old font)
-        saveSettings();
-        
-        currentFont = fontName;
-        fontChanged = true;
-        
-        // Load settings for new font (size)
-        nvs_handle_t my_handle;
-        if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK) {
-             std::string key = "sz_" + currentFont;
-             uint32_t sizeInt = 0;
-             if (nvs_get_u32(my_handle, key.c_str(), &sizeInt) == ESP_OK) {
-                 fontSize = sizeInt / 10.0f;
-             } else {
-                 fontSize = 2.0f; // Default
-             }
-             nvs_close(my_handle);
-        }
-        
-        loadFonts();
-        saveSettings(); // Save new font name
-        resetPageInfoCache();
-        needsRedraw = true;
-    }
-}
-
-void GUI::loadSettings() {
-    nvs_handle_t my_handle;
-    esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
-    if (err == ESP_OK) {
-        size_t size = 0;
-        // Font Name
-        if (nvs_get_str(my_handle, "font_name", NULL, &size) == ESP_OK) {
-            char* name = new char[size];
-            nvs_get_str(my_handle, "font_name", name, &size);
-            currentFont = name;
-            delete[] name;
-        }
-        
-        // Font Size for THIS font
-        std::string key = "sz_" + currentFont;
-        uint32_t sizeInt = 0;
-        if (nvs_get_u32(my_handle, key.c_str(), &sizeInt) == ESP_OK) {
-            fontSize = sizeInt / 10.0f;
-        } else {
-            fontSize = 2.0f;
-        }
-        
-        nvs_close(my_handle);
-    }
-}
-
-void GUI::saveSettings() {
-    nvs_handle_t my_handle;
-    esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
-    if (err == ESP_OK) {
-        // Save size for CURRENT font
-        std::string key = "sz_" + currentFont;
-        nvs_set_u32(my_handle, key.c_str(), (uint32_t)(fontSize * 10));
-        
-        nvs_set_str(my_handle, "font_name", currentFont.c_str());
-        nvs_commit(my_handle);
-        nvs_close(my_handle);
-    }
-}
-
-#include <sys/stat.h>
-
-static bool fileExists(const char* path) {
-    struct stat st;
-    return stat(path, &st) == 0;
-}
-
-static bool hasExtension(const std::string& path, const std::string& ext) {
-    if (path.length() < ext.length()) return false;
-    auto start = path.length() - ext.length();
-    for (size_t i = 0; i < ext.length(); ++i) {
-        char a = path[start + i];
-        char b = ext[i];
-        if (a >= 'A' && a <= 'Z') a = a - 'A' + 'a';
-        if (b >= 'A' && b <= 'Z') b = b - 'A' + 'a';
-        if (a != b) return false;
-    }
-    return true;
-}
-
-void GUI::loadFonts() {
-    M5.Display.unloadFont();
-    fontData.clear(); // Free previous font memory
+void GUI::jumpTo(float percent) {
+    if (currentState != AppState::READER) return;
     
-    if (currentFont == "Default") {
-        M5.Display.setFont(&lgfx::v1::fonts::Font2);
-    } else {
-        std::string fontPath;
-        if (currentFont == "Hebrew") {
-            fontPath = "/spiffs/fonts/NotoSansHebrew-Regular.vlw";
-        } else if (currentFont == "Roboto") {
-            fontPath = "/spiffs/fonts/Roboto-Regular.vlw";
-        } else {
-            // Try to construct path if it's just a name
-            if (currentFont.find("/") == std::string::npos) {
-                 fontPath = "/spiffs/fonts/" + currentFont + ".vlw";
-            } else {
-                 fontPath = currentFont;
-            }
-        }
+    size_t size = epubLoader.getChapterSize();
+    if (size == 0) return;
+    
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    
+    currentTextOffset = (size_t)((percent / 100.0f) * size);
+    
+    pageHistory.clear();
+    resetPageInfoCache();
+    needsRedraw = true;
+}
 
-        // Load file into memory to avoid WDT timeouts during rendering
-        FILE* f = fopen(fontPath.c_str(), "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            size_t size = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            
-            ESP_LOGI(TAG, "Loading font %s into memory (%d bytes)", fontPath.c_str(), (int)size);
-            
-            try {
-                fontData.resize(size);
-                size_t read = fread(fontData.data(), 1, size, f);
-                fclose(f);
-                
-                if (read == size) {
-                    if (M5.Display.loadFont(fontData.data())) {
-                        ESP_LOGI(TAG, "Font loaded successfully");
-                        return;
-                    } else {
-                        ESP_LOGE(TAG, "Failed to parse font data");
-                    }
-                } else {
-                    ESP_LOGE(TAG, "Failed to read full font file");
-                }
-            } catch (const std::exception& ee) {
-                ESP_LOGE(TAG, "Failed to allocate memory for font: %s", ee.what());
-                if (f) fclose(f);
-            }
-        } else {
-            ESP_LOGE(TAG, "Failed to open font file %s", fontPath.c_str());
-        }
-
-        // Fallback
-        ESP_LOGE(TAG, "Falling back to default font");
-        currentFont = "Default";
-        M5.Display.setFont(&lgfx::v1::fonts::Font2);
-        fontData.clear();
+void GUI::jumpToChapter(int chapter) {
+    if (currentState != AppState::READER) return;
+    
+    if (epubLoader.jumpToChapter(chapter)) {
+        currentTextOffset = 0;
+        pageHistory.clear();
+        resetPageInfoCache();
+        needsRedraw = true;
     }
 }
 
 void GUI::refreshLibrary() {
     if (currentState == AppState::LIBRARY) {
         needsRedraw = true;
+    }
+}
+
+void GUI::saveSettings() {
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK) {
+        int32_t sizeInt = (int32_t)(fontSize * 10);
+        nvs_set_i32(my_handle, "font_size", sizeInt);
+        nvs_set_str(my_handle, "font_name", currentFont.c_str());
+        nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+}
+
+void GUI::setFontSize(float size) {
+    if (size < 0.5f) size = 0.5f;
+    if (size > 5.0f) size = 5.0f;
+    fontSize = size;
+    saveSettings();
+    resetPageInfoCache();
+    needsRedraw = true;
+}
+
+void GUI::setFont(const std::string& fontName) {
+    if (currentFont == fontName) return;
+    currentFont = fontName;
+    saveSettings();
+    fontChanged = true;
+    needsRedraw = true;
+}
+
+void GUI::loadSettings() {
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK) {
+        int32_t sizeInt = 10;
+        if (nvs_get_i32(my_handle, "font_size", &sizeInt) == ESP_OK) {
+            fontSize = sizeInt / 10.0f;
+        }
+        
+        size_t required_size;
+        if (nvs_get_str(my_handle, "font_name", NULL, &required_size) == ESP_OK) {
+            char* fontName = new char[required_size];
+            nvs_get_str(my_handle, "font_name", fontName, &required_size);
+            currentFont = fontName;
+            delete[] fontName;
+        }
+        nvs_close(my_handle);
+    }
+}
+
+void GUI::loadFonts() {
+    fontData.clear();
+    M5.Display.unloadFont();
+    
+    if (currentFont == "Default") {
+        // Use built-in
+        return;
+    }
+    
+    std::string path;
+    if (currentFont == "Hebrew") {
+        path = "/spiffs/fonts/hebrew.vlw"; 
+    } else if (currentFont == "Roboto") {
+        path = "/spiffs/fonts/roboto.vlw"; 
+    } else {
+        path = "/spiffs/fonts/" + currentFont + ".vlw";
+    }
+    
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        size_t size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        
+        fontData.resize(size);
+        fread(fontData.data(), 1, size, f);
+        fclose(f);
+        
+        M5.Display.loadFont(fontData.data());
+    } else {
+        ESP_LOGW(TAG, "Failed to load font: %s", path.c_str());
+        if (currentFont != "Default") {
+             currentFont = "Default";
+        }
     }
 }
 

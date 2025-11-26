@@ -18,6 +18,8 @@ public:
     int getCurrentChapterIndex() const { return currentChapterIndex; }
     int getTotalChapters() const { return spine.size(); }
     
+    bool jumpToChapter(int index);
+
     void close();
     
     std::string getLanguage() const { return language; }
@@ -40,4 +42,5 @@ private:
     bool parseOPF(const std::string& opfPath);
     void loadChapter(int index);
     std::string readFileFromZip(const std::string& path);
+    bool isChapterSkippable(int index);
 };

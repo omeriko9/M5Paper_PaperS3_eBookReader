@@ -4,9 +4,45 @@
 #include <string.h>
 #include <map>
 #include <unistd.h>
+#include <algorithm>
+#include <cctype>
 
 static const char *TAG = "EPUB";
 static const int PAGE_SIZE = 800; // Characters per page (approx)
+
+struct SkipCheckContext {
+    std::string buffer;
+};
+
+static bool skipCheckCallback(const char* data, size_t len, void* ctx) {
+    SkipCheckContext* c = (SkipCheckContext*)ctx;
+    c->buffer.append(data, len);
+    if (c->buffer.length() > 2048) {
+        return false; // Stop reading
+    }
+    return true;
+}
+
+bool EpubLoader::isChapterSkippable(int index) {
+    if (index < 0 || index >= spine.size()) return false;
+    
+    SkipCheckContext ctx;
+    
+    // Use the callback version to read only the beginning
+    zip.extractFile(spine[index], skipCheckCallback, &ctx);
+    
+    std::string& lower = ctx.buffer;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return std::tolower(c); });
+    
+    // Heuristics
+    if (lower.find("cover img") != std::string::npos) return true;
+    if (lower.find("copyright") != std::string::npos) return true;
+    if (lower.find("table of contents") != std::string::npos) return true;
+    if (lower.find("contents") != std::string::npos && lower.length() < 500) return true; // Short "Contents" page
+    if (lower.find("dedication") != std::string::npos && lower.length() < 500) return true;
+    
+    return false;
+}
 
 bool EpubLoader::load(const char* path) {
     close();
@@ -32,8 +68,22 @@ bool EpubLoader::load(const char* path) {
     }
     
     currentChapterIndex = 0;
+    
+    // Heuristic: Skip intro chapters
+    if (spine.size() > 1) {
+        int maxSkip = std::min((int)spine.size() - 1, 5); 
+        for (int i = 0; i < maxSkip; ++i) {
+            if (isChapterSkippable(i)) {
+                ESP_LOGI(TAG, "Skipping chapter %d (heuristic)", i);
+                currentChapterIndex++;
+            } else {
+                break;
+            }
+        }
+    }
+
     currentTextOffset = 0;
-    loadChapter(0);
+    loadChapter(currentChapterIndex);
     
     return true;
 }
@@ -287,6 +337,12 @@ void EpubLoader::loadChapter(int index) {
     fclose(f);
     
     ESP_LOGI(TAG, "Loaded chapter %d, size: %u", index, (unsigned)currentChapterSize);
+}
+
+bool EpubLoader::jumpToChapter(int index) {
+    if (index < 0 || index >= spine.size()) return false;
+    loadChapter(index);
+    return true;
 }
 
 std::string EpubLoader::getText(size_t offset, size_t length) {

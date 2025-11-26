@@ -2,6 +2,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_vfs.h"
+#include "esp_spiffs.h" // Added
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -68,6 +69,7 @@ static const char* MANAGER_HTML = R"rawliteral(
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M5Paper Library</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background: #f2f2f7; color: #333; }
 .card { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
@@ -81,11 +83,13 @@ button.del { background: #ff3b30; padding: 6px 12px; font-size: 14px; }
 input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100%; box-sizing: border-box; margin-bottom: 15px; font-size: 16px; }
 .progress { height: 4px; background: #eee; margin-top: 10px; border-radius: 2px; overflow: hidden; display: none; }
 .bar { height: 100%; background: #34c759; width: 0%; transition: width 0.2s; }
+.stat { font-size: 14px; color: #666; margin-bottom: 10px; }
 </style>
 </head>
 <body>
 <div class="card">
   <h2>Settings</h2>
+  <div class="stat">Free Space: <span id="freeSpace">Loading...</span></div>
   <div style="margin-bottom: 15px;">
     <label>Font Size: <span id="sizeVal"></span></label>
     <div style="display: flex; gap: 10px; margin-top: 5px;">
@@ -102,6 +106,14 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
         <option value="Roboto">Roboto</option>
     </select>
   </div>
+  <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+    <label>Jump to:</label>
+    <div style="display: flex; gap: 10px; margin-top: 5px;">
+        <input type="number" id="jumpCh" placeholder="Chapter #" style="width: 100px; margin:0;">
+        <input type="number" id="jumpPct" placeholder="%" style="width: 80px; margin:0;">
+        <button onclick="jump()">Go</button>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -109,6 +121,9 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
   <ul id="list">Loading...</ul>
   <div style="margin-top: 20px;">
     <input type="file" id="upfile" accept=".epub">
+    <div style="margin-bottom: 10px;">
+        <input type="checkbox" id="stripImg" checked style="width: auto;"> <label for="stripImg">Strip Images (Save Space)</label>
+    </div>
     <button onclick="upload()" id="upbtn">Upload Book</button>
     <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
     <p id="status"></p>
@@ -123,6 +138,9 @@ function fetchSettings() {
         document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
         document.getElementById('customSize').value = currentSize.toFixed(1);
         document.getElementById('fontSel').value = s.font;
+        if(s.freeSpace) {
+            document.getElementById('freeSpace').innerText = (s.freeSpace / 1024 / 1024).toFixed(2) + ' MB';
+        }
     });
 }
 
@@ -159,6 +177,16 @@ function updateSettings() {
     });
 }
 
+function jump() {
+    const ch = document.getElementById('jumpCh').value;
+    const pct = document.getElementById('jumpPct').value;
+    let url = '/api/jump?';
+    if(ch) url += 'chapter=' + (parseInt(ch)-1) + '&'; // User sees 1-based
+    if(pct) url += 'percent=' + pct;
+    
+    fetch(url).then(r => alert('Jumped!'));
+}
+
 function fetchList() {
     fetch('/api/list').then(r => r.json()).then(files => {
         const list = document.getElementById('list');
@@ -175,26 +203,66 @@ function fetchList() {
 function del(id) {
     if(!confirm('Delete book?')) return;
     fetch('/api/delete?id=' + id, {method: 'POST'})
-        .then(() => fetchList())
+        .then(() => {
+            fetchList();
+            fetchSettings(); // Update free space
+        })
         .catch(e => alert('Error deleting'));
 }
 
-function upload() {
+async function upload() {
     const fileInput = document.getElementById('upfile');
     const file = fileInput.files[0];
     if(!file) return alert('Please select a file');
     
+    const strip = document.getElementById('stripImg').checked;
     const btn = document.getElementById('upbtn');
     const status = document.getElementById('status');
     const progress = document.getElementById('progress');
     const bar = document.getElementById('bar');
     
     btn.disabled = true;
-    status.innerText = 'Uploading...';
+    status.innerText = 'Processing...';
     progress.style.display = 'block';
     
+    let uploadFile = file;
+    
+    if (strip) {
+        try {
+            status.innerText = 'Stripping images...';
+            const zip = new JSZip();
+            const content = await zip.loadAsync(file);
+            
+            // Filter files
+            const filesToRemove = [];
+            zip.forEach((relativePath, zipEntry) => {
+                const lower = relativePath.toLowerCase();
+                if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff)$/i) || lower.includes('oebps/images/')) {
+                    filesToRemove.push(relativePath);
+                }
+            });
+            
+            filesToRemove.forEach(f => zip.remove(f));
+            
+            if (filesToRemove.length > 0) {
+                status.innerText = `Removed ${filesToRemove.length} images. Re-zipping...`;
+                const blob = await zip.generateAsync({type:"blob", compression: "DEFLATE"});
+                uploadFile = new File([blob], file.name, {type: "application/epub+zip"});
+            } else {
+                status.innerText = 'No images found to strip.';
+            }
+        } catch (e) {
+            console.error(e);
+            status.innerText = 'Error processing ZIP: ' + e.message;
+            btn.disabled = false;
+            return;
+        }
+    }
+    
+    status.innerText = 'Uploading...';
+    
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload/' + encodeURIComponent(file.name), true);
+    xhr.open('POST', '/upload/' + encodeURIComponent(uploadFile.name), true);
     
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -210,6 +278,7 @@ function upload() {
             status.innerText = 'Upload complete!';
             fileInput.value = '';
             fetchList();
+            fetchSettings();
         } else {
             status.innerText = 'Upload failed: ' + xhr.statusText;
         }
@@ -220,7 +289,7 @@ function upload() {
         status.innerText = 'Network error';
     };
     
-    xhr.send(file);
+    xhr.send(uploadFile);
 }
 fetchList();
 fetchSettings();
@@ -279,6 +348,30 @@ static void sanitize_filename(char* name) {
             name[i] = '_';
         }
     }
+}
+
+static size_t getFreeSpace() {
+    size_t total = 0, used = 0;
+    if (esp_spiffs_info("storage", &total, &used) == ESP_OK) {
+        return total - used;
+    }
+    return 0;
+}
+
+static esp_err_t jump_handler(httpd_req_t *req) {
+    char buf[100];
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+        char param[32];
+        if (httpd_query_key_value(buf, "percent", param, sizeof(param)) == ESP_OK) {
+            float p = atof(param);
+            gui.jumpTo(p); 
+        } else if (httpd_query_key_value(buf, "chapter", param, sizeof(param)) == ESP_OK) {
+            int c = atoi(param);
+            gui.jumpToChapter(c);
+        }
+    }
+    httpd_resp_send(req, "OK", 2);
+    return ESP_OK;
 }
 
 /* Handler for upload */
@@ -414,8 +507,8 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\"}", 
-            gui.getFontSize(), gui.getFont().c_str());
+        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\", \"freeSpace\":%u}", 
+            gui.getFontSize(), gui.getFont().c_str(), (unsigned int)getFreeSpace());
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, strlen(buf));
         return ESP_OK;
@@ -569,6 +662,14 @@ void WebServer::init(const char* basePath) {
         };
         httpd_register_uri_handler(server, &settings_post_uri);
 
+        httpd_uri_t jump_api_uri = {
+            .uri       = "/api/jump",
+            .method    = HTTP_GET,
+            .handler   = jump_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &jump_api_uri);
+
         httpd_uri_t upload_uri = {
             .uri       = "/upload/*",
             .method    = HTTP_POST,
@@ -584,6 +685,14 @@ void WebServer::init(const char* basePath) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &wifi_uri);
+        
+        httpd_uri_t jump_uri = {
+            .uri       = "/api/jump",
+            .method    = HTTP_GET,
+            .handler   = jump_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &jump_uri);
         
         httpd_uri_t catch_all_uri = {
             .uri       = "/*",
