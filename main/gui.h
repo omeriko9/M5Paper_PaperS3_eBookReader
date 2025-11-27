@@ -25,18 +25,34 @@ public:
     
     void jumpTo(float percent);
     void jumpToChapter(int chapter);
+    bool openBookById(int id);
     
+    void setWebServerEnabled(bool enabled);
+
 private:
     AppState currentState = AppState::LIBRARY;
     AppState previousState = AppState::LIBRARY; // For returning from settings
     bool needsRedraw = true;
     BookEntry currentBook;
     struct PageInfo { int current = 1; int total = 1; };
+    bool isRTLDocument = false;
     
     // Reader State
     size_t currentTextOffset = 0;
     std::vector<size_t> pageHistory;
     
+    // Buffering
+    M5Canvas canvasCurrent;
+    M5Canvas canvasNext;
+    M5Canvas canvasPrev;
+    bool nextCanvasValid = false;
+    bool prevCanvasValid = false;
+    size_t nextCanvasOffset = 0;
+    size_t prevCanvasOffset = 0;
+    
+    // Library State
+    int libraryPage = 0;
+
     // Settings
     float fontSize = 1.0f; // Scale factor
     std::string currentFont = "Default";
@@ -48,6 +64,7 @@ private:
     int lastPageTotal = 1;
     
     void drawStatusBar();
+    void drawSleepSymbol(const char* symbol);
     void drawLibrary();
     void drawReader();
     void drawWifiConfig();
@@ -57,14 +74,18 @@ private:
     
     void loadFonts();
     void ensureHebrewFontLoaded();
-    void drawStringMixed(const std::string& text, int x, int y);
+    void drawStringMixed(const std::string& text, int x, int y, M5Canvas* target = nullptr);
     
     void saveSettings();
     void loadSettings();
     void goToSleep();
     
     size_t drawPageContent(bool draw);
-    size_t drawPageContentAt(size_t startOffset, bool draw);
+    size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas* target = nullptr);
     PageInfo calculatePageInfo();
     void resetPageInfoCache();
+    void updateNextPrevCanvases();
+
+    uint32_t lastActivityTime = 0;
+    bool webServerEnabled = true;
 };

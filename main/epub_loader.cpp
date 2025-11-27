@@ -84,6 +84,16 @@ bool EpubLoader::load(const char* path) {
 
     currentTextOffset = 0;
     loadChapter(currentChapterIndex);
+
+    // If the loaded chapter is very small (likely empty or just an image wrapper), try next
+    // Limit this to a few chapters to avoid infinite loop
+    int retries = 0;
+    while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
+        ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
+        currentChapterIndex++;
+        loadChapter(currentChapterIndex);
+        retries++;
+    }
     
     return true;
 }
@@ -271,6 +281,17 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                         }
                         context->lastSpace = true; 
                     }
+                } else if (tag == "img" || tag.find("img ") == 0) {
+                     // Output [Image]
+                     const char* imgText = "[Image]";
+                     for (int k=0; imgText[k]; k++) {
+                        context->writeBuf[context->writeBufPos++] = imgText[k];
+                        if (context->writeBufPos == sizeof(context->writeBuf)) {
+                            fwrite(context->writeBuf, 1, sizeof(context->writeBuf), context->f);
+                            context->writeBufPos = 0;
+                        }
+                     }
+                     context->lastSpace = false;
                 } else {
                     // For inline tags, maybe just a space if needed? 
                     // Actually, usually no space needed for <b>, <i> etc.

@@ -1,5 +1,7 @@
 #include "gui.h"
+#include "web_server.h"
 #include "epub_loader.h"
+#include "esp_timer.h"
 #include "wifi_manager.h"
 #include "book_index.h"
 #include <vector>
@@ -22,11 +24,13 @@ extern BookIndex bookIndex;
 bool wifiConnected = false;
 int wifiRssi = 0;
 extern WifiManager wifiManager;
+extern WebServer webServer;
 
 static constexpr int STATUS_BAR_HEIGHT = 44;
 static constexpr int LIBRARY_LIST_START_Y = 120;
 static constexpr int LIBRARY_LINE_HEIGHT = 48;
 static constexpr int PAGEINFO_ESTIMATE_MIN_CHARS = 50;
+static constexpr uint64_t LIGHT_SLEEP_TO_DEEP_SLEEP_US = 2ULL * 60ULL * 1000000ULL; // 2 minutes
 
 // Helper to split string by delimiters but keep delimiters if needed
 // For word wrapping, we split by space.
@@ -116,6 +120,20 @@ static std::string processTextForDisplay(const std::string& text) {
     return result;
 }
 
+static bool detectRTLDocument(EpubLoader& loader, size_t sampleOffset) {
+    std::string lang = loader.getLanguage();
+    if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos) {
+        return true;
+    }
+
+    std::string sample = loader.getText(sampleOffset, 400);
+    for (char c : sample) {
+        std::string s(1, c);
+        if (isHebrew(s)) return true;
+    }
+    return false;
+}
+
 void GUI::init() {
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -131,6 +149,28 @@ void GUI::init() {
     resetPageInfoCache();
 
     M5.Display.setTextColor(TFT_BLACK);
+    
+    // Initialize Canvases for buffering
+    // M5Paper has PSRAM, so we should use it for full-screen buffers
+    canvasCurrent.setPsram(true);
+    canvasCurrent.setColorDepth(16); // Explicitly set 16-bit color depth
+    if (canvasCurrent.createSprite(M5.Display.width(), M5.Display.height()) == nullptr) {
+        ESP_LOGE(TAG, "Failed to create canvasCurrent");
+    }
+
+    canvasNext.setPsram(true);
+    canvasNext.setColorDepth(16);
+    if (canvasNext.createSprite(M5.Display.width(), M5.Display.height()) == nullptr) {
+        ESP_LOGE(TAG, "Failed to create canvasNext");
+    }
+
+    canvasPrev.setPsram(true);
+    canvasPrev.setColorDepth(16);
+    if (canvasPrev.createSprite(M5.Display.width(), M5.Display.height()) == nullptr) {
+        ESP_LOGE(TAG, "Failed to create canvasPrev");
+    }
+
+    lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 
     // Check wakeup
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
@@ -153,7 +193,6 @@ void GUI::init() {
                 if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos) {
                     setFont("Hebrew");
                 }
-                
                 // Restore progress
                 currentTextOffset = currentBook.currentOffset;
                 resetPageInfoCache();
@@ -162,6 +201,7 @@ void GUI::init() {
                         if (!epubLoader.nextChapter()) break;
                     }
                 }
+                isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
                 
                 pageHistory.clear();
                 needsRedraw = false; // Don't redraw, assume E-Ink persisted
@@ -184,8 +224,44 @@ void GUI::setWifiStatus(bool connected, int rssi) {
     }
 }
 
+void GUI::setWebServerEnabled(bool enabled) {
+    if (webServerEnabled == enabled) return;
+    webServerEnabled = enabled;
+    if (enabled) {
+        webServer.init("/spiffs");
+    } else {
+        webServer.stop();
+    }
+}
+
 void GUI::update() {
     handleTouch();
+    
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    
+    // Library Mode Logic
+    if (currentState == AppState::LIBRARY) {
+        // WebServer active for 5 minutes
+        if (now - lastActivityTime > 5 * 60 * 1000) {
+            if (webServerEnabled) {
+                ESP_LOGI(TAG, "Library idle timeout: Stopping WebServer");
+                setWebServerEnabled(false);
+            }
+        } else {
+            if (!webServerEnabled) {
+                setWebServerEnabled(true);
+            }
+        }
+    }
+    // Reader Mode Logic
+    else if (currentState == AppState::READER) {
+        // Active for 60 seconds
+        if (now - lastActivityTime > 60 * 1000) {
+             goToSleep();
+             // After waking up, update lastActivityTime so we don't loop immediately
+             lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+        }
+    }
     
     if (fontChanged) {
         loadFonts();
@@ -194,6 +270,7 @@ void GUI::update() {
     }
     
     if (needsRedraw) {
+        ESP_LOGI(TAG, "Needs redraw, current state: %d", (int)currentState);
         switch(currentState) {
             case AppState::LIBRARY:
                 drawLibrary();
@@ -270,21 +347,32 @@ void GUI::drawLibrary() {
     
     M5.Display.setTextColor(TFT_BLACK);
     const float headingSize = 2.4f;
-    const float itemSize = 2.0f;
+    const float itemSize = 1.6f; // Reduced size
     M5.Display.setTextSize(headingSize);
     M5.Display.setCursor(16, 58);
     M5.Display.println("Library");
     
     auto books = bookIndex.getBooks();
     
-    // Removed global font switch logic to support mixed content
+    // Paging logic
+    int availableHeight = M5.Display.height() - LIBRARY_LIST_START_Y - 60; // 60 for footer
+    int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
+    if (itemsPerPage < 1) itemsPerPage = 1;
+
+    int totalPages = (books.size() + itemsPerPage - 1) / itemsPerPage;
+    if (libraryPage >= totalPages) libraryPage = totalPages - 1;
+    if (libraryPage < 0) libraryPage = 0;
+    
+    int startIdx = libraryPage * itemsPerPage;
+    int endIdx = std::min((int)books.size(), startIdx + itemsPerPage);
 
     int y = LIBRARY_LIST_START_Y;
     M5.Display.setTextSize(itemSize);
-    for (const auto& book : books) {
+    for (int i = startIdx; i < endIdx; ++i) {
+        const auto& book = books[i];
         // Truncate display title if too long
         std::string displayTitle = book.title;
-        if (displayTitle.length() > 20) displayTitle = displayTitle.substr(0, 17) + "...";
+        if (displayTitle.length() > 35) displayTitle = displayTitle.substr(0, 32) + "...";
         
         displayTitle = processTextForDisplay(displayTitle);
         
@@ -294,9 +382,33 @@ void GUI::drawLibrary() {
         
         // Draw title with mixed font support
         int titleX = 20 + M5.Display.textWidth("- ");
-        drawStringMixed(displayTitle, titleX, y);
+        drawStringMixed(displayTitle, titleX, y, nullptr);
         
         y += LIBRARY_LINE_HEIGHT;
+    }
+    
+    // Draw Paging Controls
+    if (totalPages > 1) {
+        int footerY = M5.Display.height() - 60;
+        M5.Display.setTextSize(1.5f);
+        
+        if (libraryPage > 0) {
+            M5.Display.fillRect(20, footerY, 100, 40, TFT_LIGHTGREY);
+            M5.Display.setTextColor(TFT_BLACK);
+            M5.Display.drawString("Prev", 45, footerY + 10);
+        }
+        
+        if (libraryPage < totalPages - 1) {
+            M5.Display.fillRect(M5.Display.width() - 120, footerY, 100, 40, TFT_LIGHTGREY);
+            M5.Display.setTextColor(TFT_BLACK);
+            M5.Display.drawString("Next", M5.Display.width() - 95, footerY + 10);
+        }
+        
+        char pageStr[32];
+        snprintf(pageStr, sizeof(pageStr), "%d / %d", libraryPage + 1, totalPages);
+        M5.Display.setTextDatum(textdatum_t::top_center);
+        M5.Display.drawString(pageStr, M5.Display.width() / 2, footerY + 10);
+        M5.Display.setTextDatum(textdatum_t::top_left);
     }
     
     if (books.empty()) {
@@ -317,47 +429,53 @@ void GUI::drawLibrary() {
 
 // Returns number of characters that fit on the page
 size_t GUI::drawPageContent(bool draw) {
-    return drawPageContentAt(currentTextOffset, draw);
+    return drawPageContentAt(currentTextOffset, draw, nullptr);
 }
 
-size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
-    M5.Display.setTextSize(fontSize);
+size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas* target) {
+    LovyanGFX* gfx = target ? (LovyanGFX*)target : (LovyanGFX*)&M5.Display;
+    ESP_LOGI(TAG, "drawPageContentAt: offset=%zu, draw=%d, target=%p, w=%d, h=%d", startOffset, draw, target, gfx->width(), gfx->height());
+    gfx->setTextSize(fontSize);
     
     int x = 20; // Margin
     int y = STATUS_BAR_HEIGHT + 12; // Top margin below status bar
     int rightMargin = 20;
     int bottomMargin = 80; // Leave room for footer/status text
-    int width = M5.Display.width();
-    int height = M5.Display.height();
+    int width = gfx->width();
+    int height = gfx->height();
     int maxWidth = width - rightMargin - x; // Width available for text
     int maxY = height - bottomMargin;
-    int lineHeight = M5.Display.fontHeight() * 1.4; // More breathing room
+    int lineHeight = gfx->fontHeight() * 1.4; // More breathing room
     
     // Fetch a large chunk
     std::string text = epubLoader.getText(startOffset, 3000);
-    if (text.empty()) return 0;
+    ESP_LOGI(TAG, "Fetched text at offset %zu, length: %zu", startOffset, text.length());
+    if (text.empty()) {
+        ESP_LOGW(TAG, "No text fetched at offset %zu", startOffset);
+        return 0;
+    }
     
-    if (draw) M5.Display.startWrite();
+    if (draw) gfx->startWrite();
 
     std::vector<std::string> currentLine;
     int currentLineWidth = 0;
     int currentY = y;
     size_t i = 0;
     
+    int debugWordsLogged = 0;
     auto drawLine = [&](const std::vector<std::string>& line) {
         if (!draw || line.empty()) return;
         
-        bool isRTL = false;
-        if (currentFont == "Hebrew") {
-            isRTL = true;
-        } else {
+        bool isRTL = isRTLDocument;
+        if (!isRTL) {
             for (const auto& w : line) {
                 if (isHebrew(w)) { isRTL = true; break; }
             }
         }
         
         int startX = isRTL ? (width - rightMargin) : x;
-        int spaceW = M5.Display.textWidth(" ");
+        int spaceW = gfx->textWidth(" ");
+        if (spaceW == 0) spaceW = 5; // Fallback if font has no space width
         
         for (const auto& word : line) {
             std::string displayWord = word;
@@ -365,18 +483,26 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
                 displayWord = reverseHebrewWord(displayWord);
             }
             
-            int w = M5.Display.textWidth(displayWord.c_str());
+            int w = gfx->textWidth(displayWord.c_str());
+            int spaceWLocal = gfx->textWidth(" ");
+            if (spaceWLocal == 0) spaceWLocal = 5;
+            // Emit debug info for first few words on the page so we can inspect spacing
+            if (debugWordsLogged < 6) {
+                ESP_LOGI(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), w, spaceWLocal, isRTL, startX, currentY);
+                debugWordsLogged++;
+            }
             
             if (isRTL) {
-                M5.Display.drawString(displayWord.c_str(), startX - w, currentY);
-                startX -= (w + spaceW);
+                drawStringMixed(displayWord, startX - w, currentY, (M5Canvas*)target);
+                startX -= (w + spaceWLocal);
             } else {
-                M5.Display.drawString(displayWord.c_str(), startX, currentY);
-                startX += (w + spaceW);
+                drawStringMixed(displayWord, startX, currentY, (M5Canvas*)target);
+                startX += (w + spaceWLocal);
             }
         }
     };
     
+    int linesDrawn = 0;
     while (i < text.length()) {
         // Find next word boundary
         size_t nextSpace = text.find_first_of(" \n", i);
@@ -389,12 +515,39 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
         // Measure word (using reversed version for accuracy if needed)
         std::string measureWord = word;
         if (isHebrew(measureWord)) measureWord = reverseHebrewWord(measureWord);
-        int w = M5.Display.textWidth(measureWord.c_str());
-        int spaceW = M5.Display.textWidth(" ");
+
+        // Make sure we measure with the same font that will be used to draw the word.
+        // If this word is Hebrew and we have a Hebrew font loaded, temporarily switch
+        // the gfx font to the Hebrew font so textWidth() returns accurate metrics.
+        bool swappedFont = false;
+        std::string restoreFont = currentFont; // keep track of what should be active
+        if (isHebrew(measureWord) && !fontDataHebrew.empty()) {
+            ESP_LOGI(TAG, "drawPageContentAt: measuring Hebrew word using Hebrew font");
+            gfx->loadFont(fontDataHebrew.data());
+            gfx->setTextSize(fontSize);
+            swappedFont = true;
+        }
+
+        int w = gfx->textWidth(measureWord.c_str());
+        int spaceW = gfx->textWidth(" ");
+        if (spaceW == 0) spaceW = 5; // Fallback
+
+        // Restore the display font to whatever the GUI currently wants
+        if (swappedFont) {
+            if (restoreFont == "Hebrew" && !fontDataHebrew.empty()) {
+                gfx->loadFont(fontDataHebrew.data());
+            } else if (restoreFont != "Default" && !fontData.empty()) {
+                gfx->loadFont(fontData.data());
+            } else {
+                gfx->unloadFont();
+            }
+            gfx->setTextSize(fontSize);
+        }
         
         // Check if word fits
         if (currentLineWidth + w > maxWidth) {
             drawLine(currentLine);
+            linesDrawn++;
             currentLine.clear();
             currentLineWidth = 0;
             currentY += lineHeight;
@@ -415,6 +568,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
         
         if (isNewline) {
             drawLine(currentLine);
+            linesDrawn++;
             currentLine.clear();
             currentLineWidth = 0;
             currentY += lineHeight;
@@ -427,9 +581,13 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw) {
     // Flush remaining line
     if (!currentLine.empty() && currentY + lineHeight <= maxY) {
         drawLine(currentLine);
+        linesDrawn++;
     }
     
-    if (draw) M5.Display.endWrite();
+    if (draw) {
+        ESP_LOGI(TAG, "drawPageContentAt: lines drawn: %d", linesDrawn);
+        gfx->endWrite();
+    }
     
     return i;
 }
@@ -460,12 +618,60 @@ GUI::PageInfo GUI::calculatePageInfo() {
     return info;
 }
 
+void GUI::updateNextPrevCanvases() {
+    // Update Next
+    size_t charsOnCurrent = drawPageContentAt(currentTextOffset, false);
+    nextCanvasOffset = currentTextOffset + charsOnCurrent;
+    
+    if (nextCanvasOffset < epubLoader.getChapterSize() && canvasNext.width() > 0) {
+        canvasNext.fillScreen(TFT_WHITE);
+        drawPageContentAt(nextCanvasOffset, true, &canvasNext);
+        nextCanvasValid = true;
+    } else {
+        nextCanvasValid = false;
+    }
+    
+    // Update Prev
+    if (!pageHistory.empty() && canvasPrev.width() > 0) {
+        prevCanvasOffset = pageHistory.back();
+        canvasPrev.fillScreen(TFT_WHITE);
+        drawPageContentAt(prevCanvasOffset, true, &canvasPrev);
+        prevCanvasValid = true;
+    } else {
+        prevCanvasValid = false;
+    }
+}
+
 void GUI::drawReader() {
-    M5.Display.fillScreen(TFT_WHITE);
+    ESP_LOGI(TAG, "drawReader called, currentTextOffset: %zu", currentTextOffset);
+    
+    // Ensure previous update is complete
+    M5.Display.waitDisplay();
+    
+    bool drawnFromBuffer = false;
+    
+    // Only use buffers if they are valid (width > 0)
+    if (nextCanvasValid && nextCanvasOffset == currentTextOffset && canvasNext.width() > 0) {
+        ESP_LOGI(TAG, "Drawing from next buffer");
+        canvasNext.pushSprite(&M5.Display, 0, 0);
+        drawnFromBuffer = true;
+    } else if (prevCanvasValid && prevCanvasOffset == currentTextOffset && canvasPrev.width() > 0) {
+        ESP_LOGI(TAG, "Drawing from prev buffer");
+        canvasPrev.pushSprite(&M5.Display, 0, 0);
+        drawnFromBuffer = true;
+    }
+    
+    if (!drawnFromBuffer) {
+        ESP_LOGI(TAG, "Drawing to current buffer");
+        M5.Display.fillScreen(TFT_WHITE);
+        drawPageContentAt(currentTextOffset, true, nullptr);
+    }
+    
+    // Draw Status Bar (Fresh)
     drawStatusBar();
     
-    M5.Display.setTextColor(TFT_BLACK); // Clear any background color from status bar
-    size_t charsDrawn = drawPageContent(true);
+    size_t charsDrawn = drawPageContentAt(currentTextOffset, false);
+    ESP_LOGI(TAG, "Chars drawn: %zu", charsDrawn);
     if (charsDrawn > 0) {
         lastPageChars = charsDrawn;
         size_t chapterSize = epubLoader.getChapterSize();
@@ -476,7 +682,7 @@ void GUI::drawReader() {
     PageInfo pageInfo = calculatePageInfo();
 
     const int footerY = M5.Display.height() - 50;
-    M5.Display.setTextSize(1.4f);
+    M5.Display.setTextSize(1.0f); // Reduced font size
     M5.Display.setCursor(16, footerY);
     M5.Display.printf("Ch %d - %.1f%%", epubLoader.getCurrentChapterIndex() + 1, 
         (float)currentTextOffset / epubLoader.getChapterSize() * 100.0f);
@@ -487,9 +693,21 @@ void GUI::drawReader() {
     M5.Display.drawString(pageBuf, M5.Display.width() - 16, footerY);
     M5.Display.setTextDatum(textdatum_t::top_left);
         
+    ESP_LOGI(TAG, "Calling M5.Display.display()");
     M5.Display.display();
+    ESP_LOGI(TAG, "drawReader completed");
     
-    goToSleep();
+    // Update buffers for next interaction
+    updateNextPrevCanvases();
+}
+
+void GUI::drawSleepSymbol(const char* symbol) {
+    M5.Display.setFont(&lgfx::v1::fonts::Font4); // Large font
+    M5.Display.setTextSize(1.0f);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextDatum(textdatum_t::top_center);
+    // Draw in the middle of status bar or top center
+    M5.Display.drawString(symbol, M5.Display.width() / 2, 5);
 }
 
 void GUI::goToSleep() {
@@ -507,8 +725,18 @@ void GUI::goToSleep() {
     }
     esp_wifi_stop();
 
-    // Light sleep with touch wakeup handled by M5.Power
-    M5.Power.lightSleep(0, true);
+    // Light sleep with touch wakeup handled by M5.Power. Also arm a timer so we can fall through to deep sleep.
+    drawSleepSymbol("z");
+    M5.Power.lightSleep(LIGHT_SLEEP_TO_DEEP_SLEEP_US, true);
+
+    // If the timer woke us, hand off to deep sleep so the next touch resumes straight into the last page.
+    auto wakeReason = esp_sleep_get_wakeup_cause();
+    if (wakeReason == ESP_SLEEP_WAKEUP_TIMER) {
+        ESP_LOGI(TAG, "Light sleep timer elapsed, entering deep sleep");
+        drawSleepSymbol("Zz");
+        M5.Power.deepSleep(0, true);
+        return;
+    }
 
     // Resume WiFi after wake
     esp_wifi_start();
@@ -574,43 +802,39 @@ void GUI::drawWifiConfig() {
 
 void GUI::handleTouch() {
     if (M5.Touch.getCount() > 0) {
+        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed()) {
             if (currentState == AppState::LIBRARY) {
                 auto books = bookIndex.getBooks();
+                int availableHeight = M5.Display.height() - LIBRARY_LIST_START_Y - 60;
+                int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
+                if (itemsPerPage < 1) itemsPerPage = 1;
+
+                int totalPages = (books.size() + itemsPerPage - 1) / itemsPerPage;
+                
+                // Check paging buttons
+                if (totalPages > 1 && t.y > M5.Display.height() - 60) {
+                    if (t.x < 150 && libraryPage > 0) {
+                        libraryPage--;
+                        needsRedraw = true;
+                        return;
+                    }
+                    if (t.x > M5.Display.width() - 150 && libraryPage < totalPages - 1) {
+                        libraryPage++;
+                        needsRedraw = true;
+                        return;
+                    }
+                }
+                
+                int startIdx = libraryPage * itemsPerPage;
+                int endIdx = std::min((int)books.size(), startIdx + itemsPerPage);
+                
                 int y = LIBRARY_LIST_START_Y;
-                for (const auto& book : books) {
+                for (int i = startIdx; i < endIdx; ++i) {
                     if (t.y >= y && t.y < y + LIBRARY_LINE_HEIGHT) {
-                        currentBook = book;
-                        if (epubLoader.load(currentBook.path.c_str())) {
-                            currentState = AppState::READER;
-                            
-                            // Auto-detect language
-                            std::string lang = epubLoader.getLanguage();
-                            if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos) {
-                                setFont("Hebrew");
-                            }
-                            
-                            // Restore progress
-                            currentTextOffset = currentBook.currentOffset;
-                            resetPageInfoCache();
-                            if (currentBook.currentChapter > 0) {
-                                while(epubLoader.getCurrentChapterIndex() < currentBook.currentChapter) {
-                                    if (!epubLoader.nextChapter()) break;
-                                }
-                            }
-                            
-                            pageHistory.clear();
-                            needsRedraw = true;
-                            
-                            // Save as last book
-                            nvs_handle_t my_handle;
-                            if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK) {
-                                nvs_set_i32(my_handle, "last_book_id", currentBook.id);
-                                nvs_commit(my_handle);
-                                nvs_close(my_handle);
-                            }
-                        }
+                        ESP_LOGI(TAG, "Touched book at index %d, ID %d", i, books[i].id);
+                        openBookById(books[i].id);
                         break;
                     }
                     y += LIBRARY_LINE_HEIGHT;
@@ -633,7 +857,18 @@ void GUI::handleTouch() {
                 }
                 
                 // Left/Right tap for page turn
+                bool isRTL = isRTLDocument;
+                bool next = false;
+                
                 if (t.x < M5.Display.width() / 2) {
+                    // Left side
+                    next = isRTL; // If RTL, left is next. If LTR, left is prev.
+                } else {
+                    // Right side
+                    next = !isRTL; // If RTL, right is prev. If LTR, right is next.
+                }
+
+                if (!next) {
                     // Prev Page
                     if (pageHistory.empty()) {
                         // Try prev chapter
@@ -721,6 +956,47 @@ void GUI::jumpToChapter(int chapter) {
         resetPageInfoCache();
         needsRedraw = true;
     }
+}
+
+bool GUI::openBookById(int id) {
+    BookEntry book = bookIndex.getBook(id);
+    if (book.id == 0) return false;
+
+    if (!epubLoader.load(book.path.c_str())) {
+        return false;
+    }
+
+    currentBook = book;
+    currentState = AppState::READER;
+
+    // Auto-detect language for font
+    std::string lang = epubLoader.getLanguage();
+    if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos) {
+        setFont("Hebrew");
+    }
+
+    // Restore progress
+    currentTextOffset = currentBook.currentOffset;
+    resetPageInfoCache();
+    if (currentBook.currentChapter > 0) {
+        while (epubLoader.getCurrentChapterIndex() < currentBook.currentChapter) {
+            if (!epubLoader.nextChapter()) break;
+        }
+    }
+    isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
+
+    pageHistory.clear();
+    needsRedraw = true;
+
+    // Save as last book
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK) {
+        nvs_set_i32(my_handle, "last_book_id", currentBook.id);
+        nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+
+    return true;
 }
 
 void GUI::refreshLibrary() {
@@ -865,7 +1141,10 @@ void GUI::ensureHebrewFontLoaded() {
     }
 }
 
-void GUI::drawStringMixed(const std::string& text, int x, int y) {
+void GUI::drawStringMixed(const std::string& text, int x, int y, M5Canvas* target) {
+    LovyanGFX* gfx = target ? (LovyanGFX*)target : (LovyanGFX*)&M5.Display;
+    // ESP_LOGI(TAG, "drawStringMixed: '%s' at %d,%d", text.c_str(), x, y); // Too verbose for every word
+
     // Simplified: if text contains Hebrew, use Hebrew font for the whole string
     // This avoids complex font-switching mid-string which can cause rendering issues
     
@@ -873,25 +1152,29 @@ void GUI::drawStringMixed(const std::string& text, int x, int y) {
         // Load Hebrew font
         ensureHebrewFontLoaded();
         if (!fontDataHebrew.empty()) {
-            M5.Display.loadFont(fontDataHebrew.data());
-            M5.Display.drawString(text.c_str(), x, y);
+            // Use the Hebrew font directly and draw at the current text size
+            ESP_LOGI(TAG, "drawStringMixed: drawing Hebrew word at %d,%d (len=%zu)", x, y, text.length());
+            gfx->loadFont(fontDataHebrew.data());
+            gfx->setTextSize(fontSize);
+            gfx->drawString(text.c_str(), x, y);
         } else {
             ESP_LOGW(TAG, "Hebrew font not loaded, using default");
-            M5.Display.unloadFont();
-            M5.Display.drawString(text.c_str(), x, y);
+            ESP_LOGW(TAG, "drawStringMixed: Hebrew font not available, falling back to default for '%s'", text.c_str());
+            gfx->unloadFont();
+            gfx->drawString(text.c_str(), x, y);
         }
         
-        // Restore previous font
+        // Restore previous font (keep GUI's selected font active)
         if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
-            M5.Display.loadFont(fontDataHebrew.data());
+            gfx->loadFont(fontDataHebrew.data());
         } else if (currentFont != "Default" && !fontData.empty()) {
-            M5.Display.loadFont(fontData.data());
+            gfx->loadFont(fontData.data());
         } else {
-            M5.Display.unloadFont();
+            gfx->unloadFont();
         }
     } else {
         // Non-Hebrew text - use current font
-        M5.Display.drawString(text.c_str(), x, y);
+        gfx->drawString(text.c_str(), x, y);
     }
 }
 

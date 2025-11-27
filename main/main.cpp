@@ -44,7 +44,7 @@ static inline void stopSntpClient() {
 #endif
 }
 
-static void syncRtcFromNtp() {
+void syncRtcFromNtp() {
     // Configure SNTP
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
@@ -52,15 +52,26 @@ static void syncRtcFromNtp() {
 
     time_t now = 0;
     struct tm timeinfo = {0};
-    const int maxRetries = 10;
+    const int maxRetries = 20;
+    
+    // Wait for time to be set
     for (int i = 0; i < maxRetries; ++i) {
+        // Check if SNTP has synced
+        if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+            break;
+        }
+        
         time(&now);
         localtime_r(&now, &timeinfo);
         if (timeinfo.tm_year > (2020 - 1900)) {
             break;
         }
+        ESP_LOGI(TAG, "Waiting for NTP sync... (%d/%d)", i+1, maxRetries);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
+
+    time(&now);
+    localtime_r(&now, &timeinfo);
 
     if (timeinfo.tm_year > (2020 - 1900)) {
         M5.Rtc.setDateTime(&timeinfo);
@@ -188,8 +199,10 @@ extern "C" void app_main(void)
     auto cfg = M5.config();
     M5.begin(cfg);
     M5.Display.setRotation(0); // Portrait
-    M5.Display.setTextSize(2);
-    M5.Display.println("Initializing...");
+    M5.Display.setTextSize(3);
+    M5.Display.setTextDatum(textdatum_t::middle_center);
+    M5.Display.drawString("Initializing...", M5.Display.width() / 2, M5.Display.height() / 2);
+    M5.Display.setTextDatum(textdatum_t::top_left); // Reset datum
 
     // Initialize SPIFFS
     esp_vfs_spiffs_conf_t conf = {

@@ -8,6 +8,7 @@ struct BookEntry {
     std::string path;  // The filesystem path (e.g., /spiffs/1.epub)
     int currentChapter = 0;
     size_t currentOffset = 0;
+    size_t fileSize = 0; // For cache validation
 };
 
 class BookIndex {

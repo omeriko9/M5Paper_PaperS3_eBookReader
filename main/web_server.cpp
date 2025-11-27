@@ -14,6 +14,7 @@ static const char *TAG = "WEB";
 extern WifiManager wifiManager;
 extern BookIndex bookIndex;
 extern GUI gui;
+extern void syncRtcFromNtp();
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
@@ -80,6 +81,7 @@ li:last-child { border-bottom: none; }
 button { background: #007aff; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: 0.5; }
 button.del { background: #ff3b30; padding: 6px 12px; font-size: 14px; }
+button.read { background: #34c759; padding: 6px 12px; font-size: 14px; margin-right: 8px; }
 input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100%; box-sizing: border-box; margin-bottom: 15px; font-size: 16px; }
 .progress { height: 4px; background: #eee; margin-top: 10px; border-radius: 2px; overflow: hidden; display: none; }
 .bar { height: 100%; background: #34c759; width: 0%; transition: width 0.2s; }
@@ -114,9 +116,19 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
         <button onclick="jump()">Go</button>
     </div>
   </div>
-</div>
-
-<div class="card">
+    <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+    <label>Timezone (POSIX String):</label>
+    <div style="display: flex; gap: 10px; margin-top: 5px;">
+        <input id="tzStr" placeholder="e.g. EST5EDT,M3.2.0,M11.1.0" style="margin:0;">
+        <button onclick="detectTZ()" style="width: auto;">Auto-Detect</button>
+    </div>
+    <div style="font-size: 12px; color: #666; margin-top: 5px;">
+        Note: Auto-detect gives IANA name (e.g. Asia/Jerusalem). ESP32 prefers POSIX strings for correct DST. 
+        <a href="https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv" target="_blank">Lookup POSIX TZ</a>
+    </div>
+    <button onclick="syncTime()" style="margin-top: 10px;">Sync Time (NTP)</button>
+  </div>
+</div><div class="card">
   <h2>Library</h2>
   <ul id="list">Loading...</ul>
   <div style="margin-top: 20px;">
@@ -178,13 +190,27 @@ function updateSettings() {
 }
 
 function jump() {
-    const ch = document.getElementById('jumpCh').value;
-    const pct = document.getElementById('jumpPct').value;
-    let url = '/api/jump?';
-    if(ch) url += 'chapter=' + (parseInt(ch)-1) + '&'; // User sees 1-based
-    if(pct) url += 'percent=' + pct;
+  var ch = document.getElementById('jumpCh').value;
+  var pct = document.getElementById('jumpPct').value;
+  var url = '/jump?';
+  if(ch) url += 'ch=' + ch + '&';
+  if(pct) url += 'pct=' + pct;
+  fetch(url).then(r => r.text()).then(t => alert(t));
+}
+
+function detectTZ() {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    document.getElementById('tzStr').value = tz;
+}
+
+function syncTime() {
+    const tz = document.getElementById('tzStr').value;
+    if(!tz) { alert("Please set a timezone first"); return; }
     
-    fetch(url).then(r => alert('Jumped!'));
+    fetch('/set_time?tz=' + encodeURIComponent(tz))
+        .then(r => r.text())
+        .then(msg => alert(msg))
+        .catch(e => alert("Error: " + e));
 }
 
 function fetchList() {
@@ -194,7 +220,7 @@ function fetchList() {
         if(files.length === 0) list.innerHTML = '<li>No books found</li>';
         files.forEach(f => {
             const li = document.createElement('li');
-            li.innerHTML = `<span>${f.name}</span><button class="del" onclick="del(${f.id})">Delete</button>`;
+            li.innerHTML = `<span>${f.name}</span><div><button class="read" onclick="readBook(${f.id})">Read</button><button class="del" onclick="del(${f.id})">Delete</button></div>`;
             list.appendChild(li);
         });
     });
@@ -208,6 +234,15 @@ function del(id) {
             fetchSettings(); // Update free space
         })
         .catch(e => alert('Error deleting'));
+}
+
+function readBook(id) {
+    fetch('/api/open?id=' + id, {method: 'POST'})
+        .then(r => {
+            if (!r.ok) throw new Error('Failed to open');
+            alert('Opening on device...');
+        })
+        .catch(e => alert(e.message));
 }
 
 async function upload() {
@@ -237,7 +272,8 @@ async function upload() {
             const filesToRemove = [];
             zip.forEach((relativePath, zipEntry) => {
                 const lower = relativePath.toLowerCase();
-                if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff)$/i) || lower.includes('oebps/images/')) {
+                // Strip images and fonts
+                if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff|ttf|otf|woff|woff2)$/i) || lower.includes('oebps/images/') || lower.includes('oebps/fonts/')) {
                     filesToRemove.push(relativePath);
                 }
             });
@@ -245,7 +281,7 @@ async function upload() {
             filesToRemove.forEach(f => zip.remove(f));
             
             if (filesToRemove.length > 0) {
-                status.innerText = `Removed ${filesToRemove.length} images. Re-zipping...`;
+                status.innerText = `Removed ${filesToRemove.length} files (images/fonts). Re-zipping...`;
                 const blob = await zip.generateAsync({type:"blob", compression: "DEFLATE"});
                 uploadFile = new File([blob], file.name, {type: "application/epub+zip"});
             } else {
@@ -502,6 +538,26 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+/* API to open a book on the device */
+static esp_err_t api_open_handler(httpd_req_t *req)
+{
+    char buf[100];
+    size_t buf_len = sizeof(buf);
+
+    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
+        char param[32];
+        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
+            int id = atoi(param);
+            if (gui.openBookById(id)) {
+                httpd_resp_send(req, "OK", 2);
+                return ESP_OK;
+            }
+        }
+    }
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid book id");
+    return ESP_FAIL;
+}
+
 /* API to get/set settings */
 static esp_err_t api_settings_handler(httpd_req_t *req)
 {
@@ -614,11 +670,37 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t set_time_handler(httpd_req_t *req)
+{
+    char buf[100];
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+        char tz[64] = {0};
+        if (httpd_query_key_value(buf, "tz", tz, sizeof(tz)) == ESP_OK) {
+            // Basic URL decode (replace %2F with /, %20 with space, etc if needed)
+            // For now, we trust the browser sends a decent string. 
+            // Note: httpd_query_key_value does NOT decode URL encoding fully.
+            
+            // Set TZ environment variable
+            setenv("TZ", tz, 1);
+            tzset();
+            
+            // Sync with NTP
+            syncRtcFromNtp();
+            
+            httpd_resp_send(req, "Timezone set and time synced!", HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+    }
+    httpd_resp_send_500(req);
+    return ESP_FAIL;
+}
+
 void WebServer::init(const char* basePath) {
-    httpd_handle_t server = NULL;
+    if (server != NULL) return; // Already running
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 12; // Increased for safety
     config.stack_size = 8192; // Increase stack for file ops
 
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -646,6 +728,14 @@ void WebServer::init(const char* basePath) {
         };
         httpd_register_uri_handler(server, &del_api_uri);
 
+        httpd_uri_t open_api_uri = {
+            .uri       = "/api/open",
+            .method    = HTTP_POST,
+            .handler   = api_open_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &open_api_uri);
+
         httpd_uri_t settings_api_uri = {
             .uri       = "/api/settings",
             .method    = HTTP_GET,
@@ -669,6 +759,14 @@ void WebServer::init(const char* basePath) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &jump_api_uri);
+
+        httpd_uri_t set_time_uri = {
+            .uri       = "/set_time",
+            .method    = HTTP_GET,
+            .handler   = set_time_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &set_time_uri);
 
         httpd_uri_t upload_uri = {
             .uri       = "/upload/*",
@@ -701,5 +799,12 @@ void WebServer::init(const char* basePath) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &catch_all_uri);
+    }
+}
+
+void WebServer::stop() {
+    if (server) {
+        httpd_stop(server);
+        server = NULL;
     }
 }

@@ -34,11 +34,32 @@ void BookIndex::scanDirectory(const char* basePath) {
                 
                 std::string fullPath = std::string(basePath) + "/" + fname;
                 
+                // Get file stats
+                struct stat st;
+                size_t currentSize = 0;
+                if (stat(fullPath.c_str(), &st) == 0) {
+                    currentSize = st.st_size;
+                }
+
                 // Check if already exists in books
                 bool found = false;
-                for (const auto& book : books) {
+                for (auto& book : books) {
                     if (book.path == fullPath) {
                         found = true;
+                        // Check if file changed
+                        if (book.fileSize != currentSize || book.fileSize == 0) {
+                            ESP_LOGI(TAG, "Book changed or no size cached: %s", fname.c_str());
+                            // Reload title
+                            EpubLoader loader;
+                            if (loader.load(fullPath.c_str())) {
+                                std::string metaTitle = loader.getTitle();
+                                if (!metaTitle.empty() && metaTitle != "Unknown Title") {
+                                    book.title = metaTitle;
+                                }
+                                loader.close();
+                            }
+                            book.fileSize = currentSize;
+                        }
                         break;
                     }
                 }
@@ -58,7 +79,7 @@ void BookIndex::scanDirectory(const char* basePath) {
                         loader.close();
                     }
 
-                    books.push_back({id, title, fullPath, 0, 0});
+                    books.push_back({id, title, fullPath, 0, 0, currentSize});
                     ESP_LOGI(TAG, "Found new book: %s", title.c_str());
                 }
             }
@@ -107,11 +128,13 @@ void BookIndex::load() {
                  snprintf(tmp, sizeof(tmp), "/spiffs/%d.epub", id);
                  path = tmp;
              }
+             size_t fsize = 0;
+             if (parts.size() >= 6) fsize = atol(parts[5].c_str());
              
              // Verify file exists
              struct stat st;
              if (stat(path.c_str(), &st) == 0) {
-                 books.push_back({id, title, path, chapter, offset});
+                 books.push_back({id, title, path, chapter, offset, fsize});
              }
          }
     }
@@ -128,7 +151,7 @@ void BookIndex::save() {
     }
     
     for (const auto& book : books) {
-        fprintf(f, "%d|%s|%d|%u|%s\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str());
+        fprintf(f, "%d|%s|%d|%u|%s|%u\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str(), (unsigned int)book.fileSize);
     }
     fclose(f);
 }
@@ -148,7 +171,7 @@ BookEntry BookIndex::getBook(int id) {
     for (const auto& book : books) {
         if (book.id == id) return book;
     }
-    return {0, "", "", 0, 0};
+    return {0, "", "", 0, 0, 0};
 }
 
 int BookIndex::getNextId() {
@@ -169,7 +192,7 @@ std::string BookIndex::addBook(const std::string& title) {
     char path[32];
     snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
     
-    books.push_back({id, title, std::string(path), 0, 0});
+    books.push_back({id, title, std::string(path), 0, 0, 0});
     save();
     
     return std::string(path);
