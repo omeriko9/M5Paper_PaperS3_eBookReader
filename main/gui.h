@@ -26,6 +26,11 @@ public:
     void jumpTo(float percent);
     void jumpToChapter(int chapter);
     bool openBookById(int id);
+    // Introspection helpers for external callers (eg. web server)
+    bool canJump() const; // true when in READER state
+    size_t getCurrentChapterSize() const;
+    size_t getCurrentOffset() const;
+    int getCurrentChapterIndex() const;
     
     void setWebServerEnabled(bool enabled);
 

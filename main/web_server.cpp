@@ -195,7 +195,22 @@ function jump() {
   var url = '/jump?';
   if(ch) url += 'ch=' + ch + '&';
   if(pct) url += 'pct=' + pct;
-  fetch(url).then(r => r.text()).then(t => alert(t));
+  fetch(url).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+  }).then(obj => {
+      if (obj.applied) {
+          if (obj.action === 'percent') {
+              alert('Jump applied: ' + obj.percent + '% (offset ' + obj.offset + ' / ' + obj.chapterSize + ')');
+          } else if (obj.action === 'chapter') {
+              alert('Jumped to chapter ' + obj.chapter);
+          } else {
+              alert('Jump applied');
+          }
+      } else {
+          alert('Jump not applied: ' + (obj.reason || 'unknown'));
+      }
+  }).catch(e => alert('Error: ' + e.message));
 }
 
 function detectTZ() {
@@ -395,18 +410,58 @@ static size_t getFreeSpace() {
 }
 
 static esp_err_t jump_handler(httpd_req_t *req) {
-    char buf[100];
+    char buf[128];
+    ESP_LOGI(TAG, "jump_handler called: uri=%s", req->uri);
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
         char param[32];
-        if (httpd_query_key_value(buf, "percent", param, sizeof(param)) == ESP_OK) {
+
+        // Support both 'percent' and 'pct' (web UI used pct) for percent jumps
+        if (httpd_query_key_value(buf, "percent", param, sizeof(param)) == ESP_OK ||
+            httpd_query_key_value(buf, "pct", param, sizeof(param)) == ESP_OK) {
             float p = atof(param);
-            gui.jumpTo(p); 
-        } else if (httpd_query_key_value(buf, "chapter", param, sizeof(param)) == ESP_OK) {
-            int c = atoi(param);
-            gui.jumpToChapter(c);
+            ESP_LOGI(TAG, "jump_handler: percent param=%s -> %f", param, p);
+
+            // Prepare JSON response
+            httpd_resp_set_type(req, "application/json");
+            char out[256];
+
+            size_t chapterSize = gui.getCurrentChapterSize();
+            size_t newOffset = (size_t)((p / 100.0f) * chapterSize);
+
+            if (gui.canJump()) {
+                gui.jumpTo(p);
+                int len = snprintf(out, sizeof(out), "{\"result\":\"ok\",\"action\":\"percent\",\"percent\":%.2f,\"offset\":%u,\"chapterSize\":%u,\"applied\":true}", p, (unsigned)newOffset, (unsigned)chapterSize);
+                httpd_resp_send(req, out, len);
+            } else {
+                int len = snprintf(out, sizeof(out), "{\"result\":\"error\",\"reason\":\"not in reader state\",\"applied\":false}");
+                httpd_resp_send(req, out, len);
+            }
+            return ESP_OK;
         }
+
+        // Support both 'chapter' and 'ch' (web UI used ch)
+        if (httpd_query_key_value(buf, "chapter", param, sizeof(param)) == ESP_OK ||
+            httpd_query_key_value(buf, "ch", param, sizeof(param)) == ESP_OK) {
+            int c = atoi(param);
+            ESP_LOGI(TAG, "jump_handler: chapter param=%s -> %d", param, c);
+            httpd_resp_set_type(req, "application/json");
+            char out[256];
+
+            if (gui.canJump()) {
+                gui.jumpToChapter(c);
+                int len = snprintf(out, sizeof(out), "{\"result\":\"ok\",\"action\":\"chapter\",\"chapter\":%d,\"applied\":true}", c);
+                httpd_resp_send(req, out, len);
+            } else {
+                int len = snprintf(out, sizeof(out), "{\"result\":\"error\",\"reason\":\"not in reader state\",\"applied\":false}");
+                httpd_resp_send(req, out, len);
+            }
+            return ESP_OK;
+        }
+    } else {
+        ESP_LOGW(TAG, "jump_handler: no query string provided");
     }
-    httpd_resp_send(req, "OK", 2);
+
+    httpd_resp_send(req, "Bad Request", HTTPD_400_BAD_REQUEST);
     return ESP_OK;
 }
 
@@ -785,7 +840,7 @@ void WebServer::init(const char* basePath) {
         httpd_register_uri_handler(server, &wifi_uri);
         
         httpd_uri_t jump_uri = {
-            .uri       = "/api/jump",
+            .uri       = "/jump",
             .method    = HTTP_GET,
             .handler   = jump_handler,
             .user_ctx  = NULL

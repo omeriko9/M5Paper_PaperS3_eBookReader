@@ -11,6 +11,7 @@
 #include <lgfx/v1/lgfx_fonts.hpp>
 #include "esp_sleep.h" // Added include
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include <dirent.h>
@@ -18,6 +19,9 @@
 #include <string.h>
 
 static const char *TAG = "GUI";
+bool GUI::canJump() const {
+    return currentState == AppState::READER;
+}
 
 EpubLoader epubLoader;
 extern BookIndex bookIndex;
@@ -29,6 +33,73 @@ extern WebServer webServer;
 static constexpr int STATUS_BAR_HEIGHT = 44;
 static constexpr int LIBRARY_LIST_START_Y = 120;
 static constexpr int LIBRARY_LINE_HEIGHT = 48;
+
+
+struct SettingsLayout
+{
+    int panelTop;
+    int panelHeight;
+    int panelWidth;
+    int padding;
+    int rowHeight;
+    int titleY;
+    int row1Y;
+    int row2Y;
+    int row3Y;
+    int closeY;
+    int buttonGap;
+    int fontButtonW;
+    int fontButtonH;
+    int fontMinusX;
+    int fontPlusX;
+    int changeButtonX;
+    int changeButtonW;
+    int toggleButtonX;
+    int toggleButtonW;
+    int closeButtonW;
+    int closeButtonH;
+};
+
+static SettingsLayout computeSettingsLayout()
+{
+    SettingsLayout l{};
+    l.panelWidth = M5.Display.width();
+    l.panelHeight = M5.Display.height() / 2;
+    l.panelTop = M5.Display.height() - l.panelHeight;
+    l.padding = 24;
+    l.rowHeight = 54;
+    l.titleY = l.panelTop + 18;
+    l.row1Y = l.panelTop + 52;
+    l.row2Y = l.row1Y + l.rowHeight;
+    l.row3Y = l.row2Y + l.rowHeight;
+    l.closeY = l.panelTop + l.panelHeight - 64;
+    l.buttonGap = 14;
+    l.fontButtonW = 68;
+    l.fontButtonH = 38;
+    l.fontPlusX = l.panelWidth - l.padding - l.fontButtonW;
+    l.fontMinusX = l.fontPlusX - l.buttonGap - l.fontButtonW;
+    l.changeButtonW = 168;
+    l.changeButtonX = l.panelWidth - l.padding - l.changeButtonW;
+    l.toggleButtonW = 160;
+    l.toggleButtonX = l.panelWidth - l.padding - l.toggleButtonW;
+    l.closeButtonW = 124;
+    l.closeButtonH = 40;
+    return l;
+}
+
+int GUI::getCurrentChapterIndex() const {
+    return epubLoader.getCurrentChapterIndex();
+}
+
+size_t GUI::getCurrentChapterSize() const {
+    if (currentState != AppState::READER) return 0;
+    return epubLoader.getChapterSize();
+}
+
+size_t GUI::getCurrentOffset() const {
+    if (currentState != AppState::READER) return 0;
+    return currentTextOffset;
+}
 static constexpr int PAGEINFO_ESTIMATE_MIN_CHARS = 50;
 static constexpr uint64_t LIGHT_SLEEP_TO_DEEP_SLEEP_US = 2ULL * 60ULL * 1000000ULL; // 2 minutes
 
@@ -158,14 +229,62 @@ static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
         return true;
     }
 
-    std::string sample = loader.getText(sampleOffset, 400);
-    for (char c : sample)
+    // Check first 5 chapters to decide if the book is Hebrew
+    int originalChapter = loader.getCurrentChapterIndex();
+    int chaptersToCheck = std::min(5, loader.getTotalChapters());
+    bool foundHebrew = false;
+
+    for (int i = 0; i < chaptersToCheck; i++)
     {
-        std::string s(1, c);
-        if (isHebrew(s))
-            return true;
+        if (loader.jumpToChapter(i))
+        {
+            // Check first 1000 chars of the chapter
+            std::string sample = loader.getText(0, 1000);
+            for (char c : sample)
+            {
+                std::string s(1, c);
+                if (isHebrew(s))
+                {
+                    foundHebrew = true;
+                    break;
+                }
+            }
+        }
+        if (foundHebrew)
+            break;
     }
-    return false;
+
+    // Restore original chapter
+    if (loader.getCurrentChapterIndex() != originalChapter)
+    {
+        loader.jumpToChapter(originalChapter);
+    }
+
+    return foundHebrew;
+}
+
+static bool configureTouchWakeForDeepSleep()
+{
+    // Only needed on M5Paper: touch INT is GPIO36 (RTC pin) and needs the rail + pull-ups alive.
+    if (M5.getBoard() != m5::board_t::board_M5Paper)
+        return false;
+
+    const gpio_num_t touchIntPin = GPIO_NUM_36;
+
+    // Keep external 5V rail on so the touch controller keeps running in deep sleep.
+    M5.Power.setExtOutput(true);
+
+    // Keep the RTC peripheral powered and configure the touch INT pin as a pulled-up RTC input.
+    // Without this, the touch interrupt line floats during deep sleep and wake will not trigger.
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+    rtc_gpio_init(touchIntPin);
+    rtc_gpio_set_direction(touchIntPin, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_dis(touchIntPin);
+    rtc_gpio_pullup_en(touchIntPin);
+    rtc_gpio_hold_dis(touchIntPin);
+
+    esp_sleep_enable_ext0_wakeup(touchIntPin, 0);
+    return true;
 }
 
 void GUI::init()
@@ -891,10 +1010,19 @@ void GUI::goToSleep()
     if (wakeReason == ESP_SLEEP_WAKEUP_TIMER)
     {
         ESP_LOGI(TAG, "Light sleep timer elapsed, entering deep sleep");
+        bool manualConfig = configureTouchWakeForDeepSleep();
         drawSleepSymbol("Zz");
         M5.Display.sleep();
         M5.Display.waitDisplay();
-        M5.Power.deepSleep(0, true);
+        
+        if (manualConfig)
+        {
+            esp_deep_sleep_start();
+        }
+        else
+        {
+            M5.Power.deepSleep(0, true);
+        }
         return;
     }
 
@@ -911,47 +1039,104 @@ void GUI::resetPageInfoCache()
     lastPageChars = 0;
     lastPageTotal = 1;
     pageHistory.clear();
+    nextCanvasValid = false;
+    prevCanvasValid = false;
 }
 
 void GUI::drawSettings()
 {
-    // Overlay
-    M5.Display.fillRect(20, 40, M5.Display.width() - 40, M5.Display.height() - 80, TFT_LIGHTGREY);
-    M5.Display.drawRect(20, 40, M5.Display.width() - 40, M5.Display.height() - 80, TFT_BLACK);
+    // Draw the reader content first so we can see the book behind the settings
+    drawReader();
 
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-    M5.Display.setCursor(40, 60);
-    M5.Display.println("Settings");
+    SettingsLayout layout = computeSettingsLayout();
 
-    // Font Size
-    M5.Display.setCursor(40, 100);
-    M5.Display.printf("Size: %.1f", fontSize);
+    // Clear background for settings panel
+    M5.Display.fillRect(0, layout.panelTop, layout.panelWidth, layout.panelHeight, TFT_WHITE);
+    M5.Display.drawRect(0, layout.panelTop, layout.panelWidth, layout.panelHeight, TFT_BLACK);
+    M5.Display.drawLine(0, layout.panelTop, layout.panelWidth, layout.panelTop, TFT_BLACK); // Top border
 
-    // Buttons for Size
-    M5.Display.fillRect(160, 95, 40, 30, TFT_WHITE);
-    M5.Display.drawRect(160, 95, 40, 30, TFT_BLACK);
-    M5.Display.drawString("-", 175, 100);
+    auto drawButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor)
+    {
+        M5.Display.fillRect(x, y, w, h, fillColor);
+        M5.Display.drawRect(x, y, w, h, TFT_BLACK);
+        M5.Display.setTextDatum(textdatum_t::middle_center);
+        M5.Display.setTextColor(TFT_BLACK, fillColor);
+        M5.Display.drawString(label, x + w / 2, y + h / 2);
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.setTextDatum(textdatum_t::middle_left);
+    };
 
-    M5.Display.fillRect(210, 95, 40, 30, TFT_WHITE);
-    M5.Display.drawRect(210, 95, 40, 30, TFT_BLACK);
-    M5.Display.drawString("+", 225, 100);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
 
-    // Font Family
-    M5.Display.setCursor(40, 150);
-    M5.Display.printf("Font: %s", currentFont.c_str());
+    // Title
+    M5.Display.setTextSize(1.6f);
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.drawString("Settings", layout.padding, layout.titleY);
 
-    // Button for Font
-    M5.Display.fillRect(40, 180, 120, 40, TFT_WHITE);
-    M5.Display.drawRect(40, 180, 120, 40, TFT_BLACK);
-    M5.Display.drawString("Change Font", 50, 190);
+    // Body styling
+    const float bodyTextSize = 1.2f;
+    M5.Display.setTextSize(bodyTextSize);
+    M5.Display.setTextDatum(textdatum_t::middle_left);
 
-    // Close
-    M5.Display.fillRect(40, 240, 100, 40, TFT_WHITE);
-    M5.Display.drawRect(40, 240, 100, 40, TFT_BLACK);
-    M5.Display.drawString("Close", 60, 250);
+    // --- Font Size ---
+    int row1CenterY = layout.row1Y + layout.rowHeight / 2;
+    M5.Display.drawString("Font Size", layout.padding, row1CenterY);
+    char sizeBuf[16];
+    snprintf(sizeBuf, sizeof(sizeBuf), "%.1f", fontSize);
+    int fontValueRight = layout.fontMinusX - 10;
+    M5.Display.setTextDatum(textdatum_t::middle_right);
+    M5.Display.drawString(sizeBuf, fontValueRight, row1CenterY);
+    M5.Display.setTextDatum(textdatum_t::middle_left);
+    int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    drawButton(layout.fontMinusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "-", TFT_LIGHTGREY);
+    drawButton(layout.fontPlusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "+", TFT_LIGHTGREY);
 
-    M5.Display.setTextColor(TFT_BLACK); // Reset
+    // --- Font Family ---
+    int row2CenterY = layout.row2Y + layout.rowHeight / 2;
+    M5.Display.drawString("Font", layout.padding, row2CenterY);
+    int fontLabelRight = layout.changeButtonX - 12;
+    M5.Display.setTextDatum(textdatum_t::middle_right);
+    M5.Display.drawString(currentFont.c_str(), fontLabelRight, row2CenterY);
+    M5.Display.setTextDatum(textdatum_t::middle_left);
+    int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    drawButton(layout.changeButtonX, changeButtonY, layout.changeButtonW, layout.fontButtonH, "Change", TFT_LIGHTGREY);
+
+    // --- WiFi ---
+    int row3CenterY = layout.row3Y + layout.rowHeight / 2;
+    M5.Display.drawString("WiFi", layout.padding, row3CenterY);
+
+    // Toggle Button
+    bool isWifiOn = false;
+    wifi_mode_t mode;
+    if (esp_wifi_get_mode(&mode) == ESP_OK)
+    {
+        isWifiOn = (mode != WIFI_MODE_NULL);
+    }
+
+    int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    uint16_t wifiFill = isWifiOn ? TFT_GREEN : TFT_LIGHTGREY;
+    drawButton(layout.toggleButtonX, toggleButtonY, layout.toggleButtonW, layout.fontButtonH,
+               isWifiOn ? "WiFi: ON" : "WiFi: OFF", wifiFill);
+
+    if (isWifiOn)
+    {
+        std::string status = "Connecting...";
+        if (wifiManager.isConnected())
+        {
+            std::string ip = wifiManager.getIpAddress();
+            status = "URL: http://" + ip + "/";
+        }
+        M5.Display.setTextSize(bodyTextSize);
+        M5.Display.setTextDatum(textdatum_t::middle_left);
+        M5.Display.drawString(status.c_str(), layout.padding + 110, row3CenterY);
+    }
+
+    // --- Close Button ---
+    int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
+    drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_LIGHTGREY);
+
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.setTextSize(1.0f);
     M5.Display.display();
 }
 
@@ -1099,30 +1284,51 @@ void GUI::handleTouch()
             }
             else if (currentState == AppState::SETTINGS)
             {
-                // Check buttons
-                // -
-                if (t.x >= 160 && t.x <= 200 && t.y >= 95 && t.y <= 125)
+                SettingsLayout layout = computeSettingsLayout();
+                int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
+                int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
+                int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
+                int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
+                int closeButtonY = layout.closeY;
+
+                // Font Size [-]
+                if (t.y >= fontButtonY && t.y <= fontButtonY + layout.fontButtonH && t.x >= layout.fontMinusX && t.x <= layout.fontMinusX + layout.fontButtonW)
                 {
                     setFontSize(fontSize - 0.1f);
                 }
-                // +
-                else if (t.x >= 210 && t.x <= 250 && t.y >= 95 && t.y <= 125)
+                // Font Size [+]
+                else if (t.y >= fontButtonY && t.y <= fontButtonY + layout.fontButtonH && t.x >= layout.fontPlusX && t.x <= layout.fontPlusX + layout.fontButtonW)
                 {
                     setFontSize(fontSize + 0.1f);
                 }
-                // Font
-                else if (t.x >= 40 && t.x <= 160 && t.y >= 180 && t.y <= 220)
+                // Font Change
+                else if (t.y >= changeButtonY && t.y <= changeButtonY + layout.fontButtonH && t.x >= layout.changeButtonX && t.x <= layout.changeButtonX + layout.changeButtonW)
                 {
-                    // Cycle fonts
-                    if (currentFont == "Default")
-                        setFont("Hebrew");
-                    else if (currentFont == "Hebrew")
-                        setFont("Roboto");
-                    else
-                        setFont("Default");
+                    if (currentFont == "Default") setFont("Hebrew");
+                    else if (currentFont == "Hebrew") setFont("Roboto");
+                    else setFont("Default");
+                }
+                // WiFi Toggle
+                else if (t.y >= toggleButtonY && t.y <= toggleButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
+                {
+                    wifi_mode_t mode;
+                    if (esp_wifi_get_mode(&mode) == ESP_OK) {
+                        if (mode != WIFI_MODE_NULL) {
+                            // Turn OFF
+                            webServer.stop();
+                            esp_wifi_stop();
+                            wifiConnected = false;
+                        } else {
+                            // Turn ON
+                            esp_wifi_start();
+                            wifiManager.connect();
+                            webServer.init("/spiffs");
+                        }
+                        needsRedraw = true;
+                    }
                 }
                 // Close
-                else if (t.x >= 40 && t.x <= 140 && t.y >= 240 && t.y <= 280)
+                else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
                 {
                     currentState = previousState;
                     needsRedraw = true;
@@ -1134,19 +1340,26 @@ void GUI::handleTouch()
 
 void GUI::jumpTo(float percent)
 {
-    if (currentState != AppState::READER)
+    ESP_LOGI(TAG, "GUI::jumpTo called with percent=%.2f (state=%d)", percent, (int)currentState);
+    if (currentState != AppState::READER) {
+        ESP_LOGW(TAG, "jumpTo ignored - not in READER state");
         return;
+    }
 
     size_t size = epubLoader.getChapterSize();
-    if (size == 0)
+    if (size == 0) {
+        ESP_LOGW(TAG, "jumpTo: current chapter size is 0, ignoring");
         return;
+    }
 
     if (percent < 0)
         percent = 0;
     if (percent > 100)
         percent = 100;
 
-    currentTextOffset = (size_t)((percent / 100.0f) * size);
+    size_t newOffset = (size_t)((percent / 100.0f) * size);
+    ESP_LOGI(TAG, "GUI::jumpTo -> percent=%.2f => offset=%zu / chapterSize=%zu", percent, newOffset, size);
+    currentTextOffset = newOffset;
 
     pageHistory.clear();
     resetPageInfoCache();
@@ -1155,15 +1368,21 @@ void GUI::jumpTo(float percent)
 
 void GUI::jumpToChapter(int chapter)
 {
-    if (currentState != AppState::READER)
+    ESP_LOGI(TAG, "GUI::jumpToChapter called chapter=%d (state=%d)", chapter, (int)currentState);
+    if (currentState != AppState::READER) {
+        ESP_LOGW(TAG, "jumpToChapter ignored - not in READER state");
         return;
+    }
 
     if (epubLoader.jumpToChapter(chapter))
     {
+        ESP_LOGI(TAG, "jumpToChapter: loaded chapter %d size=%zu", chapter, epubLoader.getChapterSize());
         currentTextOffset = 0;
         pageHistory.clear();
         resetPageInfoCache();
         needsRedraw = true;
+    } else {
+        ESP_LOGW(TAG, "jumpToChapter: failed to load chapter %d", chapter);
     }
 }
 
