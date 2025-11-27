@@ -46,6 +46,7 @@ struct SettingsLayout
     int row1Y;
     int row2Y;
     int row3Y;
+    int row4Y;
     int closeY;
     int buttonGap;
     int fontButtonW;
@@ -72,6 +73,7 @@ static SettingsLayout computeSettingsLayout()
     l.row1Y = l.panelTop + 52;
     l.row2Y = l.row1Y + l.rowHeight;
     l.row3Y = l.row2Y + l.rowHeight;
+    l.row4Y = l.row3Y + l.rowHeight;
     l.closeY = l.panelTop + l.panelHeight - 64;
     l.buttonGap = 14;
     l.fontButtonW = 68;
@@ -263,28 +265,55 @@ static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
     return foundHebrew;
 }
 
-static bool configureTouchWakeForDeepSleep()
+static void enterDeepSleepWithTouchWake()
 {
     // Only needed on M5Paper: touch INT is GPIO36 (RTC pin) and needs the rail + pull-ups alive.
     if (M5.getBoard() != m5::board_t::board_M5Paper)
-        return false;
+    {
+        esp_deep_sleep_start();
+        return;
+    }
 
-    const gpio_num_t touchIntPin = GPIO_NUM_36;
+    const gpio_num_t TOUCH_INT_PIN = GPIO_NUM_36;
+    const gpio_num_t MAIN_PWR_PIN = GPIO_NUM_2;
 
-    // Keep external 5V rail on so the touch controller keeps running in deep sleep.
-    M5.Power.setExtOutput(true);
+    ESP_LOGI(TAG, "Preparing for deep sleep...");
 
-    // Keep the RTC peripheral powered and configure the touch INT pin as a pulled-up RTC input.
-    // Without this, the touch interrupt line floats during deep sleep and wake will not trigger.
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-    rtc_gpio_init(touchIntPin);
-    rtc_gpio_set_direction(touchIntPin, RTC_GPIO_MODE_INPUT_ONLY);
-    rtc_gpio_pulldown_dis(touchIntPin);
-    rtc_gpio_pullup_en(touchIntPin);
-    rtc_gpio_hold_dis(touchIntPin);
+    // 1. Clear any pending touch interrupt:
+    // Ensure the pin is configured as input
+    gpio_reset_pin(TOUCH_INT_PIN);
+    gpio_set_direction(TOUCH_INT_PIN, GPIO_MODE_INPUT);
+    
+    // Wait for line to go HIGH (inactive) - it is active LOW
+    int retries = 0;
+    while (gpio_get_level(TOUCH_INT_PIN) == 0 && retries < 50) {
+        M5.update(); 
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+        retries++;
+    }
+    if (gpio_get_level(TOUCH_INT_PIN) == 0) {
+        ESP_LOGW(TAG, "Touch interrupt pin still LOW after flushing");
+    }
 
-    esp_sleep_enable_ext0_wakeup(touchIntPin, 0);
-    return true;
+    // 2. Configure wakeup on touch interrupt (active LOW)
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    esp_sleep_enable_ext0_wakeup(TOUCH_INT_PIN, 0); // 0 = LOW
+
+    // 3. Keep main power rail ON during deep sleep
+    // This is critical for M5Paper touch controller to stay alive
+    gpio_reset_pin(MAIN_PWR_PIN);
+    gpio_set_direction(MAIN_PWR_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(MAIN_PWR_PIN, 1);
+    gpio_hold_en(MAIN_PWR_PIN);
+    gpio_deep_sleep_hold_en();
+
+    // 4. Put display to sleep cleanly
+    M5.Display.sleep();
+    M5.Display.waitDisplay();
+
+    // 5. Enter deep sleep
+    ESP_LOGI(TAG, "Entering deep sleep now");
+    esp_deep_sleep_start();
 }
 
 void GUI::init()
@@ -330,20 +359,22 @@ void GUI::init()
 
     lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 
-    // Check wakeup
-    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-    if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || wakeup_reason == ESP_SLEEP_WAKEUP_TIMER)
+    // Always check for state restoration, regardless of wake reason.
+    // This handles cases where the device was reset or power-cycled manually.
     {
         // Try to load last book
         nvs_handle_t my_handle;
         int32_t lastId = -1;
+        int32_t lastState = (int)AppState::LIBRARY;
         if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
         {
             nvs_get_i32(my_handle, "last_book_id", &lastId);
+            nvs_get_i32(my_handle, "last_state", &lastState);
             nvs_close(my_handle);
         }
 
-        if (lastId != -1)
+        // Only restore if we were in READER state
+        if (lastId != -1 && lastState == (int)AppState::READER)
         {
             currentBook = bookIndex.getBook(lastId);
             if (currentBook.id != 0 && epubLoader.load(currentBook.path.c_str()))
@@ -370,7 +401,7 @@ void GUI::init()
                 isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
 
                 pageHistory.clear();
-                needsRedraw = false; // Don't redraw, assume E-Ink persisted
+                needsRedraw = true; // Force redraw to clear sleep symbol
                 return;
             }
         }
@@ -425,6 +456,9 @@ void GUI::update()
                 ESP_LOGI(TAG, "Library idle timeout: Stopping WebServer");
                 setWebServerEnabled(false);
             }
+            // Also go to sleep if idle for 5 minutes
+            goToSleep();
+            lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
         }
         else
         {
@@ -988,6 +1022,17 @@ void GUI::goToSleep()
 {
     // Save progress
     bookIndex.updateProgress(currentBook.id, epubLoader.getCurrentChapterIndex(), currentTextOffset);
+    // Ensure we always remember the last-opened book for deep sleep wake restores
+    {
+        nvs_handle_t my_handle;
+        if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
+        {
+            nvs_set_i32(my_handle, "last_book_id", currentBook.id);
+            nvs_set_i32(my_handle, "last_state", (int)currentState);
+            nvs_commit(my_handle);
+            nvs_close(my_handle);
+        }
+    }
 
     // Flush any pending display operations before sleeping
     M5.Display.waitDisplay();
@@ -1005,24 +1050,33 @@ void GUI::goToSleep()
     drawSleepSymbol("z");
     M5.Power.lightSleep(LIGHT_SLEEP_TO_DEEP_SLEEP_US, true);
 
+    // Restore display state after wake from light sleep
+    // drawSleepSymbol changed font, size, and datum. We must restore them.
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.setTextColor(TFT_BLACK); // Restore transparent background
+    if (currentFont == "Default") {
+        M5.Display.setFont(&lgfx::v1::fonts::Font2); // Or whatever default is
+    } else if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+        M5.Display.loadFont(fontDataHebrew.data());
+    } else if (!fontData.empty()) {
+        M5.Display.loadFont(fontData.data());
+    } else {
+        M5.Display.unloadFont();
+    }
+    M5.Display.setTextSize(fontSize);
+    
+    // Force redraw to clear the "z" symbol and show content immediately
+    needsRedraw = true;
+    lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+
     // If the timer woke us, hand off to deep sleep so the next touch resumes straight into the last page.
     auto wakeReason = esp_sleep_get_wakeup_cause();
     if (wakeReason == ESP_SLEEP_WAKEUP_TIMER)
     {
         ESP_LOGI(TAG, "Light sleep timer elapsed, entering deep sleep");
-        bool manualConfig = configureTouchWakeForDeepSleep();
         drawSleepSymbol("Zz");
-        M5.Display.sleep();
-        M5.Display.waitDisplay();
         
-        if (manualConfig)
-        {
-            esp_deep_sleep_start();
-        }
-        else
-        {
-            M5.Power.deepSleep(0, true);
-        }
+        enterDeepSleepWithTouchWake();
         return;
     }
 
@@ -1118,18 +1172,19 @@ void GUI::drawSettings()
     drawButton(layout.toggleButtonX, toggleButtonY, layout.toggleButtonW, layout.fontButtonH,
                isWifiOn ? "WiFi: ON" : "WiFi: OFF", wifiFill);
 
-    if (isWifiOn)
+    // --- WiFi Status Row ---
+    int row4CenterY = layout.row4Y + layout.rowHeight / 2;
+    M5.Display.drawString("WiFi Status", layout.padding, row4CenterY);
+    std::string status = isWifiOn ? "Connecting..." : "WiFi is OFF";
+    if (isWifiOn && wifiManager.isConnected())
     {
-        std::string status = "Connecting...";
-        if (wifiManager.isConnected())
-        {
-            std::string ip = wifiManager.getIpAddress();
-            status = "URL: http://" + ip + "/";
-        }
-        M5.Display.setTextSize(bodyTextSize);
-        M5.Display.setTextDatum(textdatum_t::middle_left);
-        M5.Display.drawString(status.c_str(), layout.padding + 110, row3CenterY);
+        std::string ip = wifiManager.getIpAddress();
+        status = "URL: http://" + ip + "/";
     }
+    M5.Display.setTextSize(1.0f);
+    M5.Display.setTextDatum(textdatum_t::middle_left);
+    M5.Display.drawString(status.c_str(), layout.padding + 140, row4CenterY);
+    M5.Display.setTextSize(bodyTextSize);
 
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
@@ -1653,6 +1708,7 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
     else
     {
         // Non-Hebrew text - use current font
+        gfx->setTextSize(fontSize); // Ensure size is correct
         gfx->drawString(text.c_str(), x, y);
     }
 }
