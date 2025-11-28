@@ -3,6 +3,8 @@
 #include "esp_log.h"
 #include "esp_vfs.h"
 #include "esp_spiffs.h" // Added
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -17,6 +19,14 @@ extern GUI gui;
 extern void syncRtcFromNtp();
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
+
+// --- Helper for Timezone ---
+static const char* resolve_timezone(const char* tz) {
+    if (strcmp(tz, "Asia/Jerusalem") == 0) return "IST-2IDT,M3.4.4/26,M10.5.0";
+    if (strcmp(tz, "Asia/Tel_Aviv") == 0) return "IST-2IDT,M3.4.4/26,M10.5.0";
+    return tz;
+}
+
 
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
@@ -152,6 +162,9 @@ function fetchSettings() {
         document.getElementById('fontSel').value = s.font;
         if(s.freeSpace) {
             document.getElementById('freeSpace').innerText = (s.freeSpace / 1024 / 1024).toFixed(2) + ' MB';
+        }
+        if(s.timezone) {
+            document.getElementById('tzStr').value = s.timezone;
         }
     });
 }
@@ -617,9 +630,19 @@ static esp_err_t api_open_handler(httpd_req_t *req)
 static esp_err_t api_settings_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\", \"freeSpace\":%u}", 
-            gui.getFontSize(), gui.getFont().c_str(), (unsigned int)getFreeSpace());
+        char tz[64] = {0};
+        // Load TZ from NVS
+        nvs_handle_t my_handle;
+        esp_err_t err = nvs_open("storage", NVS_READONLY, &my_handle);
+        if (err == ESP_OK) {
+            size_t required_size = sizeof(tz);
+            nvs_get_str(my_handle, "timezone", tz, &required_size);
+            nvs_close(my_handle);
+        }
+
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\", \"freeSpace\":%u, \"timezone\":\"%s\"}", 
+            gui.getFontSize(), gui.getFont().c_str(), (unsigned int)getFreeSpace(), tz);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, strlen(buf));
         return ESP_OK;
@@ -734,10 +757,21 @@ static esp_err_t set_time_handler(httpd_req_t *req)
             char tz[64] = {0};
             url_decode(tz, tz_encoded);
             
-            ESP_LOGI(TAG, "Setting timezone to: %s", tz);
+            const char* posix_tz = resolve_timezone(tz);
+            
+            ESP_LOGI(TAG, "Setting timezone to: %s (resolved from %s)", posix_tz, tz);
+            
+            // Save to NVS
+            nvs_handle_t my_handle;
+            esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            if (err == ESP_OK) {
+                nvs_set_str(my_handle, "timezone", posix_tz);
+                nvs_commit(my_handle);
+                nvs_close(my_handle);
+            }
             
             // Set TZ environment variable
-            setenv("TZ", tz, 1);
+            setenv("TZ", posix_tz, 1);
             tzset();
             
             // Sync with NTP

@@ -30,8 +30,15 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 }
 
 void WifiManager::init() {
+    if (s_initialized) return;
+
     ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    // Check if event loop is already created (might be by other components)
+    esp_err_t err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
+    
     esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
@@ -48,9 +55,12 @@ void WifiManager::init() {
                                                         &event_handler,
                                                         NULL,
                                                         NULL));
+    s_initialized = true;
 }
 
 bool WifiManager::connect() {
+    if (!s_initialized) init();
+
     // Load creds from NVS
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
@@ -86,7 +96,15 @@ bool WifiManager::connect() {
     return s_connected;
 }
 
+void WifiManager::disconnect() {
+    if (!s_initialized) return;
+    esp_wifi_stop();
+    s_connected = false;
+}
+
 void WifiManager::startAP() {
+    if (!s_initialized) init();
+
     wifi_config_t wifi_config = {};
     strcpy((char*)wifi_config.ap.ssid, "M5Paper_Reader");
     wifi_config.ap.ssid_len = strlen("M5Paper_Reader");

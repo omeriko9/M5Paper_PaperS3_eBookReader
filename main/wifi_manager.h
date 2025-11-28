@@ -6,8 +6,10 @@ class WifiManager {
 public:
     void init();
     bool connect(); // Try to connect with stored creds
+    void disconnect(); // Stop WiFi
     void startAP(); // Start Access Point for config
     bool isConnected();
+    bool isInitialized() const { return s_initialized; }
     std::string getIpAddress();
     int getRssi();
     
@@ -16,4 +18,7 @@ public:
     
     void startDNS();
     void stopDNS();
+
+private:
+    bool s_initialized = false;
 };

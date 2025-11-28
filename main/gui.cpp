@@ -1112,95 +1112,97 @@ void GUI::drawSettings()
 
     SettingsLayout layout = computeSettingsLayout();
 
-    // Clear background for settings panel
-    M5.Display.fillRect(0, layout.panelTop, layout.panelWidth, layout.panelHeight, TFT_WHITE);
-    M5.Display.drawRect(0, layout.panelTop, layout.panelWidth, layout.panelHeight, TFT_BLACK);
-    M5.Display.drawLine(0, layout.panelTop, layout.panelWidth, layout.panelTop, TFT_BLACK); // Top border
+    // Initialize settings canvas if needed
+    if (!settingsCanvasCreated) {
+        settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight);
+        settingsCanvasCreated = true;
+    }
 
-    auto drawButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor)
+    // Clear background for settings panel
+    settingsCanvas.fillRect(0, 0, layout.panelWidth, layout.panelHeight, TFT_WHITE);
+    settingsCanvas.drawRect(0, 0, layout.panelWidth, layout.panelHeight, TFT_BLACK);
+    settingsCanvas.drawLine(0, 0, layout.panelWidth, 0, TFT_BLACK); // Top border
+
+    auto drawButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor, uint16_t textColor)
     {
-        M5.Display.fillRect(x, y, w, h, fillColor);
-        M5.Display.drawRect(x, y, w, h, TFT_BLACK);
-        M5.Display.setTextDatum(textdatum_t::middle_center);
-        M5.Display.setTextColor(TFT_BLACK, fillColor);
-        M5.Display.drawString(label, x + w / 2, y + h / 2);
-        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-        M5.Display.setTextDatum(textdatum_t::middle_left);
+        // Adjust Y coordinates to be relative to the canvas (0,0 is panelTop)
+        int relY = y - layout.panelTop;
+        settingsCanvas.fillRect(x, relY, w, h, fillColor);
+        settingsCanvas.drawRect(x, relY, w, h, TFT_BLACK);
+        settingsCanvas.setTextDatum(textdatum_t::middle_center);
+        settingsCanvas.setTextColor(textColor, fillColor);
+        settingsCanvas.drawString(label, x + w / 2, relY + h / 2);
+        settingsCanvas.setTextColor(TFT_BLACK, TFT_WHITE);
+        settingsCanvas.setTextDatum(textdatum_t::middle_left);
     };
 
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    settingsCanvas.setTextColor(TFT_BLACK, TFT_WHITE);
 
     // Title
-    M5.Display.setTextSize(1.6f);
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    M5.Display.drawString("Settings", layout.padding, layout.titleY);
+    settingsCanvas.setTextSize(1.6f);
+    settingsCanvas.setTextDatum(textdatum_t::top_left);
+    settingsCanvas.drawString("Settings", layout.padding, layout.titleY - layout.panelTop);
 
     // Body styling
     const float bodyTextSize = 1.2f;
-    M5.Display.setTextSize(bodyTextSize);
-    M5.Display.setTextDatum(textdatum_t::middle_left);
+    settingsCanvas.setTextSize(bodyTextSize);
+    settingsCanvas.setTextDatum(textdatum_t::middle_left);
 
     // --- Font Size ---
     int row1CenterY = layout.row1Y + layout.rowHeight / 2;
-    M5.Display.drawString("Font Size", layout.padding, row1CenterY);
+    settingsCanvas.drawString("Font Size", layout.padding, row1CenterY - layout.panelTop);
     char sizeBuf[16];
     snprintf(sizeBuf, sizeof(sizeBuf), "%.1f", fontSize);
     int fontValueRight = layout.fontMinusX - 10;
-    M5.Display.setTextDatum(textdatum_t::middle_right);
-    M5.Display.drawString(sizeBuf, fontValueRight, row1CenterY);
-    M5.Display.setTextDatum(textdatum_t::middle_left);
+    settingsCanvas.setTextDatum(textdatum_t::middle_right);
+    settingsCanvas.drawString(sizeBuf, fontValueRight, row1CenterY - layout.panelTop);
+    settingsCanvas.setTextDatum(textdatum_t::middle_left);
     int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
-    drawButton(layout.fontMinusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "-", TFT_LIGHTGREY);
-    drawButton(layout.fontPlusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "+", TFT_LIGHTGREY);
+    drawButton(layout.fontMinusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "-", TFT_WHITE, TFT_BLACK);
+    drawButton(layout.fontPlusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "+", TFT_WHITE, TFT_BLACK);
 
     // --- Font Family ---
     int row2CenterY = layout.row2Y + layout.rowHeight / 2;
-    M5.Display.drawString("Font", layout.padding, row2CenterY);
+    settingsCanvas.drawString("Font", layout.padding, row2CenterY - layout.panelTop);
     int fontLabelRight = layout.changeButtonX - 12;
-    M5.Display.setTextDatum(textdatum_t::middle_right);
-    M5.Display.drawString(currentFont.c_str(), fontLabelRight, row2CenterY);
-    M5.Display.setTextDatum(textdatum_t::middle_left);
+    settingsCanvas.setTextDatum(textdatum_t::middle_right);
+    settingsCanvas.drawString(currentFont.c_str(), fontLabelRight, row2CenterY - layout.panelTop);
+    settingsCanvas.setTextDatum(textdatum_t::middle_left);
     int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
-    drawButton(layout.changeButtonX, changeButtonY, layout.changeButtonW, layout.fontButtonH, "Change", TFT_LIGHTGREY);
+    drawButton(layout.changeButtonX, changeButtonY, layout.changeButtonW, layout.fontButtonH, "Change", TFT_WHITE, TFT_BLACK);
 
     // --- WiFi ---
     int row3CenterY = layout.row3Y + layout.rowHeight / 2;
-    M5.Display.drawString("WiFi", layout.padding, row3CenterY);
+    settingsCanvas.drawString("WiFi", layout.padding, row3CenterY - layout.panelTop);
 
     // Toggle Button
-    bool isWifiOn = false;
-    wifi_mode_t mode;
-    if (esp_wifi_get_mode(&mode) == ESP_OK)
-    {
-        isWifiOn = (mode != WIFI_MODE_NULL);
-    }
-
     int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
-    uint16_t wifiFill = isWifiOn ? TFT_GREEN : TFT_LIGHTGREY;
+    uint16_t wifiFill = wifiEnabled ? TFT_BLACK : TFT_WHITE;
+    uint16_t wifiText = wifiEnabled ? TFT_WHITE : TFT_BLACK;
     drawButton(layout.toggleButtonX, toggleButtonY, layout.toggleButtonW, layout.fontButtonH,
-               isWifiOn ? "WiFi: ON" : "WiFi: OFF", wifiFill);
+               wifiEnabled ? "WiFi: ON" : "WiFi: OFF", wifiFill, wifiText);
 
     // --- WiFi Status Row ---
     int row4CenterY = layout.row4Y + layout.rowHeight / 2;
-    M5.Display.drawString("WiFi Status", layout.padding, row4CenterY);
-    std::string status = isWifiOn ? "Connecting..." : "WiFi is OFF";
-    if (isWifiOn && wifiManager.isConnected())
+    settingsCanvas.drawString("WiFi Status", layout.padding, row4CenterY - layout.panelTop);
+    std::string status = wifiEnabled ? "Connecting..." : "WiFi is OFF";
+    if (wifiEnabled && wifiManager.isConnected())
     {
         std::string ip = wifiManager.getIpAddress();
         status = "URL: http://" + ip + "/";
     }
-    M5.Display.setTextSize(1.0f);
-    M5.Display.setTextDatum(textdatum_t::middle_left);
-    M5.Display.drawString(status.c_str(), layout.padding + 140, row4CenterY);
-    M5.Display.setTextSize(bodyTextSize);
+    settingsCanvas.setTextSize(1.0f);
+    settingsCanvas.setTextDatum(textdatum_t::middle_left);
+    // Increased offset to avoid overlap
+    settingsCanvas.drawString(status.c_str(), layout.padding + 180, row4CenterY - layout.panelTop);
+    settingsCanvas.setTextSize(bodyTextSize);
 
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
-    drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_LIGHTGREY);
+    drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_WHITE, TFT_BLACK);
 
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    M5.Display.setTextSize(1.0f);
-    M5.Display.display();
+    // Push the canvas to the display
+    settingsCanvas.pushSprite(0, layout.panelTop);
 }
 
 void GUI::drawWifiConfig()
@@ -1286,6 +1288,21 @@ void GUI::handleTouch()
                 bool isRTL = isRTLDocument;
                 bool next = false;
 
+                // Double click detection
+                uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+                bool isDoubleClick = false;
+                if (now - lastClickTime < 500) // 500ms threshold
+                {
+                    // Check if click is roughly in same area (e.g. same side)
+                    bool sameSide = (t.x < M5.Display.width() / 2) == (lastClickX < M5.Display.width() / 2);
+                    if (sameSide) {
+                        isDoubleClick = true;
+                    }
+                }
+                lastClickTime = now;
+                lastClickX = t.x;
+                lastClickY = t.y;
+
                 if (t.x < M5.Display.width() / 2)
                 {
                     // Left side
@@ -1295,6 +1312,30 @@ void GUI::handleTouch()
                 {
                     // Right side
                     next = !isRTL; // If RTL, right is prev. If LTR, right is next.
+                }
+
+                if (isDoubleClick) {
+                    ESP_LOGI(TAG, "Double click detected! Next=%d", next);
+                    if (next) {
+                        // Next Chapter
+                        if (epubLoader.nextChapter()) {
+                            currentTextOffset = 0;
+                            pageHistory.clear();
+                            resetPageInfoCache();
+                            needsRedraw = true;
+                        }
+                    } else {
+                        // Prev Chapter
+                        if (epubLoader.prevChapter()) {
+                            currentTextOffset = 0;
+                            pageHistory.clear();
+                            resetPageInfoCache();
+                            needsRedraw = true;
+                        }
+                    }
+                    // Reset click time to avoid triple click triggering another single click
+                    lastClickTime = 0; 
+                    return;
                 }
 
                 if (!next)
@@ -1386,21 +1427,21 @@ void GUI::handleTouch()
                 // WiFi Toggle
                 else if (t.y >= toggleButtonY && t.y <= toggleButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
                 {
-                    wifi_mode_t mode;
-                    if (esp_wifi_get_mode(&mode) == ESP_OK) {
-                        if (mode != WIFI_MODE_NULL) {
-                            // Turn OFF
-                            webServer.stop();
-                            esp_wifi_stop();
-                            wifiConnected = false;
-                        } else {
-                            // Turn ON
-                            esp_wifi_start();
-                            wifiManager.connect();
-                            webServer.init("/spiffs");
+                    wifiEnabled = !wifiEnabled;
+                    saveSettings();
+                    
+                    if (wifiEnabled) {
+                        if (!wifiManager.isInitialized()) {
+                            wifiManager.init();
                         }
-                        needsRedraw = true;
+                        wifiManager.connect();
+                        webServer.init("/spiffs");
+                    } else {
+                        webServer.stop();
+                        wifiManager.disconnect();
+                        wifiConnected = false;
                     }
+                    needsRedraw = true;
                 }
                 // Close
                 else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
@@ -1526,6 +1567,7 @@ void GUI::saveSettings()
         int32_t sizeInt = (int32_t)(fontSize * 10);
         nvs_set_i32(my_handle, "font_size", sizeInt);
         nvs_set_str(my_handle, "font_name", currentFont.c_str());
+        nvs_set_i32(my_handle, "wifi_enabled", wifiEnabled ? 1 : 0);
         nvs_commit(my_handle);
         nvs_close(my_handle);
     }
@@ -1572,6 +1614,13 @@ void GUI::loadSettings()
             currentFont = fontName;
             delete[] fontName;
         }
+
+        int32_t wifiEn = 1;
+        if (nvs_get_i32(my_handle, "wifi_enabled", &wifiEn) == ESP_OK)
+        {
+            wifiEnabled = (wifiEn != 0);
+        }
+
         nvs_close(my_handle);
     }
 }

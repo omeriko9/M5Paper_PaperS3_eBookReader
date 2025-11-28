@@ -1,4 +1,5 @@
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_spiffs.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -48,6 +49,32 @@ static inline void stopSntpClient()
 
 void syncRtcFromNtp()
 {
+    // Load TZ from NVS
+    char tz[64] = {0};
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("storage", NVS_READONLY, &my_handle);
+    if (err == ESP_OK) {
+        size_t required_size = sizeof(tz);
+        if (nvs_get_str(my_handle, "timezone", tz, &required_size) == ESP_OK) {
+            ESP_LOGI(TAG, "Loaded timezone from NVS: %s", tz);
+            setenv("TZ", tz, 1);
+            tzset();
+        } else {
+            // Default to Jerusalem if not set
+            const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+            ESP_LOGI(TAG, "Timezone not set in NVS, using default: %s", defaultTz);
+            setenv("TZ", defaultTz, 1);
+            tzset();
+        }
+        nvs_close(my_handle);
+    } else {
+         // Default to Jerusalem if NVS fails
+        const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+        ESP_LOGI(TAG, "NVS open failed, using default timezone: %s", defaultTz);
+        setenv("TZ", defaultTz, 1);
+        tzset();
+    }
+
     // Configure SNTP
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
@@ -78,6 +105,11 @@ void syncRtcFromNtp()
 
     time(&now);
     localtime_r(&now, &timeinfo);
+
+    ESP_LOGI(TAG, "NTP Sync Debug: UTC Time: %ld", now);
+    ESP_LOGI(TAG, "NTP Sync Debug: Local Time: %04d-%02d-%02d %02d:%02d:%02d",
+             timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 
     if (timeinfo.tm_year > (2020 - 1900))
     {
@@ -299,20 +331,24 @@ extern "C" void app_main(void)
     
     // Skip WiFi on wake from sleep - saves ~3 seconds
     if (!is_wake_from_sleep) {
+        // Always init wifi manager so we can enable it later if needed
         wifiManager.init();
 
-        // Try to connect, if fails, start AP
-        bool wifiOk = wifiManager.connect();
-        if (!wifiOk)
-        {
-            wifiManager.startAP();
+        if (gui.isWifiEnabled()) {
+            // Try to connect, if fails, start AP
+            bool wifiOk = wifiManager.connect();
+            if (!wifiOk)
+            {
+                wifiManager.startAP();
+            }
+            else
+            {
+                syncRtcFromNtp();
+            }
+            webServer.init("/spiffs");
+        } else {
+            ESP_LOGI(TAG, "WiFi disabled by settings");
         }
-        else
-        {
-            syncRtcFromNtp();
-        }
-
-        webServer.init("/spiffs");
     } else {
         ESP_LOGI(TAG, "Skipping WiFi init on wake - user can enable in settings");
     }

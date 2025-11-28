@@ -33,6 +33,7 @@ public:
     int getCurrentChapterIndex() const;
     
     void setWebServerEnabled(bool enabled);
+    bool isWifiEnabled() const { return wifiEnabled; }
 
 private:
     AppState currentState = AppState::LIBRARY;
@@ -64,10 +65,20 @@ private:
     bool fontChanged = false;
     std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
     std::vector<uint8_t> fontDataHebrew; // Cache for Hebrew font
+    bool wifiEnabled = true;
     
     size_t lastPageChars = 0;
     int lastPageTotal = 1;
-    
+
+    // Double click detection
+    uint32_t lastClickTime = 0;
+    int lastClickX = 0;
+    int lastClickY = 0;
+
+    // Settings UI buffering
+    M5Canvas settingsCanvas;
+    bool settingsCanvasCreated = false;
+
     void drawStatusBar();
     void drawSleepSymbol(const char* symbol);
     void drawLibrary();
