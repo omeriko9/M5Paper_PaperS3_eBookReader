@@ -105,4 +105,5 @@ private:
     uint32_t lastActivityTime = 0;
     bool webServerEnabled = true;
     bool settingsNeedsUnderlayRefresh = false;
+    bool justWokeUp = false;
 };

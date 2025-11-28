@@ -318,6 +318,8 @@ static void enterDeepSleepWithTouchWake()
 
 void GUI::init(bool isWakeFromSleep)
 {
+    justWokeUp = isWakeFromSleep;
+
     // Initialize NVS
     // Already done in main, but safe to call again or skip
     if (!isWakeFromSleep) {
@@ -1067,6 +1069,7 @@ void GUI::goToSleep()
     
     // Check for touch immediately after wake to process the wake-up interaction
     M5.update();
+    justWokeUp = true;
     handleTouch();
 
     // Force redraw to clear the "z" symbol and show content immediately
@@ -1220,8 +1223,12 @@ void GUI::handleTouch()
     {
         lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
         auto t = M5.Touch.getDetail(0);
-        if (t.wasPressed())
+        if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
+            if (justWokeUp) {
+                ESP_LOGI(TAG, "Processing wake-up touch at %d, %d", t.x, t.y);
+            }
+            
             if (currentState == AppState::LIBRARY)
             {
                 auto books = bookIndex.getBooks();
@@ -1452,6 +1459,7 @@ void GUI::handleTouch()
             }
         }
     }
+    justWokeUp = false;
 }
 
 void GUI::jumpTo(float percent)
