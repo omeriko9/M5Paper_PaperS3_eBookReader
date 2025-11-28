@@ -67,25 +67,25 @@ static SettingsLayout computeSettingsLayout()
     l.panelWidth = M5.Display.width();
     l.panelHeight = M5.Display.height() / 2;
     l.panelTop = M5.Display.height() - l.panelHeight;
-    l.padding = 24;
-    l.rowHeight = 54;
-    l.titleY = l.panelTop + 18;
-    l.row1Y = l.panelTop + 52;
+    l.padding = 30;
+    l.rowHeight = 60;
+    l.titleY = l.panelTop + 20;
+    l.row1Y = l.panelTop + 60;
     l.row2Y = l.row1Y + l.rowHeight;
     l.row3Y = l.row2Y + l.rowHeight;
     l.row4Y = l.row3Y + l.rowHeight;
-    l.closeY = l.panelTop + l.panelHeight - 64;
-    l.buttonGap = 14;
-    l.fontButtonW = 68;
-    l.fontButtonH = 38;
+    l.closeY = l.panelTop + l.panelHeight - 70;
+    l.buttonGap = 20;
+    l.fontButtonW = 80;
+    l.fontButtonH = 45;
     l.fontPlusX = l.panelWidth - l.padding - l.fontButtonW;
     l.fontMinusX = l.fontPlusX - l.buttonGap - l.fontButtonW;
-    l.changeButtonW = 168;
+    l.changeButtonW = 180;
     l.changeButtonX = l.panelWidth - l.padding - l.changeButtonW;
-    l.toggleButtonW = 160;
+    l.toggleButtonW = 180;
     l.toggleButtonX = l.panelWidth - l.padding - l.toggleButtonW;
-    l.closeButtonW = 124;
-    l.closeButtonH = 40;
+    l.closeButtonW = 200;
+    l.closeButtonH = 50;
     return l;
 }
 
@@ -935,7 +935,7 @@ void GUI::updateNextPrevCanvases()
     }
 }
 
-void GUI::drawReader()
+void GUI::drawReader(bool flush)
 {
     ESP_LOGI(TAG, "drawReader called, currentTextOffset: %zu", currentTextOffset);
 
@@ -998,8 +998,10 @@ void GUI::drawReader()
     M5.Display.drawString(pageBuf, M5.Display.width() - 16, footerY);
     M5.Display.setTextDatum(textdatum_t::top_left);
 
-    ESP_LOGI(TAG, "Calling M5.Display.display()");
-    M5.Display.display();
+    if (flush) {
+        ESP_LOGI(TAG, "Calling M5.Display.display()");
+        M5.Display.display();
+    }
     ESP_LOGI(TAG, "drawReader completed");
 
     // Update buffers for next interaction
@@ -1101,8 +1103,12 @@ void GUI::resetPageInfoCache()
 
 void GUI::drawSettings()
 {
-    // Draw the reader content first so we can see the book behind the settings
-    drawReader();
+    // Only redraw the reader content if specifically requested (e.g. font change)
+    // Otherwise, we draw the settings panel on top of the existing screen content.
+    if (settingsNeedsUnderlayRefresh) {
+        drawReader(false); // Draw but don't flush yet
+        settingsNeedsUnderlayRefresh = false;
+    }
 
     SettingsLayout layout = computeSettingsLayout();
 
@@ -1342,6 +1348,15 @@ void GUI::handleTouch()
             else if (currentState == AppState::SETTINGS)
             {
                 SettingsLayout layout = computeSettingsLayout();
+                
+                // Close if clicked outside the panel (upper half)
+                if (t.y < layout.panelTop)
+                {
+                    currentState = previousState;
+                    needsRedraw = true;
+                    return;
+                }
+
                 int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
                 int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
                 int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
@@ -1352,11 +1367,13 @@ void GUI::handleTouch()
                 if (t.y >= fontButtonY && t.y <= fontButtonY + layout.fontButtonH && t.x >= layout.fontMinusX && t.x <= layout.fontMinusX + layout.fontButtonW)
                 {
                     setFontSize(fontSize - 0.1f);
+                    settingsNeedsUnderlayRefresh = true;
                 }
                 // Font Size [+]
                 else if (t.y >= fontButtonY && t.y <= fontButtonY + layout.fontButtonH && t.x >= layout.fontPlusX && t.x <= layout.fontPlusX + layout.fontButtonW)
                 {
                     setFontSize(fontSize + 0.1f);
+                    settingsNeedsUnderlayRefresh = true;
                 }
                 // Font Change
                 else if (t.y >= changeButtonY && t.y <= changeButtonY + layout.fontButtonH && t.x >= layout.changeButtonX && t.x <= layout.changeButtonX + layout.changeButtonW)
@@ -1364,6 +1381,7 @@ void GUI::handleTouch()
                     if (currentFont == "Default") setFont("Hebrew");
                     else if (currentFont == "Hebrew") setFont("Roboto");
                     else setFont("Default");
+                    settingsNeedsUnderlayRefresh = true;
                 }
                 // WiFi Toggle
                 else if (t.y >= toggleButtonY && t.y <= toggleButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)

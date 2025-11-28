@@ -71,7 +71,7 @@ private:
     void drawStatusBar();
     void drawSleepSymbol(const char* symbol);
     void drawLibrary();
-    void drawReader();
+    void drawReader(bool flush = true);
     void drawWifiConfig();
     void drawSettings();
     
@@ -93,4 +93,5 @@ private:
 
     uint32_t lastActivityTime = 0;
     bool webServerEnabled = true;
+    bool settingsNeedsUnderlayRefresh = false;
 };
