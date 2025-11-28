@@ -74,6 +74,7 @@ private:
     uint32_t lastClickTime = 0;
     int lastClickX = 0;
     int lastClickY = 0;
+    bool clickPending = false;
 
     // Settings UI buffering
     M5Canvas settingsCanvas;
@@ -87,6 +88,7 @@ private:
     void drawSettings();
     
     void handleTouch();
+    void processReaderTap(int x, int y, bool isDouble);
     
     void loadFonts();
     void ensureHebrewFontLoaded();

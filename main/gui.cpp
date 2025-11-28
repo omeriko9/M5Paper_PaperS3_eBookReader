@@ -1225,11 +1225,104 @@ void GUI::drawWifiConfig()
     M5.Display.display();
 }
 
+void GUI::processReaderTap(int x, int y, bool isDouble)
+{
+    bool isRTL = isRTLDocument;
+    bool next = false;
+
+    if (x < M5.Display.width() / 2)
+    {
+        // Left side
+        next = isRTL; // If RTL, left is next. If LTR, left is prev.
+    }
+    else
+    {
+        // Right side
+        next = !isRTL; // If RTL, right is prev. If LTR, right is next.
+    }
+
+    if (isDouble) {
+        ESP_LOGI(TAG, "Double click detected! Next=%d", next);
+        if (next) {
+            // Next Chapter
+            if (epubLoader.nextChapter()) {
+                currentTextOffset = 0;
+                pageHistory.clear();
+                resetPageInfoCache();
+                needsRedraw = true;
+            }
+        } else {
+            // Prev Chapter
+            if (epubLoader.prevChapter()) {
+                currentTextOffset = 0;
+                pageHistory.clear();
+                resetPageInfoCache();
+                needsRedraw = true;
+            }
+        }
+    } else {
+        // Single Click - Page Turn
+        if (!next)
+        {
+            // Prev Page
+            if (pageHistory.empty())
+            {
+                // Try prev chapter
+                if (epubLoader.prevChapter())
+                {
+                    currentTextOffset = 0; // Start of chapter
+                    pageHistory.clear();
+                    resetPageInfoCache();
+                    needsRedraw = true;
+                }
+            }
+            else
+            {
+                currentTextOffset = pageHistory.back();
+                pageHistory.pop_back();
+                needsRedraw = true;
+            }
+        }
+        else
+        {
+            // Next Page
+            size_t charsOnPage = drawPageContent(false);
+            if (currentTextOffset + charsOnPage >= epubLoader.getChapterSize())
+            {
+                // Next chapter
+                if (epubLoader.nextChapter())
+                {
+                    currentTextOffset = 0;
+                    pageHistory.clear();
+                    resetPageInfoCache();
+                    needsRedraw = true;
+                }
+            }
+            else
+            {
+                pageHistory.push_back(currentTextOffset);
+                currentTextOffset += charsOnPage;
+                needsRedraw = true;
+            }
+        }
+    }
+}
+
 void GUI::handleTouch()
 {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+    // Check pending click timeout
+    if (clickPending && (now - lastClickTime > 400)) // 400ms wait
+    {
+        clickPending = false;
+        // Execute Single Click (Page Turn)
+        processReaderTap(lastClickX, lastClickY, false); // false = single
+    }
+
     if (M5.Touch.getCount() > 0)
     {
-        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+        lastActivityTime = now;
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
@@ -1254,12 +1347,14 @@ void GUI::handleTouch()
                     {
                         libraryPage--;
                         needsRedraw = true;
+                        justWokeUp = false;
                         return;
                     }
                     if (t.x > M5.Display.width() - 150 && libraryPage < totalPages - 1)
                     {
                         libraryPage++;
                         needsRedraw = true;
+                        justWokeUp = false;
                         return;
                     }
                 }
@@ -1284,121 +1379,49 @@ void GUI::handleTouch()
                 // Top tap to exit
                 if (t.y < 50)
                 {
+                    clickPending = false; // Cancel any pending
                     currentState = AppState::LIBRARY;
                     epubLoader.close();
                     needsRedraw = true;
+                    justWokeUp = false;
                     return;
                 }
 
                 // Bottom 1/5 -> Settings
                 if (t.y > M5.Display.height() * 4 / 5)
                 {
+                    clickPending = false; // Cancel any pending
                     previousState = currentState;
                     currentState = AppState::SETTINGS;
                     needsRedraw = true;
+                    justWokeUp = false;
                     return;
                 }
 
-                // Left/Right tap for page turn
-                bool isRTL = isRTLDocument;
-                bool next = false;
-
-                // Double click detection
-                uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-                bool isDoubleClick = false;
-                if (now - lastClickTime < 500) // 500ms threshold
-                {
-                    // Check if click is roughly in same area (e.g. same side)
+                // Middle area - Page Turn / Chapter Skip
+                if (clickPending) {
+                    // Check if second click
                     bool sameSide = (t.x < M5.Display.width() / 2) == (lastClickX < M5.Display.width() / 2);
                     if (sameSide) {
-                        isDoubleClick = true;
-                    }
-                }
-                lastClickTime = now;
-                lastClickX = t.x;
-                lastClickY = t.y;
-
-                if (t.x < M5.Display.width() / 2)
-                {
-                    // Left side
-                    next = isRTL; // If RTL, left is next. If LTR, left is prev.
-                }
-                else
-                {
-                    // Right side
-                    next = !isRTL; // If RTL, right is prev. If LTR, right is next.
-                }
-
-                if (isDoubleClick) {
-                    ESP_LOGI(TAG, "Double click detected! Next=%d", next);
-                    if (next) {
-                        // Next Chapter
-                        if (epubLoader.nextChapter()) {
-                            currentTextOffset = 0;
-                            pageHistory.clear();
-                            resetPageInfoCache();
-                            needsRedraw = true;
-                        }
+                        // Double Click!
+                        clickPending = false;
+                        processReaderTap(t.x, t.y, true); // true = double
                     } else {
-                        // Prev Chapter
-                        if (epubLoader.prevChapter()) {
-                            currentTextOffset = 0;
-                            pageHistory.clear();
-                            resetPageInfoCache();
-                            needsRedraw = true;
-                        }
+                        // Different side - treat previous as single, and this as new pending
+                        clickPending = false;
+                        processReaderTap(lastClickX, lastClickY, false);
+                        
+                        lastClickTime = now;
+                        lastClickX = t.x;
+                        lastClickY = t.y;
+                        clickPending = true;
                     }
-                    // Reset click time to avoid triple click triggering another single click
-                    lastClickTime = 0; 
-                    return;
-                }
-
-                if (!next)
-                {
-                    // Prev Page
-                    if (pageHistory.empty())
-                    {
-                        // Try prev chapter
-                        if (epubLoader.prevChapter())
-                        {
-                            currentTextOffset = epubLoader.getChapterSize(); // Go to end? No, usually start.
-                            // Actually, usually when going back to prev chapter, we want to go to the END of that chapter.
-                            // But for now let's go to start or we need to calculate pages.
-                            // Let's go to start for simplicity or 0.
-                            currentTextOffset = 0;
-                            pageHistory.clear();
-                            resetPageInfoCache();
-                            needsRedraw = true;
-                        }
-                    }
-                    else
-                    {
-                        currentTextOffset = pageHistory.back();
-                        pageHistory.pop_back();
-                        needsRedraw = true;
-                    }
-                }
-                else
-                {
-                    // Next Page
-                    size_t charsOnPage = drawPageContent(false);
-                    if (currentTextOffset + charsOnPage >= epubLoader.getChapterSize())
-                    {
-                        // Next chapter
-                        if (epubLoader.nextChapter())
-                        {
-                            currentTextOffset = 0;
-                            pageHistory.clear();
-                            resetPageInfoCache();
-                            needsRedraw = true;
-                        }
-                    }
-                    else
-                    {
-                        pageHistory.push_back(currentTextOffset);
-                        currentTextOffset += charsOnPage;
-                        needsRedraw = true;
-                    }
+                } else {
+                    // First click
+                    lastClickTime = now;
+                    lastClickX = t.x;
+                    lastClickY = t.y;
+                    clickPending = true;
                 }
             }
             else if (currentState == AppState::SETTINGS)
