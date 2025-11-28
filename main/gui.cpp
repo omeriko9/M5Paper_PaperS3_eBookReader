@@ -1270,8 +1270,39 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
                 // Try prev chapter
                 if (epubLoader.prevChapter())
                 {
-                    currentTextOffset = 0; // Start of chapter
-                    pageHistory.clear();
+                    // We want to go to the LAST page of the previous chapter.
+                    // To do this, we must simulate paging through the entire chapter
+                    // to build the pageHistory and find the last offset.
+                    size_t chapterSize = epubLoader.getChapterSize();
+                    if (chapterSize == 0) {
+                        currentTextOffset = 0;
+                        pageHistory.clear();
+                    } else {
+                        size_t scanOffset = 0;
+                        std::vector<size_t> newHistory;
+                        
+                        // Scan chapter to find page breaks
+                        while (scanOffset < chapterSize) {
+                            size_t chars = drawPageContentAt(scanOffset, false);
+                            if (chars == 0) {
+                                // Should not happen unless error, fallback to start
+                                currentTextOffset = 0;
+                                newHistory.clear();
+                                break;
+                            }
+                            
+                            if (scanOffset + chars >= chapterSize) {
+                                // This is the last page
+                                currentTextOffset = scanOffset;
+                                break;
+                            }
+                            
+                            newHistory.push_back(scanOffset);
+                            scanOffset += chars;
+                        }
+                        pageHistory = newHistory;
+                    }
+                    
                     resetPageInfoCache();
                     needsRedraw = true;
                 }
