@@ -44,7 +44,7 @@ bool EpubLoader::isChapterSkippable(int index) {
     return false;
 }
 
-bool EpubLoader::load(const char* path) {
+bool EpubLoader::load(const char* path, int restoreChapterIndex) {
     close();
     currentPath = path;
     ESP_LOGI(TAG, "Loading %s", path);
@@ -69,15 +69,22 @@ bool EpubLoader::load(const char* path) {
     
     currentChapterIndex = 0;
     
-    // Heuristic: Skip intro chapters
-    if (spine.size() > 1) {
-        int maxSkip = std::min((int)spine.size() - 1, 5); 
-        for (int i = 0; i < maxSkip; ++i) {
-            if (isChapterSkippable(i)) {
-                ESP_LOGI(TAG, "Skipping chapter %d (heuristic)", i);
-                currentChapterIndex++;
-            } else {
-                break;
+    if (restoreChapterIndex != -1) {
+        ESP_LOGI(TAG, "Restoring directly to chapter %d", restoreChapterIndex);
+        currentChapterIndex = restoreChapterIndex;
+        // Validate index
+        if (currentChapterIndex >= spine.size()) currentChapterIndex = 0;
+    } else {
+        // Heuristic: Skip intro chapters
+        if (spine.size() > 1) {
+            int maxSkip = std::min((int)spine.size() - 1, 5); 
+            for (int i = 0; i < maxSkip; ++i) {
+                if (isChapterSkippable(i)) {
+                    ESP_LOGI(TAG, "Skipping chapter %d (heuristic)", i);
+                    currentChapterIndex++;
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -87,12 +94,15 @@ bool EpubLoader::load(const char* path) {
 
     // If the loaded chapter is very small (likely empty or just an image wrapper), try next
     // Limit this to a few chapters to avoid infinite loop
-    int retries = 0;
-    while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
-        ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
-        currentChapterIndex++;
-        loadChapter(currentChapterIndex);
-        retries++;
+    // Only do this if NOT restoring, or if the restored chapter is weirdly empty (though if we saved it, it was probably fine)
+    if (restoreChapterIndex == -1) {
+        int retries = 0;
+        while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
+            ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
+            currentChapterIndex++;
+            loadChapter(currentChapterIndex);
+            retries++;
+        }
     }
     
     return true;
@@ -239,7 +249,7 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
 
 struct LoadChapterContext {
     FILE* f;
-    char writeBuf[512];
+    char writeBuf[4096]; // Increased from 512 to reduce fwrite calls
     size_t writeBufPos;
     bool inTag;
     bool lastSpace;
@@ -353,20 +363,22 @@ void EpubLoader::loadChapter(int index) {
         return;
     }
 
-    LoadChapterContext ctx;
-    ctx.f = f;
-    ctx.writeBufPos = 0;
-    ctx.inTag = false;
-    ctx.lastSpace = true; // Start assuming we are at start of line (no leading spaces)
+    LoadChapterContext* ctx = new LoadChapterContext();
+    ctx->f = f;
+    ctx->writeBufPos = 0;
+    ctx->inTag = false;
+    ctx->lastSpace = true; // Start assuming we are at start of line (no leading spaces)
 
     // Stream process the HTML file directly from ZIP to text
     // This avoids loading the full HTML into memory
-    zip.extractFile(spine[index], loadChapterCallback, &ctx);
+    zip.extractFile(spine[index], loadChapterCallback, ctx);
     
     // Flush remaining
-    if (ctx.writeBufPos > 0) {
-        fwrite(ctx.writeBuf, 1, ctx.writeBufPos, f);
+    if (ctx->writeBufPos > 0) {
+        fwrite(ctx->writeBuf, 1, ctx->writeBufPos, f);
     }
+
+    delete ctx;
 
     currentChapterSize = ftell(f);
     fclose(f);

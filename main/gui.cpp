@@ -334,28 +334,14 @@ void GUI::init()
 
     M5.Display.setTextColor(TFT_BLACK);
 
-    // Initialize Canvases for buffering
-    // M5Paper has PSRAM, so we should use it for full-screen buffers
-    canvasCurrent.setPsram(true);
-    canvasCurrent.setColorDepth(16); // Explicitly set 16-bit color depth
-    if (canvasCurrent.createSprite(M5.Display.width(), M5.Display.height()) == nullptr)
-    {
-        ESP_LOGE(TAG, "Failed to create canvasCurrent");
-    }
-
-    canvasNext.setPsram(true);
-    canvasNext.setColorDepth(16);
-    if (canvasNext.createSprite(M5.Display.width(), M5.Display.height()) == nullptr)
-    {
-        ESP_LOGE(TAG, "Failed to create canvasNext");
-    }
-
-    canvasPrev.setPsram(true);
-    canvasPrev.setColorDepth(16);
-    if (canvasPrev.createSprite(M5.Display.width(), M5.Display.height()) == nullptr)
-    {
-        ESP_LOGE(TAG, "Failed to create canvasPrev");
-    }
+    // Skip canvas sprite creation - they consistently fail due to memory constraints
+    // and aren't necessary for the restore path which renders directly to display.
+    // For page turns, we can use partial refresh or accept a brief redraw delay.
+    // This also eliminates the error messages on startup.
+    
+    // Mark canvases as invalid so rendering path knows to draw directly
+    nextCanvasValid = false;
+    prevCanvasValid = false;
 
     lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 
@@ -377,28 +363,26 @@ void GUI::init()
         if (lastId != -1 && lastState == (int)AppState::READER)
         {
             currentBook = bookIndex.getBook(lastId);
-            if (currentBook.id != 0 && epubLoader.load(currentBook.path.c_str()))
+            // Pass the saved chapter index to load() to skip heuristics and jump directly
+            if (currentBook.id != 0 && epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter))
             {
                 currentState = AppState::READER;
 
                 // Auto-detect language
                 std::string lang = epubLoader.getLanguage();
-                if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos)
+                bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
+                if (isHebrew)
                 {
                     setFont("Hebrew");
                 }
                 // Restore progress
                 currentTextOffset = currentBook.currentOffset;
                 resetPageInfoCache();
-                if (currentBook.currentChapter > 0)
-                {
-                    while (epubLoader.getCurrentChapterIndex() < currentBook.currentChapter)
-                    {
-                        if (!epubLoader.nextChapter())
-                            break;
-                    }
-                }
-                isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
+                
+                // No need to loop nextChapter() anymore because we loaded the correct chapter directly
+                
+                // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
+                isRTLDocument = isHebrew;
 
                 pageHistory.clear();
                 needsRedraw = true; // Force redraw to clear sleep symbol
@@ -978,15 +962,20 @@ void GUI::drawReader()
     // Draw Status Bar (Fresh)
     drawStatusBar();
 
-    size_t charsDrawn = drawPageContentAt(currentTextOffset, false);
-    ESP_LOGI(TAG, "Chars drawn: %zu", charsDrawn);
-    if (charsDrawn > 0)
-    {
-        lastPageChars = charsDrawn;
-        size_t chapterSize = epubLoader.getChapterSize();
-        lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
-        if (lastPageTotal < 1)
-            lastPageTotal = 1;
+    // Get chars drawn from the actual drawing (no redundant measurement)
+    size_t charsDrawn = lastPageChars; // Use cached value if drawing from buffer
+    if (!drawnFromBuffer) {
+        // If we drew fresh, we need to measure
+        charsDrawn = drawPageContentAt(currentTextOffset, false);
+        ESP_LOGI(TAG, "Chars drawn: %zu", charsDrawn);
+        if (charsDrawn > 0)
+        {
+            lastPageChars = charsDrawn;
+            size_t chapterSize = epubLoader.getChapterSize();
+            lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
+            if (lastPageTotal < 1)
+                lastPageTotal = 1;
+        }
     }
 
     PageInfo pageInfo = calculatePageInfo();

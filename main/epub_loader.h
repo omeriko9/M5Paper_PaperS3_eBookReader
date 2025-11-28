@@ -5,7 +5,7 @@
 
 class EpubLoader {
 public:
-    bool load(const char* path);
+    bool load(const char* path, int restoreChapterIndex = -1);
     std::string getTitle();
     
     // Navigation

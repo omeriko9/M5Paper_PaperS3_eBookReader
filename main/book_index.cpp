@@ -13,7 +13,7 @@ static const char *INDEX_FILE = "/spiffs/index.txt";
 void BookIndex::init() {
     load();
     scanDirectory("/spiffs");
-    scanDirectory("/sd");
+    //scanDirectory("/sd");
     save();
 }
 
