@@ -729,11 +729,12 @@ static esp_err_t set_time_handler(httpd_req_t *req)
 {
     char buf[100];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
-        char tz[64] = {0};
-        if (httpd_query_key_value(buf, "tz", tz, sizeof(tz)) == ESP_OK) {
-            // Basic URL decode (replace %2F with /, %20 with space, etc if needed)
-            // For now, we trust the browser sends a decent string. 
-            // Note: httpd_query_key_value does NOT decode URL encoding fully.
+        char tz_encoded[64] = {0};
+        if (httpd_query_key_value(buf, "tz", tz_encoded, sizeof(tz_encoded)) == ESP_OK) {
+            char tz[64] = {0};
+            url_decode(tz, tz_encoded);
+            
+            ESP_LOGI(TAG, "Setting timezone to: %s", tz);
             
             // Set TZ environment variable
             setenv("TZ", tz, 1);

@@ -515,8 +515,11 @@ void GUI::drawStatusBar()
     M5.Display.setFont(&lgfx::v1::fonts::Font2);
     M5.Display.setTextSize(1.6f); // Larger, easier to read
 
-    M5.Display.fillRect(0, 0, M5.Display.width(), STATUS_BAR_HEIGHT, TFT_LIGHTGREY);
-    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    // White background, black text, black separator line
+    M5.Display.fillRect(0, 0, M5.Display.width(), STATUS_BAR_HEIGHT, TFT_WHITE);
+    M5.Display.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, M5.Display.width(), TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    
     const int centerY = STATUS_BAR_HEIGHT / 2;
 
     // Time
