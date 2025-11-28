@@ -114,8 +114,8 @@ void EpubLoader::close() {
         isOpen = false;
     }
     spine.clear();
-    // Remove cache file
-    unlink("/spiffs/cache.txt");
+    currentChapterContent.clear();
+    currentChapterContent.shrink_to_fit();
 }
 
 std::string EpubLoader::getTitle() {
@@ -248,9 +248,7 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
 }
 
 struct LoadChapterContext {
-    FILE* f;
-    char writeBuf[4096]; // Increased from 512 to reduce fwrite calls
-    size_t writeBufPos;
+    std::string* content;
     bool inTag;
     bool lastSpace;
     std::string currentTag;
@@ -284,23 +282,12 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                 if (isBlock) {
                     // Insert newline if not already there
                     if (!context->lastSpace) { // Reuse lastSpace to track if we just outputted a separator
-                        context->writeBuf[context->writeBufPos++] = '\n';
-                        if (context->writeBufPos == sizeof(context->writeBuf)) {
-                            fwrite(context->writeBuf, 1, sizeof(context->writeBuf), context->f);
-                            context->writeBufPos = 0;
-                        }
+                        context->content->push_back('\n');
                         context->lastSpace = true; 
                     }
                 } else if (tag == "img" || tag.find("img ") == 0) {
                      // Output [Image]
-                     const char* imgText = "[Image]";
-                     for (int k=0; imgText[k]; k++) {
-                        context->writeBuf[context->writeBufPos++] = imgText[k];
-                        if (context->writeBufPos == sizeof(context->writeBuf)) {
-                            fwrite(context->writeBuf, 1, sizeof(context->writeBuf), context->f);
-                            context->writeBufPos = 0;
-                        }
-                     }
+                     context->content->append("[Image]");
                      context->lastSpace = false;
                 } else {
                     // For inline tags, maybe just a space if needed? 
@@ -316,11 +303,6 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
             // Handle basic entities
             if (c == '&') {
                 // TODO: Better entity handling
-                // For now, just pass it through or maybe skip if it's complex?
-                // Let's pass it through, maybe the font supports it or we render it raw
-                // Actually, &nbsp; should be space.
-                // Implementing a full entity decoder here is hard without lookahead.
-                // Let's just output it.
             }
             // Skip newlines in HTML source as they are usually whitespace
             if (c == '\n' || c == '\r') {
@@ -330,19 +312,11 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
             
             if (c == ' ') {
                 if (!context->lastSpace) {
-                    context->writeBuf[context->writeBufPos++] = c;
-                    if (context->writeBufPos == sizeof(context->writeBuf)) {
-                        fwrite(context->writeBuf, 1, sizeof(context->writeBuf), context->f);
-                        context->writeBufPos = 0;
-                    }
+                    context->content->push_back(c);
                     context->lastSpace = true;
                 }
             } else {
-                context->writeBuf[context->writeBufPos++] = c;
-                if (context->writeBufPos == sizeof(context->writeBuf)) {
-                    fwrite(context->writeBuf, 1, sizeof(context->writeBuf), context->f);
-                    context->writeBufPos = 0;
-                }
+                context->content->push_back(c);
                 context->lastSpace = false;
             }
         }
@@ -356,16 +330,12 @@ void EpubLoader::loadChapter(int index) {
     currentChapterIndex = index;
     currentTextOffset = 0;
     currentChapterSize = 0;
-
-    FILE* f = fopen("/spiffs/cache.txt", "wb");
-    if (!f) {
-        ESP_LOGE(TAG, "Failed to create cache file");
-        return;
-    }
+    currentChapterContent.clear();
+    // Reserve some memory to avoid reallocations
+    currentChapterContent.reserve(8192); 
 
     LoadChapterContext* ctx = new LoadChapterContext();
-    ctx->f = f;
-    ctx->writeBufPos = 0;
+    ctx->content = &currentChapterContent;
     ctx->inTag = false;
     ctx->lastSpace = true; // Start assuming we are at start of line (no leading spaces)
 
@@ -373,15 +343,9 @@ void EpubLoader::loadChapter(int index) {
     // This avoids loading the full HTML into memory
     zip.extractFile(spine[index], loadChapterCallback, ctx);
     
-    // Flush remaining
-    if (ctx->writeBufPos > 0) {
-        fwrite(ctx->writeBuf, 1, ctx->writeBufPos, f);
-    }
-
     delete ctx;
 
-    currentChapterSize = ftell(f);
-    fclose(f);
+    currentChapterSize = currentChapterContent.length();
     
     ESP_LOGI(TAG, "Loaded chapter %d, size: %u", index, (unsigned)currentChapterSize);
 }
@@ -396,21 +360,11 @@ std::string EpubLoader::getText(size_t offset, size_t length) {
     if (currentChapterSize == 0) return "";
     if (offset >= currentChapterSize) return "";
     
-    FILE* f = fopen("/spiffs/cache.txt", "rb");
-    if (!f) return "";
-
-    if (fseek(f, offset, SEEK_SET) != 0) {
-        fclose(f);
-        return "";
+    if (offset + length > currentChapterSize) {
+        length = currentChapterSize - offset;
     }
-
-    std::string text;
-    text.resize(length);
-    size_t read = fread(&text[0], 1, length, f);
-    fclose(f);
-
-    text.resize(read);
-    return text;
+    
+    return currentChapterContent.substr(offset, length);
 }
 
 bool EpubLoader::nextChapter() {

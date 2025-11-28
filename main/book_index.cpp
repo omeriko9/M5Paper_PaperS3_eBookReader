@@ -10,11 +10,13 @@
 static const char *TAG = "INDEX";
 static const char *INDEX_FILE = "/spiffs/index.txt";
 
-void BookIndex::init() {
+void BookIndex::init(bool fastMode) {
     load();
-    scanDirectory("/spiffs");
-    //scanDirectory("/sd");
-    save();
+    if (!fastMode) {
+        scanDirectory("/spiffs");
+        //scanDirectory("/sd");
+        save();
+    }
 }
 
 void BookIndex::scanDirectory(const char* basePath) {

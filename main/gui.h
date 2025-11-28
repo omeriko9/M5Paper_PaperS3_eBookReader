@@ -12,7 +12,7 @@ enum class AppState {
 
 class GUI {
 public:
-    void init();
+    void init(bool isWakeFromSleep = false);
     void update(); // Main loop
     
     void setWifiStatus(bool connected, int rssi);

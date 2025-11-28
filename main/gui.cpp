@@ -316,20 +316,23 @@ static void enterDeepSleepWithTouchWake()
     esp_deep_sleep_start();
 }
 
-void GUI::init()
+void GUI::init(bool isWakeFromSleep)
 {
     // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+    // Already done in main, but safe to call again or skip
+    if (!isWakeFromSleep) {
+        esp_err_t ret = nvs_flash_init();
+        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+        {
+            ESP_ERROR_CHECK(nvs_flash_erase());
+            ret = nvs_flash_init();
+        }
+        ESP_ERROR_CHECK(ret);
     }
-    ESP_ERROR_CHECK(ret);
 
     loadSettings();
     loadFonts();
-    bookIndex.init();
+    bookIndex.init(isWakeFromSleep);
     resetPageInfoCache();
 
     M5.Display.setTextColor(TFT_BLACK);
@@ -668,7 +671,16 @@ size_t GUI::drawPageContent(bool draw)
 size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
-    ESP_LOGI(TAG, "drawPageContentAt: offset=%zu, draw=%d, target=%p, w=%d, h=%d", startOffset, draw, target, gfx->width(), gfx->height());
+    // ESP_LOGI(TAG, "drawPageContentAt: offset=%zu, draw=%d, target=%p, w=%d, h=%d", startOffset, draw, target, gfx->width(), gfx->height());
+    
+    // Ensure correct base font is loaded on the target
+    if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+        gfx->loadFont(fontDataHebrew.data());
+    } else if (currentFont != "Default" && !fontData.empty()) {
+        gfx->loadFont(fontData.data());
+    } else {
+        gfx->unloadFont();
+    }
     gfx->setTextSize(fontSize);
 
     int x = 20;                     // Margin
@@ -772,13 +784,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
             measureWord = reverseHebrewWord(measureWord);
 
         // Make sure we measure with the same font that will be used to draw the word.
-        // If this word is Hebrew and we have a Hebrew font loaded, temporarily switch
-        // the gfx font to the Hebrew font so textWidth() returns accurate metrics.
         bool swappedFont = false;
-        std::string restoreFont = currentFont; // keep track of what should be active
-        if (isHebrew(measureWord) && !fontDataHebrew.empty())
+        // Only swap if we are not already using the Hebrew font
+        if (isHebrew(measureWord) && !fontDataHebrew.empty() && currentFont != "Hebrew")
         {
-            ESP_LOGI(TAG, "drawPageContentAt: measuring Hebrew word using Hebrew font");
+            // ESP_LOGI(TAG, "drawPageContentAt: measuring Hebrew word using Hebrew font");
             gfx->loadFont(fontDataHebrew.data());
             gfx->setTextSize(fontSize);
             swappedFont = true;
@@ -792,11 +802,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
         // Restore the display font to whatever the GUI currently wants
         if (swappedFont)
         {
-            if (restoreFont == "Hebrew" && !fontDataHebrew.empty())
-            {
-                gfx->loadFont(fontDataHebrew.data());
-            }
-            else if (restoreFont != "Default" && !fontData.empty())
+            if (currentFont != "Default" && !fontData.empty())
             {
                 gfx->loadFont(fontData.data());
             }
@@ -857,7 +863,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
 
     if (draw)
     {
-        ESP_LOGI(TAG, "drawPageContentAt: lines drawn: %d", linesDrawn);
+        // ESP_LOGI(TAG, "drawPageContentAt: lines drawn: %d", linesDrawn);
         gfx->endWrite();
     }
 
@@ -1057,6 +1063,10 @@ void GUI::goToSleep()
     }
     M5.Display.setTextSize(fontSize);
     
+    // Check for touch immediately after wake to process the wake-up interaction
+    M5.update();
+    handleTouch();
+
     // Force redraw to clear the "z" symbol and show content immediately
     needsRedraw = true;
     lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1598,7 +1608,7 @@ void GUI::ensureHebrewFontLoaded()
 {
     if (!fontDataHebrew.empty())
     {
-        ESP_LOGI(TAG, "Hebrew font already loaded");
+        // ESP_LOGI(TAG, "Hebrew font already loaded");
         return;
     }
 
@@ -1658,49 +1668,41 @@ void GUI::ensureHebrewFontLoaded()
 void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
-    // ESP_LOGI(TAG, "drawStringMixed: '%s' at %d,%d", text.c_str(), x, y); // Too verbose for every word
-
-    // Simplified: if text contains Hebrew, use Hebrew font for the whole string
-    // This avoids complex font-switching mid-string which can cause rendering issues
 
     if (isHebrew(text))
     {
-        // Load Hebrew font
         ensureHebrewFontLoaded();
         if (!fontDataHebrew.empty())
         {
-            // Use the Hebrew font directly and draw at the current text size
-            ESP_LOGI(TAG, "drawStringMixed: drawing Hebrew word at %d,%d (len=%zu)", x, y, text.length());
-            gfx->loadFont(fontDataHebrew.data());
-            gfx->setTextSize(fontSize);
+            bool swapped = false;
+            // Only swap if not already using Hebrew font
+            if (currentFont != "Hebrew") {
+                gfx->loadFont(fontDataHebrew.data());
+                gfx->setTextSize(fontSize);
+                swapped = true;
+            }
+            
             gfx->drawString(text.c_str(), x, y);
-        }
-        else
-        {
-            ESP_LOGW(TAG, "Hebrew font not loaded, using default");
-            ESP_LOGW(TAG, "drawStringMixed: Hebrew font not available, falling back to default for '%s'", text.c_str());
-            gfx->unloadFont();
-            gfx->drawString(text.c_str(), x, y);
-        }
 
-        // Restore previous font (keep GUI's selected font active)
-        if (currentFont == "Hebrew" && !fontDataHebrew.empty())
-        {
-            gfx->loadFont(fontDataHebrew.data());
-        }
-        else if (currentFont != "Default" && !fontData.empty())
-        {
-            gfx->loadFont(fontData.data());
+            if (swapped) {
+                if (currentFont != "Default" && !fontData.empty()) {
+                    gfx->loadFont(fontData.data());
+                } else {
+                    gfx->unloadFont();
+                }
+                gfx->setTextSize(fontSize);
+            }
         }
         else
         {
-            gfx->unloadFont();
+            // Fallback
+            gfx->drawString(text.c_str(), x, y);
         }
     }
     else
     {
         // Non-Hebrew text - use current font
-        gfx->setTextSize(fontSize); // Ensure size is correct
+        gfx->setTextSize(fontSize);
         gfx->drawString(text.c_str(), x, y);
     }
 }

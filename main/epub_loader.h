@@ -38,6 +38,9 @@ private:
     int currentTextOffset = 0;
     size_t currentChapterSize = 0;
     
+    // Memory cache for current chapter
+    std::string currentChapterContent;
+
     // Helpers
     bool parseContainer();
     bool parseOPF(const std::string& opfPath);

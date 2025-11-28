@@ -13,7 +13,7 @@ struct BookEntry {
 
 class BookIndex {
 public:
-    void init();
+    void init(bool fastMode = false);
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);
     void removeBook(int id);

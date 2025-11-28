@@ -295,7 +295,7 @@ extern "C" void app_main(void)
         }
     }
 
-    gui.init();
+    gui.init(is_wake_from_sleep);
     
     // Skip WiFi on wake from sleep - saves ~3 seconds
     if (!is_wake_from_sleep) {
