@@ -1117,66 +1117,72 @@ void GUI::drawSettings()
 
     // Initialize settings canvas if needed
     if (!settingsCanvasCreated) {
-        settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight);
-        settingsCanvasCreated = true;
+        if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
+            settingsCanvasCreated = true;
+        } else {
+            ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
+        }
     }
 
+    LovyanGFX* target = settingsCanvasCreated ? (LovyanGFX*)&settingsCanvas : (LovyanGFX*)&M5.Display;
+    int yOffset = settingsCanvasCreated ? -layout.panelTop : 0;
+
     // Clear background for settings panel
-    settingsCanvas.fillRect(0, 0, layout.panelWidth, layout.panelHeight, TFT_WHITE);
-    settingsCanvas.drawRect(0, 0, layout.panelWidth, layout.panelHeight, TFT_BLACK);
-    settingsCanvas.drawLine(0, 0, layout.panelWidth, 0, TFT_BLACK); // Top border
+    target->fillRect(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelHeight, TFT_WHITE);
+    target->drawRect(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelHeight, TFT_BLACK);
+    target->drawLine(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelTop + yOffset, TFT_BLACK); // Top border
 
     auto drawButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor, uint16_t textColor)
     {
-        // Adjust Y coordinates to be relative to the canvas (0,0 is panelTop)
-        int relY = y - layout.panelTop;
-        settingsCanvas.fillRect(x, relY, w, h, fillColor);
-        settingsCanvas.drawRect(x, relY, w, h, TFT_BLACK);
-        settingsCanvas.setTextDatum(textdatum_t::middle_center);
-        settingsCanvas.setTextColor(textColor, fillColor);
-        settingsCanvas.drawString(label, x + w / 2, relY + h / 2);
-        settingsCanvas.setTextColor(TFT_BLACK, TFT_WHITE);
-        settingsCanvas.setTextDatum(textdatum_t::middle_left);
+        // Adjust Y coordinates
+        int drawY = y + yOffset;
+        target->fillRect(x, drawY, w, h, fillColor);
+        target->drawRect(x, drawY, w, h, TFT_BLACK);
+        target->setTextDatum(textdatum_t::middle_center);
+        target->setTextColor(textColor, fillColor);
+        target->drawString(label, x + w / 2, drawY + h / 2);
+        target->setTextColor(TFT_BLACK, TFT_WHITE);
+        target->setTextDatum(textdatum_t::middle_left);
     };
 
-    settingsCanvas.setTextColor(TFT_BLACK, TFT_WHITE);
+    target->setTextColor(TFT_BLACK, TFT_WHITE);
 
     // Title
-    settingsCanvas.setTextSize(1.6f);
-    settingsCanvas.setTextDatum(textdatum_t::top_left);
-    settingsCanvas.drawString("Settings", layout.padding, layout.titleY - layout.panelTop);
+    target->setTextSize(1.6f);
+    target->setTextDatum(textdatum_t::top_left);
+    target->drawString("Settings", layout.padding, layout.titleY + yOffset);
 
     // Body styling
     const float bodyTextSize = 1.2f;
-    settingsCanvas.setTextSize(bodyTextSize);
-    settingsCanvas.setTextDatum(textdatum_t::middle_left);
+    target->setTextSize(bodyTextSize);
+    target->setTextDatum(textdatum_t::middle_left);
 
     // --- Font Size ---
     int row1CenterY = layout.row1Y + layout.rowHeight / 2;
-    settingsCanvas.drawString("Font Size", layout.padding, row1CenterY - layout.panelTop);
+    target->drawString("Font Size", layout.padding, row1CenterY + yOffset);
     char sizeBuf[16];
     snprintf(sizeBuf, sizeof(sizeBuf), "%.1f", fontSize);
     int fontValueRight = layout.fontMinusX - 10;
-    settingsCanvas.setTextDatum(textdatum_t::middle_right);
-    settingsCanvas.drawString(sizeBuf, fontValueRight, row1CenterY - layout.panelTop);
-    settingsCanvas.setTextDatum(textdatum_t::middle_left);
+    target->setTextDatum(textdatum_t::middle_right);
+    target->drawString(sizeBuf, fontValueRight, row1CenterY + yOffset);
+    target->setTextDatum(textdatum_t::middle_left);
     int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
     drawButton(layout.fontMinusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "-", TFT_WHITE, TFT_BLACK);
     drawButton(layout.fontPlusX, fontButtonY, layout.fontButtonW, layout.fontButtonH, "+", TFT_WHITE, TFT_BLACK);
 
     // --- Font Family ---
     int row2CenterY = layout.row2Y + layout.rowHeight / 2;
-    settingsCanvas.drawString("Font", layout.padding, row2CenterY - layout.panelTop);
+    target->drawString("Font", layout.padding, row2CenterY + yOffset);
     int fontLabelRight = layout.changeButtonX - 12;
-    settingsCanvas.setTextDatum(textdatum_t::middle_right);
-    settingsCanvas.drawString(currentFont.c_str(), fontLabelRight, row2CenterY - layout.panelTop);
-    settingsCanvas.setTextDatum(textdatum_t::middle_left);
+    target->setTextDatum(textdatum_t::middle_right);
+    target->drawString(currentFont.c_str(), fontLabelRight, row2CenterY + yOffset);
+    target->setTextDatum(textdatum_t::middle_left);
     int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
     drawButton(layout.changeButtonX, changeButtonY, layout.changeButtonW, layout.fontButtonH, "Change", TFT_WHITE, TFT_BLACK);
 
     // --- WiFi ---
     int row3CenterY = layout.row3Y + layout.rowHeight / 2;
-    settingsCanvas.drawString("WiFi", layout.padding, row3CenterY - layout.panelTop);
+    target->drawString("WiFi", layout.padding, row3CenterY + yOffset);
 
     // Toggle Button
     int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
@@ -1187,25 +1193,27 @@ void GUI::drawSettings()
 
     // --- WiFi Status Row ---
     int row4CenterY = layout.row4Y + layout.rowHeight / 2;
-    settingsCanvas.drawString("WiFi Status", layout.padding, row4CenterY - layout.panelTop);
+    target->drawString("WiFi Status", layout.padding, row4CenterY + yOffset);
     std::string status = wifiEnabled ? "Connecting..." : "WiFi is OFF";
     if (wifiEnabled && wifiManager.isConnected())
     {
         std::string ip = wifiManager.getIpAddress();
         status = "URL: http://" + ip + "/";
     }
-    settingsCanvas.setTextSize(1.0f);
-    settingsCanvas.setTextDatum(textdatum_t::middle_left);
+    target->setTextSize(1.0f);
+    target->setTextDatum(textdatum_t::middle_left);
     // Increased offset to avoid overlap
-    settingsCanvas.drawString(status.c_str(), layout.padding + 180, row4CenterY - layout.panelTop);
-    settingsCanvas.setTextSize(bodyTextSize);
+    target->drawString(status.c_str(), layout.padding + 180, row4CenterY + yOffset);
+    target->setTextSize(bodyTextSize);
 
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
     drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_WHITE, TFT_BLACK);
 
     // Push the canvas to the display
-    settingsCanvas.pushSprite(0, layout.panelTop);
+    if (settingsCanvasCreated) {
+        settingsCanvas.pushSprite(0, layout.panelTop);
+    }
 }
 
 void GUI::drawWifiConfig()
@@ -1402,6 +1410,10 @@ void GUI::handleTouch()
                 {
                     currentState = previousState;
                     needsRedraw = true;
+                    if (settingsCanvasCreated) {
+                        settingsCanvas.deleteSprite();
+                        settingsCanvasCreated = false;
+                    }
                     return;
                 }
 
@@ -1455,6 +1467,10 @@ void GUI::handleTouch()
                 {
                     currentState = previousState;
                     needsRedraw = true;
+                    if (settingsCanvasCreated) {
+                        settingsCanvas.deleteSprite();
+                        settingsCanvasCreated = false;
+                    }
                 }
             }
         }
