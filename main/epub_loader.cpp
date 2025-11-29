@@ -331,8 +331,16 @@ void EpubLoader::loadChapter(int index) {
     currentTextOffset = 0;
     currentChapterSize = 0;
     currentChapterContent.clear();
-    // Reserve some memory to avoid reallocations
-    currentChapterContent.reserve(8192); 
+    // Reserve memory based on uncompressed size to avoid reallocations
+    uint32_t size = zip.getUncompressedSize(spine[index]);
+    if (size > 0) {
+        // Reserve full size to ensure contiguous allocation in PSRAM (if enabled)
+        // We might use less due to tag stripping, but over-reservation is safer than reallocation
+        ESP_LOGI(TAG, "Reserving %u bytes for chapter", (unsigned)size);
+        currentChapterContent.reserve(size);
+    } else {
+        currentChapterContent.reserve(8192); 
+    } 
 
     LoadChapterContext* ctx = new LoadChapterContext();
     ctx->content = &currentChapterContent;

@@ -334,6 +334,8 @@ void GUI::init(bool isWakeFromSleep)
 
     loadSettings();
     loadFonts();
+    M5.Display.setTextDatum(textdatum_t::middle_center);
+    M5.Display.drawString("Indexing...", M5.Display.width() / 2, M5.Display.height() / 2);
     bookIndex.init(isWakeFromSleep);
     resetPageInfoCache();
 
@@ -607,8 +609,8 @@ void GUI::drawLibrary()
         const auto &book = books[i];
         // Truncate display title if too long
         std::string displayTitle = book.title;
-        if (displayTitle.length() > 35)
-            displayTitle = displayTitle.substr(0, 32) + "...";
+        if (displayTitle.length() > 45)
+            displayTitle = displayTitle.substr(0, 42) + "...";
 
         displayTitle = processTextForDisplay(displayTitle);
 
@@ -618,7 +620,7 @@ void GUI::drawLibrary()
 
         // Draw title with mixed font support
         int titleX = 20 + M5.Display.textWidth("- ");
-        drawStringMixed(displayTitle, titleX, y, nullptr);
+        drawStringMixed(displayTitle, titleX, y, nullptr, itemSize);
 
         y += LIBRARY_LINE_HEIGHT;
     }
@@ -713,13 +715,18 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
     if (draw)
         gfx->startWrite();
 
-    std::vector<std::string> currentLine;
+    // Store indices (start, length) instead of strings to save memory
+    std::vector<std::pair<size_t, size_t>> currentLine;
+    currentLine.reserve(20); // Pre-allocate to avoid reallocations
+    
     int currentLineWidth = 0;
     int currentY = y;
     size_t i = 0;
 
     int debugWordsLogged = 0;
-    auto drawLine = [&](const std::vector<std::string> &line)
+    std::string tempWord; // Reusable buffer for measurements
+
+    auto drawLine = [&](const std::vector<std::pair<size_t, size_t>> &line)
     {
         if (!draw || line.empty())
             return;
@@ -727,13 +734,18 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
         bool isRTL = isRTLDocument;
         if (!isRTL)
         {
-            for (const auto &w : line)
+            for (const auto &p : line)
             {
-                if (isHebrew(w))
-                {
-                    isRTL = true;
-                    break;
+                // Check if word is Hebrew
+                const char* wordStart = text.c_str() + p.first;
+                for(size_t k=0; k<p.second; ++k) {
+                    unsigned char c = (unsigned char)wordStart[k];
+                    if (c >= 0xD6 && c <= 0xD7) {
+                        isRTL = true;
+                        break;
+                    }
                 }
+                if (isRTL) break;
             }
         }
 
@@ -742,9 +754,9 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
         if (spaceW == 0)
             spaceW = 5; // Fallback if font has no space width
 
-        for (const auto &word : line)
+        for (const auto &p : line)
         {
-            std::string displayWord = word;
+            std::string displayWord = text.substr(p.first, p.second);
             if (isHebrew(displayWord))
             {
                 displayWord = reverseHebrewWord(displayWord);
@@ -754,7 +766,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
             int spaceWLocal = gfx->textWidth(" ");
             if (spaceWLocal == 0)
                 spaceWLocal = 5;
-            // Emit debug info for first few words on the page so we can inspect spacing
+            
             if (debugWordsLogged < 6)
             {
                 ESP_LOGI(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), w, spaceWLocal, isRTL, startX, currentY);
@@ -763,12 +775,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
 
             if (isRTL)
             {
-                drawStringMixed(displayWord, startX - w, currentY, (M5Canvas *)target);
+                drawStringMixed(displayWord, startX - w, currentY, (M5Canvas *)target, fontSize);
                 startX -= (w + spaceWLocal);
             }
             else
             {
-                drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target);
+                drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target, fontSize);
                 startX += (w + spaceWLocal);
             }
         }
@@ -784,30 +796,30 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
 
         bool isNewline = (nextSpace < text.length() && text[nextSpace] == '\n');
 
-        std::string word = text.substr(i, nextSpace - i);
-
-        // Measure word (using reversed version for accuracy if needed)
-        std::string measureWord = word;
-        if (isHebrew(measureWord))
-            measureWord = reverseHebrewWord(measureWord);
+        size_t wordLen = nextSpace - i;
+        
+        // Measure word using reusable buffer
+        tempWord.assign(text, i, wordLen);
+        
+        bool wordIsHebrew = isHebrew(tempWord);
+        if (wordIsHebrew)
+            tempWord = reverseHebrewWord(tempWord);
 
         // Make sure we measure with the same font that will be used to draw the word.
         bool swappedFont = false;
-        // Only swap if we are not already using the Hebrew font
-        if (isHebrew(measureWord) && !fontDataHebrew.empty() && currentFont != "Hebrew")
+        if (wordIsHebrew && !fontDataHebrew.empty() && currentFont != "Hebrew")
         {
-            // ESP_LOGI(TAG, "drawPageContentAt: measuring Hebrew word using Hebrew font");
             gfx->loadFont(fontDataHebrew.data());
             gfx->setTextSize(fontSize);
             swappedFont = true;
         }
 
-        int w = gfx->textWidth(measureWord.c_str());
+        int w = gfx->textWidth(tempWord.c_str());
         int spaceW = gfx->textWidth(" ");
         if (spaceW == 0)
             spaceW = 5; // Fallback
 
-        // Restore the display font to whatever the GUI currently wants
+        // Restore the display font
         if (swappedFont)
         {
             if (currentFont != "Default" && !fontData.empty())
@@ -836,7 +848,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
             }
         }
 
-        currentLine.push_back(word);
+        currentLine.push_back({i, wordLen});
         currentLineWidth += w + spaceW;
 
         if (nextSpace < text.length())
@@ -1127,13 +1139,7 @@ void GUI::drawSettings()
         if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
             settingsCanvasCreated = true;
         } else {
-            ESP_LOGW(TAG, "Failed to create settings canvas with 4-bit color - trying 1-bit");
-            settingsCanvas.setColorDepth(1);
-            if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
-                settingsCanvasCreated = true;
-            } else {
-                ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
-            }
+            ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
         }
     }
 
@@ -1840,9 +1846,10 @@ void GUI::ensureHebrewFontLoaded()
     }
 }
 
-void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target)
+void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
+    float effectiveSize = (size > 0.0f) ? size : fontSize;
 
     if (isHebrew(text))
     {
@@ -1853,10 +1860,10 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
             // Only swap if not already using Hebrew font
             if (currentFont != "Hebrew") {
                 gfx->loadFont(fontDataHebrew.data());
-                gfx->setTextSize(fontSize);
                 swapped = true;
             }
             
+            gfx->setTextSize(effectiveSize);
             gfx->drawString(text.c_str(), x, y);
 
             if (swapped) {
@@ -1865,19 +1872,22 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
                 } else {
                     gfx->unloadFont();
                 }
-                gfx->setTextSize(fontSize);
+                // Restore size to effectiveSize to ensure consistency for caller
+                gfx->setTextSize(effectiveSize);
             }
         }
         else
         {
             // Fallback
+            gfx->setTextSize(effectiveSize);
             gfx->drawString(text.c_str(), x, y);
         }
     }
     else
     {
         // Non-Hebrew text - use current font
-        gfx->setTextSize(fontSize);
+        // ESP_LOGI(TAG, "Drawing non-Hebrew text: %s, font size: %.2f", text.c_str(), effectiveSize);
+        gfx->setTextSize(effectiveSize);
         gfx->drawString(text.c_str(), x, y);
     }
 }
@@ -1885,10 +1895,122 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
 void GUI::drawWifiScan()
 {
     M5.Display.unloadFont(); // Use default font
+    {
+        M5Canvas wifiCanvas;
+        wifiCanvas.setColorDepth(1); // Use 1-bit color to save RAM
+        if (wifiCanvas.createSprite(M5.Display.width(), M5.Display.height())) {
+            wifiCanvas.fillScreen(TFT_WHITE);
+            // Draw status bar to canvas
+            wifiCanvas.setFont(&lgfx::v1::fonts::Font2);
+            wifiCanvas.setTextSize(2.0f);
+            wifiCanvas.fillRect(0, 0, wifiCanvas.width(), STATUS_BAR_HEIGHT, TFT_WHITE);
+            wifiCanvas.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, wifiCanvas.width(), TFT_BLACK);
+            wifiCanvas.setTextColor(TFT_BLACK, TFT_WHITE);
+            const int centerY = STATUS_BAR_HEIGHT / 2;
+            wifiCanvas.setTextDatum(textdatum_t::middle_left);
+            auto dt = M5.Rtc.getDateTime();
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%02d:%02d", dt.time.hours, dt.time.minutes);
+            wifiCanvas.drawString(buf, 10, centerY);
+            wifiCanvas.setTextDatum(textdatum_t::middle_right);
+            int bat = M5.Power.getBatteryLevel();
+            snprintf(buf, sizeof(buf), "%d%%", bat);
+            int batteryX = wifiCanvas.width() - 10;
+            int batteryTextWidth = wifiCanvas.textWidth(buf);
+            wifiCanvas.drawString(buf, batteryX, centerY);
+            if (wifiConnected)
+            {
+                snprintf(buf, sizeof(buf), "WiFi %d dBm", wifiRssi);
+            }
+            else
+            {
+                snprintf(buf, sizeof(buf), "No WiFi");
+            }
+            int wifiX = batteryX - batteryTextWidth - 12;
+            wifiCanvas.drawString(buf, wifiX, centerY);
+            wifiCanvas.setTextDatum(textdatum_t::top_left);
+            wifiCanvas.setTextColor(TFT_BLACK);
+            
+            wifiCanvas.setTextSize(2.0f);
+            wifiCanvas.setTextColor(TFT_BLACK);
+            wifiCanvas.setCursor(20, 60);
+            wifiCanvas.println("Select WiFi Network:");
+            
+            if (wifiList.empty()) {
+                wifiCanvas.setCursor(20, 100);
+                wifiCanvas.println("Scanning...");
+                wifiCanvas.pushSprite(&M5.Display, 0, 0);
+                
+                wifiList = wifiManager.scanNetworks();
+                
+                // If still empty after scan
+                if (wifiList.empty()) {
+                    wifiCanvas.setCursor(20, 100);
+                    wifiCanvas.println("No networks found.");
+                    wifiCanvas.pushSprite(&M5.Display, 0, 0);
+                } else {
+                    // Redraw with list
+                    drawWifiScan();
+                    return;
+                }
+            }
+            
+            int y = 100;
+            for (const auto& ssid : wifiList) {
+                wifiCanvas.drawRect(20, y, wifiCanvas.width() - 40, 50, TFT_BLACK);
+                wifiCanvas.drawString(ssid.c_str(), 30, y + 15);
+                y += 60;
+                if (y > wifiCanvas.height() - 80) break; // Limit list
+            }
+            
+            // Cancel Button
+            int footerY = wifiCanvas.height() - 60;
+            wifiCanvas.fillRect(20, footerY, 150, 40, TFT_LIGHTGREY);
+            wifiCanvas.drawRect(20, footerY, 150, 40, TFT_BLACK);
+            wifiCanvas.setTextColor(TFT_BLACK);
+            wifiCanvas.setTextDatum(textdatum_t::middle_center);
+            wifiCanvas.drawString("Cancel", 95, footerY + 20);
+            wifiCanvas.setTextDatum(textdatum_t::top_left);
+            
+            wifiCanvas.pushSprite(&M5.Display, 0, 0);
+            return;
+        }
+    }
+    // Fallback to direct draw
+    ESP_LOGE(TAG, "Failed to create wifi canvas - falling back to direct draw");
     M5.Display.fillScreen(TFT_WHITE);
-    drawStatusBar();
+    // Draw status bar directly without loading custom fonts
+    M5.Display.setFont(&lgfx::v1::fonts::Font2);
+    M5.Display.setTextSize(2.0f);
+    M5.Display.fillRect(0, 0, M5.Display.width(), STATUS_BAR_HEIGHT, TFT_WHITE);
+    M5.Display.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, M5.Display.width(), TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    const int centerY = STATUS_BAR_HEIGHT / 2;
+    M5.Display.setTextDatum(textdatum_t::middle_left);
+    auto dt = M5.Rtc.getDateTime();
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%02d:%02d", dt.time.hours, dt.time.minutes);
+    M5.Display.drawString(buf, 10, centerY);
+    M5.Display.setTextDatum(textdatum_t::middle_right);
+    int bat = M5.Power.getBatteryLevel();
+    snprintf(buf, sizeof(buf), "%d%%", bat);
+    int batteryX = M5.Display.width() - 10;
+    int batteryTextWidth = M5.Display.textWidth(buf);
+    M5.Display.drawString(buf, batteryX, centerY);
+    if (wifiConnected)
+    {
+        snprintf(buf, sizeof(buf), "WiFi %d dBm", wifiRssi);
+    }
+    else
+    {
+        snprintf(buf, sizeof(buf), "No WiFi");
+    }
+    int wifiX = batteryX - batteryTextWidth - 12;
+    M5.Display.drawString(buf, wifiX, centerY);
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.setTextColor(TFT_BLACK);
     
-    M5.Display.setTextSize(1.1f);
+    M5.Display.setTextSize(2.0f);
     M5.Display.setTextColor(TFT_BLACK);
     M5.Display.setCursor(20, 60);
     M5.Display.println("Select WiFi Network:");
@@ -1965,7 +2087,7 @@ void GUI::drawWifiPassword()
     this->setFont("Default");
     drawStatusBar();
     
-    M5.Display.setTextSize(1.6f);
+    M5.Display.setTextSize(2.0f);
     M5.Display.setTextColor(TFT_BLACK);
     M5.Display.setCursor(20, 60);
     M5.Display.printf("Enter Password for %s:", selectedSSID.c_str());
@@ -2079,11 +2201,9 @@ void GUI::onWifiPasswordClick(int x, int y)
             
             wifiManager.saveCredentials(selectedSSID.c_str(), wifiPasswordInput.c_str());
             wifiManager.connect();
-            
-            // restore font
-            currentFont = std::string(previousFont);            
-            this->setFont(previousFont);
-            
+                   
+            loadSettings();
+            loadFonts();
 
             currentState = AppState::LIBRARY;
             needsRedraw = true;

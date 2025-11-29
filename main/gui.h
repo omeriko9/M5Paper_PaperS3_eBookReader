@@ -104,7 +104,7 @@ private:
     
     void loadFonts();
     void ensureHebrewFontLoaded();
-    void drawStringMixed(const std::string& text, int x, int y, M5Canvas* target = nullptr);
+    void drawStringMixed(const std::string& text, int x, int y, M5Canvas* target = nullptr, float size = -1.0f);
     
     void saveSettings();
     void loadSettings();
