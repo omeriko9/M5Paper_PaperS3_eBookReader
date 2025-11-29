@@ -213,7 +213,34 @@ static std::string processTextForDisplay(const std::string &text)
     {
         if (isHebrew(word))
         {
-            result += reverseHebrewWord(word);
+            // Replace HTML entities before reversing
+            std::string processedWord = word;
+            size_t pos = 0;
+            while ((pos = processedWord.find("&quot;", pos)) != std::string::npos) {
+                processedWord.replace(pos, 6, "\"");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedWord.find("&amp;", pos)) != std::string::npos) {
+                processedWord.replace(pos, 5, "&");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedWord.find("&lt;", pos)) != std::string::npos) {
+                processedWord.replace(pos, 4, "<");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedWord.find("&gt;", pos)) != std::string::npos) {
+                processedWord.replace(pos, 4, ">");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedWord.find("&apos;", pos)) != std::string::npos) {
+                processedWord.replace(pos, 6, "'");
+                pos += 1;
+            }
+            result += reverseHebrewWord(processedWord);
         }
         else
         {
@@ -332,10 +359,9 @@ void GUI::init(bool isWakeFromSleep)
         ESP_ERROR_CHECK(ret);
     }
 
+    
     loadSettings();
-    loadFonts();
-    M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawString("Indexing...", M5.Display.width() / 2, M5.Display.height() / 2);
+    loadFonts();    
     bookIndex.init(isWakeFromSleep);
     resetPageInfoCache();
 
@@ -759,6 +785,32 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
             std::string displayWord = text.substr(p.first, p.second);
             if (isHebrew(displayWord))
             {
+                // Replace HTML entities
+                size_t pos = 0;
+                while ((pos = displayWord.find("&quot;", pos)) != std::string::npos) {
+                    displayWord.replace(pos, 6, "\"");
+                    pos += 1;
+                }
+                pos = 0;
+                while ((pos = displayWord.find("&amp;", pos)) != std::string::npos) {
+                    displayWord.replace(pos, 5, "&");
+                    pos += 1;
+                }
+                pos = 0;
+                while ((pos = displayWord.find("&lt;", pos)) != std::string::npos) {
+                    displayWord.replace(pos, 4, "<");
+                    pos += 1;
+                }
+                pos = 0;
+                while ((pos = displayWord.find("&gt;", pos)) != std::string::npos) {
+                    displayWord.replace(pos, 4, ">");
+                    pos += 1;
+                }
+                pos = 0;
+                while ((pos = displayWord.find("&apos;", pos)) != std::string::npos) {
+                    displayWord.replace(pos, 6, "'");
+                    pos += 1;
+                }
                 displayWord = reverseHebrewWord(displayWord);
             }
 
@@ -1863,8 +1915,11 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
                 swapped = true;
             }
             
+            std::string processedText = text;
+            // HTML entity replacements are done before reversing in the calling functions     
+
             gfx->setTextSize(effectiveSize);
-            gfx->drawString(text.c_str(), x, y);
+            gfx->drawString(processedText.c_str(), x, y);
 
             if (swapped) {
                 if (currentFont != "Default" && !fontData.empty()) {
@@ -1887,8 +1942,35 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
     {
         // Non-Hebrew text - use current font
         // ESP_LOGI(TAG, "Drawing non-Hebrew text: %s, font size: %.2f", text.c_str(), effectiveSize);
+        std::string processedText = text;
+        // Replace HTML entities
+        size_t pos = 0;
+        while ((pos = processedText.find("&quot;", pos)) != std::string::npos) {
+            processedText.replace(pos, 6, "\"");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = processedText.find("&amp;", pos)) != std::string::npos) {
+            processedText.replace(pos, 5, "&");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = processedText.find("&lt;", pos)) != std::string::npos) {
+            processedText.replace(pos, 4, "<");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = processedText.find("&gt;", pos)) != std::string::npos) {
+            processedText.replace(pos, 4, ">");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = processedText.find("&apos;", pos)) != std::string::npos) {
+            processedText.replace(pos, 6, "'");
+            pos += 1;
+        }
         gfx->setTextSize(effectiveSize);
-        gfx->drawString(text.c_str(), x, y);
+        gfx->drawString(processedText.c_str(), x, y);
     }
 }
 

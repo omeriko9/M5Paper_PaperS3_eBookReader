@@ -13,14 +13,14 @@ struct BookEntry {
 
 class BookIndex {
 public:
-    void init(bool fastMode = false);
+    bool init(bool fastMode = false);
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);
     void removeBook(int id);
     void updateProgress(int id, int chapter, size_t offset);
     std::vector<BookEntry> getBooks();
     BookEntry getBook(int id);
-    void scanDirectory(const char* basePath);
+    bool scanDirectory(const char* basePath);
 
 private:
     std::vector<BookEntry> books;
