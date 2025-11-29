@@ -7,7 +7,9 @@ enum class AppState {
     LIBRARY,
     READER,
     WIFI_CONFIG,
-    SETTINGS
+    SETTINGS,
+    WIFI_SCAN,
+    WIFI_PASSWORD
 };
 
 class GUI {
@@ -62,6 +64,7 @@ private:
     // Settings
     float fontSize = 1.0f; // Scale factor
     std::string currentFont = "Default";
+    std::string previousFont = "Default";
     bool fontChanged = false;
     std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
     std::vector<uint8_t> fontDataHebrew; // Cache for Hebrew font
@@ -80,15 +83,24 @@ private:
     M5Canvas settingsCanvas;
     bool settingsCanvasCreated = false;
 
+    // WiFi Scan
+    std::vector<std::string> wifiList;
+    std::string wifiPasswordInput;
+    std::string selectedSSID;
+
     void drawStatusBar();
     void drawSleepSymbol(const char* symbol);
     void drawLibrary();
     void drawReader(bool flush = true);
     void drawWifiConfig();
     void drawSettings();
+    void drawWifiScan();
+    void drawWifiPassword();
     
     void handleTouch();
     void processReaderTap(int x, int y, bool isDouble);
+    void onWifiScanClick(int x, int y);
+    void onWifiPasswordClick(int x, int y);
     
     void loadFonts();
     void ensureHebrewFontLoaded();

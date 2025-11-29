@@ -458,7 +458,7 @@ void GUI::update()
         }
     }
     // Reader Mode Logic
-    else if (currentState == AppState::READER)
+    else if (currentState == AppState::READER || currentState == AppState::SETTINGS)
     {
         // Active for 60 seconds
         if (now - lastActivityTime > 60 * 1000)
@@ -492,6 +492,12 @@ void GUI::update()
             break;
         case AppState::SETTINGS:
             drawSettings();
+            break;
+        case AppState::WIFI_SCAN:
+            drawWifiScan();
+            break;
+        case AppState::WIFI_PASSWORD:
+            drawWifiPassword();
             break;
         }
         needsRedraw = false;
@@ -1117,10 +1123,17 @@ void GUI::drawSettings()
 
     // Initialize settings canvas if needed
     if (!settingsCanvasCreated) {
+        settingsCanvas.setColorDepth(4); // Use 4-bit color to save RAM
         if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
             settingsCanvasCreated = true;
         } else {
-            ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
+            ESP_LOGW(TAG, "Failed to create settings canvas with 4-bit color - trying 1-bit");
+            settingsCanvas.setColorDepth(1);
+            if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
+                settingsCanvasCreated = true;
+            } else {
+                ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
+            }
         }
     }
 
@@ -1363,6 +1376,15 @@ void GUI::handleTouch()
             
             if (currentState == AppState::LIBRARY)
             {
+                // Check for status bar tap
+                if (t.y < STATUS_BAR_HEIGHT) {
+                    currentState = AppState::WIFI_SCAN;
+                    wifiList.clear();
+                    needsRedraw = true;
+                    justWokeUp = false;
+                    return;
+                }
+
                 auto books = bookIndex.getBooks();
                 int availableHeight = M5.Display.height() - LIBRARY_LIST_START_Y - 60;
                 int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
@@ -1526,6 +1548,14 @@ void GUI::handleTouch()
                         settingsCanvasCreated = false;
                     }
                 }
+            }
+            else if (currentState == AppState::WIFI_SCAN)
+            {
+                onWifiScanClick(t.x, t.y);
+            }
+            else if (currentState == AppState::WIFI_PASSWORD)
+            {
+                onWifiPasswordClick(t.x, t.y);
             }
         }
     }
@@ -1851,3 +1881,221 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
         gfx->drawString(text.c_str(), x, y);
     }
 }
+
+void GUI::drawWifiScan()
+{
+    M5.Display.unloadFont(); // Use default font
+    M5.Display.fillScreen(TFT_WHITE);
+    drawStatusBar();
+    
+    M5.Display.setTextSize(1.1f);
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.setCursor(20, 60);
+    M5.Display.println("Select WiFi Network:");
+    
+    if (wifiList.empty()) {
+        M5.Display.setCursor(20, 100);
+        M5.Display.println("Scanning...");
+        M5.Display.display();
+        
+        wifiList = wifiManager.scanNetworks();
+        
+        // If still empty after scan
+        if (wifiList.empty()) {
+            M5.Display.setCursor(20, 100);
+            M5.Display.println("No networks found.");
+        } else {
+            // Redraw with list
+            drawWifiScan();
+            return;
+        }
+    }
+    
+    int y = 100;
+    for (const auto& ssid : wifiList) {
+        M5.Display.drawRect(20, y, M5.Display.width() - 40, 50, TFT_BLACK);
+        M5.Display.drawString(ssid.c_str(), 30, y + 15);
+        y += 60;
+        if (y > M5.Display.height() - 80) break; // Limit list
+    }
+    
+    // Cancel Button
+    int footerY = M5.Display.height() - 60;
+    M5.Display.fillRect(20, footerY, 150, 40, TFT_LIGHTGREY);
+    M5.Display.drawRect(20, footerY, 150, 40, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.setTextDatum(textdatum_t::middle_center);
+    M5.Display.drawString("Cancel", 95, footerY + 20);
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    
+    M5.Display.display();
+}
+
+void GUI::onWifiScanClick(int x, int y)
+{
+    // Check Cancel
+    int footerY = M5.Display.height() - 60;
+    if (y >= footerY && y <= footerY + 40 && x >= 20 && x <= 170) {
+        currentState = AppState::LIBRARY;
+        needsRedraw = true;
+        return;
+    }
+    
+    // Check List
+    int listY = 100;
+    for (const auto& ssid : wifiList) {
+        if (y >= listY && y <= listY + 50 && x >= 20 && x <= M5.Display.width() - 20) {
+            selectedSSID = ssid;
+            wifiPasswordInput = "";
+            currentState = AppState::WIFI_PASSWORD;
+            needsRedraw = true;
+            return;
+        }
+        listY += 60;
+        if (listY > M5.Display.height() - 80) break;
+    }
+}
+
+
+void GUI::drawWifiPassword()
+{
+    //M5.Display.unloadFont(); // Use default font
+    M5.Display.fillScreen(TFT_WHITE);
+    previousFont = std::string(currentFont);
+    this->setFont("Default");
+    drawStatusBar();
+    
+    M5.Display.setTextSize(1.6f);
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.setCursor(20, 60);
+    M5.Display.printf("Enter Password for %s:", selectedSSID.c_str());
+    
+    // Input Box
+    M5.Display.drawRect(20, 100, M5.Display.width() - 40, 50, TFT_BLACK);
+    M5.Display.drawString(wifiPasswordInput.c_str(), 30, 115);
+    
+    // Keyboard (Simple QWERTY)
+    const char* rows[] = {
+        "1234567890",
+        "qwertyuiop",
+        "asdfghjkl",
+        "zxcvbnm"
+    };
+    
+    int keySize = 45;
+    int startY = 180;
+    int startX = 20;
+    
+    M5.Display.setTextDatum(textdatum_t::middle_center);
+    
+    for (int r = 0; r < 4; r++) {
+        int x = startX + (r * 20); // Indent
+        for (int c = 0; c < strlen(rows[r]); c++) {
+            char key[2] = {rows[r][c], 0};
+            M5.Display.drawRect(x, startY + (r * keySize), keySize, keySize, TFT_BLACK);
+            M5.Display.drawString(key, x + keySize/2, startY + (r * keySize) + keySize/2);
+            x += keySize;
+        }
+    }
+    
+    // Special Keys: Backspace, Space, Clear
+    int specialY = startY + (4 * keySize) + 10;
+    
+    // Backspace
+    M5.Display.drawRect(20, specialY, 100, 40, TFT_BLACK);
+    M5.Display.drawString("Bksp", 70, specialY + 20);
+    
+    // Space
+    M5.Display.drawRect(130, specialY, 200, 40, TFT_BLACK);
+    M5.Display.drawString("Space", 230, specialY + 20);
+    
+    // Connect
+    M5.Display.fillRect(M5.Display.width() - 140, specialY, 120, 40, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.drawString("Connect", M5.Display.width() - 80, specialY + 20);
+    
+    // Cancel
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.drawRect(M5.Display.width() - 270, specialY, 120, 40, TFT_BLACK);
+    M5.Display.drawString("Cancel", M5.Display.width() - 210, specialY + 20);
+    
+    M5.Display.setTextDatum(textdatum_t::top_left);
+    M5.Display.display();
+}
+
+void GUI::onWifiPasswordClick(int x, int y)
+{
+    int keySize = 45;
+    int startY = 180;
+    int startX = 20;
+    
+    // Check Keyboard
+    const char* rows[] = {
+        "1234567890",
+        "qwertyuiop",
+        "asdfghjkl",
+        "zxcvbnm"
+    };
+    
+    bool inputChanged = false;
+    
+    for (int r = 0; r < 4; r++) {
+        int rowX = startX + (r * 20);
+        if (y >= startY + (r * keySize) && y < startY + ((r+1) * keySize)) {
+            int col = (x - rowX) / keySize;
+            if (col >= 0 && col < strlen(rows[r])) {
+                wifiPasswordInput += rows[r][col];
+                inputChanged = true;
+            }
+        }
+    }
+    
+    int specialY = startY + (4 * keySize) + 10;
+    if (y >= specialY && y <= specialY + 40) {
+        // Backspace
+        if (x >= 20 && x <= 120) {
+            if (!wifiPasswordInput.empty()) {
+                wifiPasswordInput.pop_back();
+                inputChanged = true;
+            }
+        }
+        // Space
+        else if (x >= 130 && x <= 330) {
+            wifiPasswordInput += ' ';
+            inputChanged = true;
+        }
+        // Cancel
+        else if (x >= M5.Display.width() - 270 && x <= M5.Display.width() - 150) {
+            currentState = AppState::WIFI_SCAN;
+            needsRedraw = true;
+        }
+        // Connect
+        else if (x >= M5.Display.width() - 140 && x <= M5.Display.width() - 20) {
+            M5.Display.fillScreen(TFT_WHITE);
+            M5.Display.setCursor(20, 100);
+            M5.Display.setTextSize(2.0f);
+            M5.Display.println("Connecting...");
+            M5.Display.display();
+            
+            wifiManager.saveCredentials(selectedSSID.c_str(), wifiPasswordInput.c_str());
+            wifiManager.connect();
+            
+            // restore font
+            currentFont = std::string(previousFont);            
+            this->setFont(previousFont);
+            
+
+            currentState = AppState::LIBRARY;
+            needsRedraw = true;
+        }
+    }
+    
+    if (inputChanged) {
+        // Update only the input box area
+        M5.Display.fillRect(21, 101, M5.Display.width() - 42, 48, TFT_WHITE);
+        M5.Display.setTextColor(TFT_BLACK);
+        M5.Display.drawString(wifiPasswordInput.c_str(), 30, 115);
+        M5.Display.display();
+    }
+}
+

@@ -135,6 +135,42 @@ int WifiManager::getRssi() {
     return s_rssi;
 }
 
+std::vector<std::string> WifiManager::scanNetworks() {
+    if (!s_initialized) init();
+    
+    // Ensure we are in a mode that supports scanning (STA or APSTA)
+    wifi_mode_t mode;
+    esp_wifi_get_mode(&mode);
+    if (mode == WIFI_MODE_NULL) {
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_wifi_start();
+    }
+
+    wifi_scan_config_t scan_config = {0};
+    scan_config.show_hidden = true;
+    
+    // Blocking scan
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    std::vector<std::string> ssids;
+    if (err == ESP_OK) {
+        uint16_t ap_count = 0;
+        esp_wifi_scan_get_ap_num(&ap_count);
+        if (ap_count > 0) {
+            std::vector<wifi_ap_record_t> ap_records(ap_count);
+            esp_wifi_scan_get_ap_records(&ap_count, ap_records.data());
+            for (const auto& ap : ap_records) {
+                // Filter out empty SSIDs
+                if (strlen((char*)ap.ssid) > 0) {
+                    ssids.push_back(std::string((char*)ap.ssid));
+                }
+            }
+        }
+    } else {
+        ESP_LOGE(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+    }
+    return ssids;
+}
+
 void WifiManager::saveCredentials(const char* ssid, const char* password) {
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);

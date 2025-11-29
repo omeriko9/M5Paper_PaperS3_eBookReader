@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include "esp_wifi.h"
 
 class WifiManager {
@@ -16,6 +17,8 @@ public:
     // Save credentials
     void saveCredentials(const char* ssid, const char* password);
     
+    std::vector<std::string> scanNetworks();
+
     void startDNS();
     void stopDNS();
 
