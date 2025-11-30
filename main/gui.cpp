@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <string.h>
+#include <esp_heap_caps.h>
 
 static const char *TAG = "GUI";
 bool GUI::canJump() const {
@@ -1187,10 +1188,13 @@ void GUI::drawSettings()
 
     // Initialize settings canvas if needed
     if (!settingsCanvasCreated) {
-        settingsCanvas.setColorDepth(4); // Use 4-bit color to save RAM
+        settingsCanvas.setColorDepth(16); // Use 16-bit color to match display
+        ESP_LOGI(TAG, "Before createSprite: free heap = %d bytes", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
         if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
+            ESP_LOGI(TAG, "After createSprite success: free heap = %d bytes", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
             settingsCanvasCreated = true;
         } else {
+            ESP_LOGI(TAG, "After createSprite failure: free heap = %d bytes", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
             ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
         }
     }
