@@ -9,6 +9,7 @@ struct BookEntry {
     int currentChapter = 0;
     size_t currentOffset = 0;
     size_t fileSize = 0; // For cache validation
+    bool hasMetrics = false;
 };
 
 class BookIndex {
@@ -22,9 +23,14 @@ public:
     BookEntry getBook(int id);
     bool scanDirectory(const char* basePath);
 
+    // Metrics persistence
+    bool saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets);
+    bool loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>& chapterOffsets);
+
 private:
     std::vector<BookEntry> books;
     void load();
     void save();
     int getNextId();
+    void checkMetricsExistence();
 };

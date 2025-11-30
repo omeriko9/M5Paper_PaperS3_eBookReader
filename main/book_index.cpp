@@ -21,8 +21,93 @@ bool BookIndex::init(bool fastMode)
         // scanDirectory("/sd");
         save();
     }
+    
+    // checkMetricsExistence(); // Removed to avoid WDT timeout on wake
 
     return foundNewBooks;
+}
+
+void BookIndex::checkMetricsExistence() {
+    for (auto& book : books) {
+        char path[64];
+        snprintf(path, sizeof(path), "/spiffs/m_%d.bin", book.id);
+        struct stat st;
+        book.hasMetrics = (stat(path, &st) == 0);
+    }
+}
+
+bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets) {
+    char path[64];
+    snprintf(path, sizeof(path), "/spiffs/m_%d.bin", id);
+    
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open metrics file for writing: %s", path);
+        return false;
+    }
+    
+    // Header: Version (1), TotalChars (8), Count (4)
+    uint8_t version = 1;
+    fwrite(&version, 1, 1, f);
+    fwrite(&totalChars, sizeof(size_t), 1, f);
+    uint32_t count = chapterOffsets.size();
+    fwrite(&count, sizeof(uint32_t), 1, f);
+    
+    if (count > 0) {
+        fwrite(chapterOffsets.data(), sizeof(size_t), count, f);
+    }
+    
+    fclose(f);
+    
+    // Update in-memory flag
+    for (auto& book : books) {
+        if (book.id == id) {
+            book.hasMetrics = true;
+            break;
+        }
+    }
+    
+    // Persist the flag to index
+    save();
+    
+    ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters", id, totalChars, count);
+    return true;
+}
+
+bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>& chapterOffsets) {
+    char path[64];
+    snprintf(path, sizeof(path), "/spiffs/m_%d.bin", id);
+    
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+    
+    uint8_t version = 0;
+    if (fread(&version, 1, 1, f) != 1 || version != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    if (fread(&totalChars, sizeof(size_t), 1, f) != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    uint32_t count = 0;
+    if (fread(&count, sizeof(uint32_t), 1, f) != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    chapterOffsets.resize(count);
+    if (count > 0) {
+        if (fread(chapterOffsets.data(), sizeof(size_t), count, f) != count) {
+            fclose(f);
+            return false;
+        }
+    }
+    
+    fclose(f);
+    return true;
 }
 
 bool BookIndex::scanDirectory(const char *basePath)
@@ -103,7 +188,7 @@ bool BookIndex::scanDirectory(const char *basePath)
                         loader.close();
                     }
 
-                    books.push_back({id, title, fullPath, 0, 0, currentSize});
+                    books.push_back({id, title, fullPath, 0, 0, currentSize, false});
                     ESP_LOGI(TAG, "Found new book: %s", title.c_str());
                 }
             }
@@ -173,12 +258,16 @@ void BookIndex::load()
             size_t fsize = 0;
             if (parts.size() >= 6)
                 fsize = atol(parts[5].c_str());
+            
+            bool hasMetrics = false;
+            if (parts.size() >= 7)
+                hasMetrics = (atoi(parts[6].c_str()) == 1);
 
             // Verify file exists
             struct stat st;
             if (stat(path.c_str(), &st) == 0)
             {
-                books.push_back({id, title, path, chapter, offset, fsize});
+                books.push_back({id, title, path, chapter, offset, fsize, hasMetrics});
             }
         }
     }
@@ -198,7 +287,7 @@ void BookIndex::save()
 
     for (const auto &book : books)
     {
-        fprintf(f, "%d|%s|%d|%u|%s|%u\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str(), (unsigned int)book.fileSize);
+        fprintf(f, "%d|%s|%d|%u|%s|%u|%d\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str(), (unsigned int)book.fileSize, book.hasMetrics ? 1 : 0);
     }
     fclose(f);
 }
@@ -249,7 +338,7 @@ std::string BookIndex::addBook(const std::string &title)
     char path[32];
     snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
 
-    books.push_back({id, title, std::string(path), 0, 0, 0});
+    books.push_back({id, title, std::string(path), 0, 0, 0, false});
     save();
 
     return std::string(path);

@@ -47,6 +47,8 @@ public:
 
     // Public for the task to access
     void renderTaskLoop();
+    void metricsTaskLoop();
+    void backgroundIndexerTaskLoop();
 
 private:
     AppState currentState = AppState::LIBRARY;
@@ -73,6 +75,9 @@ private:
     
     // Background Rendering
     TaskHandle_t renderTaskHandle = nullptr;
+    TaskHandle_t metricsTaskHandle = nullptr;
+    TaskHandle_t backgroundIndexerTaskHandle = nullptr;
+    int metricsTaskTargetBookId = 0;
     QueueHandle_t renderQueue = nullptr;
     SemaphoreHandle_t epubMutex = nullptr;
     volatile bool abortRender = false;
@@ -91,6 +96,9 @@ private:
     
     size_t lastPageChars = 0;
     int lastPageTotal = 1;
+    size_t totalBookChars = 0;
+    std::vector<size_t> chapterPrefixSums;
+    bool bookMetricsComputed = false;
 
     // Double click detection
     uint32_t lastClickTime = 0;
@@ -134,6 +142,8 @@ private:
     size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas* target = nullptr, volatile bool* abort = nullptr);
     PageInfo calculatePageInfo();
     void resetPageInfoCache();
+    void computeBookMetrics();
+    void computeBookMetricsLocked();
     void updateNextPrevCanvases();
 
     uint32_t lastActivityTime = 0;

@@ -481,28 +481,57 @@ void GUI::init(bool isWakeFromSleep)
         {
             currentBook = bookIndex.getBook(lastId);
             // Pass the saved chapter index to load() to skip heuristics and jump directly
-            if (currentBook.id != 0 && epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter))
+            totalBookChars = 0;
+            chapterPrefixSums.clear();
+            bookMetricsComputed = false;
+
+            bool loaded = false;
+            if (currentBook.id != 0 && xSemaphoreTake(epubMutex, portMAX_DELAY))
             {
-                currentState = AppState::READER;
-
-                // Auto-detect language
-                std::string lang = epubLoader.getLanguage();
-                bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
-                if (isHebrew)
+                loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
+                if (loaded)
                 {
-                    setFont("Hebrew");
+                    currentState = AppState::READER;
+
+                    // Auto-detect language
+                    std::string lang = epubLoader.getLanguage();
+                    bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
+                    if (isHebrew)
+                    {
+                        setFont("Hebrew");
+                    }
+                    // Restore progress
+                    currentTextOffset = currentBook.currentOffset;
+                    resetPageInfoCache();
+
+                    // No need to loop nextChapter() anymore because we loaded the correct chapter directly
+
+                    // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
+                    isRTLDocument = isHebrew;
+
+                    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums)) {
+                        bookMetricsComputed = true;
+                        ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
+                    } else {
+                        if (metricsTaskHandle != nullptr) vTaskDelete(metricsTaskHandle);
+                        metricsTaskTargetBookId = currentBook.id;
+                        xTaskCreate([](void *arg)
+                                { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+                    }
                 }
-                // Restore progress
-                currentTextOffset = currentBook.currentOffset;
-                resetPageInfoCache();
+                xSemaphoreGive(epubMutex);
+            }
 
-                // No need to loop nextChapter() anymore because we loaded the correct chapter directly
-
-                // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
-                isRTLDocument = isHebrew;
-
+            if (loaded)
+            {
                 pageHistory.clear();
                 needsRedraw = true; // Force redraw to clear sleep symbol
+                
+                // Spawn background indexer
+                if (backgroundIndexerTaskHandle == nullptr) {
+                     xTaskCreate([](void *arg)
+                        { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+                }
                 return;
             }
         }
@@ -510,6 +539,11 @@ void GUI::init(bool isWakeFromSleep)
 
     M5.Display.fillScreen(TFT_WHITE);
     needsRedraw = true;
+
+    if (backgroundIndexerTaskHandle == nullptr) {
+         xTaskCreate([](void *arg)
+            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+    }
 }
 
 void GUI::renderTaskLoop()
@@ -563,6 +597,152 @@ void GUI::renderTaskLoop()
             ESP_LOGW(TAG, "RenderTask: xQueueReceive returned false");
         }
     }
+}
+
+void GUI::metricsTaskLoop()
+{
+    ESP_LOGI(TAG, "MetricsTask started for book %d", metricsTaskTargetBookId);
+    int targetId = metricsTaskTargetBookId;
+    
+    // Initial check and setup
+    int chapters = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        // Verify we are still on the same book
+        if (currentBook.id != targetId) {
+            xSemaphoreGive(epubMutex);
+            ESP_LOGW(TAG, "MetricsTask: Book changed at start, aborting");
+            metricsTaskHandle = nullptr;
+            vTaskDelete(NULL);
+            return;
+        }
+        chapters = epubLoader.getTotalChapters();
+        xSemaphoreGive(epubMutex);
+    }
+
+    if (chapters <= 0) {
+        ESP_LOGI(TAG, "MetricsTask: No chapters or empty book");
+        metricsTaskHandle = nullptr;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    std::vector<size_t> sums;
+    sums.resize(chapters + 1, 0);
+    size_t cumulative = 0;
+
+    for (int i = 0; i < chapters; ++i)
+    {
+        // Check if book changed
+        if (currentBook.id != targetId) {
+            ESP_LOGW(TAG, "MetricsTask: Book changed during scan, aborting");
+            metricsTaskHandle = nullptr;
+            vTaskDelete(NULL);
+            return;
+        }
+
+        size_t len = 0;
+        if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+            len = epubLoader.getChapterTextLength(i);
+            xSemaphoreGive(epubMutex);
+        }
+        
+        cumulative += len;
+        sums[i + 1] = cumulative;
+        
+        // Yield to let other tasks run
+        vTaskDelay(1);
+    }
+
+    // Update shared state
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        if (currentBook.id == targetId) {
+            chapterPrefixSums = sums;
+            totalBookChars = cumulative;
+            bookMetricsComputed = cumulative > 0;
+        }
+        xSemaphoreGive(epubMutex);
+    }
+    
+    // Save to disk for future use
+    if (bookMetricsComputed && currentBook.id == targetId) {
+        bookIndex.saveBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums);
+    }
+    
+    ESP_LOGI(TAG, "MetricsTask finished. Total chars: %zu", totalBookChars);
+    
+    // Force redraw to show updated footer
+    needsRedraw = true;
+    
+    metricsTaskHandle = nullptr;
+    vTaskDelete(NULL);
+}
+
+void GUI::backgroundIndexerTaskLoop() {
+    ESP_LOGI(TAG, "BgIndexer started");
+    // Wait a bit for system to settle and user to potentially start reading
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    auto books = bookIndex.getBooks();
+    for (const auto& book : books) {
+        if (!book.hasMetrics) {
+            // Check if this book is currently being read (to avoid double calculation)
+            if (currentState == AppState::READER && currentBook.id == book.id) {
+                continue; 
+            }
+
+            // Optimization: Check if metrics file already exists on disk (e.g. from previous firmware version or crash)
+            // This avoids re-calculating if we just lost the index flag but file is there.
+            // We do this check here in the background task, not on main thread.
+            size_t dummyTotal;
+            std::vector<size_t> dummyOffsets;
+            if (bookIndex.loadBookMetrics(book.id, dummyTotal, dummyOffsets)) {
+                 ESP_LOGI(TAG, "BgIndexer: Found existing metrics for book %d, updating index", book.id);
+                 // This will update the in-memory flag and save to index.txt
+                 bookIndex.saveBookMetrics(book.id, dummyTotal, dummyOffsets);
+                 continue;
+            }
+
+            ESP_LOGI(TAG, "BgIndexer: Processing book %d (%s)", book.id, book.title.c_str());
+            
+            EpubLoader localLoader;
+            // Note: We don't take epubMutex here because we are using a separate loader instance
+            // and separate file handle. SPIFFS is thread-safe.
+            
+            if (localLoader.load(book.path.c_str())) {
+                int chapters = localLoader.getTotalChapters();
+                std::vector<size_t> sums;
+                sums.resize(chapters + 1, 0);
+                size_t cumulative = 0;
+                
+                for (int i = 0; i < chapters; ++i) {
+                    // Yield frequently to keep UI responsive
+                    vTaskDelay(1);
+                    
+                    // If user started reading this specific book, abort
+                    if (currentState == AppState::READER && currentBook.id == book.id) {
+                        ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it", book.id);
+                        goto next_book;
+                    }
+
+                    size_t len = localLoader.getChapterTextLength(i);
+                    cumulative += len;
+                    sums[i+1] = cumulative;
+                }
+                
+                bookIndex.saveBookMetrics(book.id, cumulative, sums);
+                localLoader.close();
+            } else {
+                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d", book.id);
+            }
+            
+            next_book:
+            vTaskDelay(pdMS_TO_TICKS(100)); // Rest between books
+        }
+    }
+    
+    ESP_LOGI(TAG, "BgIndexer finished");
+    backgroundIndexerTaskHandle = nullptr;
+    vTaskDelete(NULL);
 }
 
 void GUI::setWifiStatus(bool connected, int rssi)
@@ -745,40 +925,68 @@ void GUI::drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage)
 
     const int footerY = gfx->height() - 50;
     gfx->setTextSize(1.0f); // Reduced font size
-    gfx->setCursor(16, footerY);
 
     int chIdx = 0;
     size_t chSize = 1;
+    size_t charsBeforeChapter = 0;
+    bool hasBookMetrics = bookMetricsComputed && !chapterPrefixSums.empty();
     if (xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
         chIdx = epubLoader.getCurrentChapterIndex();
         chSize = epubLoader.getChapterSize();
+        if (hasBookMetrics && (size_t)chIdx < chapterPrefixSums.size())
+        {
+            charsBeforeChapter = chapterPrefixSums[chIdx];
+        }
         xSemaphoreGive(epubMutex);
     }
     if (chSize == 0)
         chSize = 1;
 
-    gfx->printf("Ch %d - %.1f%%", chIdx + 1,
-                (float)pageOffset / chSize * 100.0f);
-
     // Page numbers based on the page we just rendered
     size_t pageChars = charsOnPage > 0 ? charsOnPage : lastPageChars;
-    int current = 1;
-    int total = 1;
-    if (pageChars > 0)
-    {
-        current = (int)(pageOffset / pageChars) + 1;
-        total = (int)((chSize + pageChars - 1) / pageChars);
-    }
-    else
+    if (pageChars == 0)
     {
         PageInfo p = calculatePageInfo();
-        current = p.current;
-        total = p.total;
+        (void)p;
+        pageChars = lastPageChars;
     }
+    if (pageChars == 0)
+        pageChars = 1;
+
+    float chapterPercent = (float)pageOffset / chSize * 100.0f;
+    if (chapterPercent > 100.0f)
+        chapterPercent = 100.0f;
+
+    size_t effectiveTotalChars = hasBookMetrics && totalBookChars > 0 ? totalBookChars : chSize;
+    size_t bookOffset = charsBeforeChapter + pageOffset;
+    if (effectiveTotalChars == 0)
+        effectiveTotalChars = 1;
+    if (bookOffset > effectiveTotalChars)
+        bookOffset = effectiveTotalChars;
+
+    float bookPercent = (float)bookOffset * 100.0f / (float)effectiveTotalChars;
+    if (bookPercent > 100.0f)
+        bookPercent = 100.0f;
+
+    size_t bookPageTotalSize = (effectiveTotalChars + pageChars - 1) / pageChars;
+    int bookPageTotal = bookPageTotalSize > 0 ? (int)bookPageTotalSize : 1;
+    int bookPageCurrent = (int)(bookOffset / pageChars) + 1;
+    if (bookPageCurrent > bookPageTotal)
+        bookPageCurrent = bookPageTotal;
+
+    char totalPercentBuf[24];
+    snprintf(totalPercentBuf, sizeof(totalPercentBuf), "%.1f%%", bookPercent);
+    gfx->setTextDatum(textdatum_t::top_left);
+    gfx->drawString(totalPercentBuf, 16, footerY);
+
+    char chapterBuf[32];
+    snprintf(chapterBuf, sizeof(chapterBuf), "Ch %d - %.1f%%", chIdx + 1, chapterPercent);
+    gfx->setTextDatum(textdatum_t::top_center);
+    gfx->drawString(chapterBuf, gfx->width() / 2, footerY);
 
     char pageBuf[24];
-    snprintf(pageBuf, sizeof(pageBuf), "Pg %d/%d", current, total);
+    snprintf(pageBuf, sizeof(pageBuf), "Pg %d/%d", bookPageCurrent, bookPageTotal);
     gfx->setTextDatum(textdatum_t::top_right);
     gfx->drawString(pageBuf, gfx->width() - 16, footerY);
     gfx->setTextDatum(textdatum_t::top_left);
@@ -1198,6 +1406,50 @@ GUI::PageInfo GUI::calculatePageInfo()
         info.current = lastPageTotal;
     info.total = lastPageTotal;
     return info;
+}
+
+void GUI::computeBookMetrics()
+{
+    if (!epubMutex)
+        return;
+
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
+        computeBookMetricsLocked();
+        xSemaphoreGive(epubMutex);
+    }
+}
+
+void GUI::computeBookMetricsLocked()
+{
+    bookMetricsComputed = false;
+    totalBookChars = 0;
+    chapterPrefixSums.clear();
+
+    int chapters = epubLoader.getTotalChapters();
+    if (chapters <= 0)
+        return;
+
+    chapterPrefixSums.resize(chapters + 1, 0);
+    size_t cumulative = 0;
+    TickType_t lastYield = xTaskGetTickCount();
+    for (int i = 0; i < chapters; ++i)
+    {
+        size_t len = epubLoader.getChapterTextLength(i);
+        cumulative += len;
+        chapterPrefixSums[i + 1] = cumulative;
+
+        // Avoid starving IDLE/WDT during long scans of many chapters
+        TickType_t now = xTaskGetTickCount();
+        if (now - lastYield >= pdMS_TO_TICKS(50))
+        {
+            vTaskDelay(1);
+            lastYield = xTaskGetTickCount();
+        }
+    }
+
+    totalBookChars = cumulative;
+    bookMetricsComputed = cumulative > 0;
 }
 
 void GUI::updateNextPrevCanvases()
@@ -1870,6 +2122,9 @@ void GUI::handleTouch()
                     clickPending = false; // Cancel any pending
                     currentState = AppState::LIBRARY;
                     epubLoader.close();
+                    bookMetricsComputed = false;
+                    totalBookChars = 0;
+                    chapterPrefixSums.clear();
                     needsRedraw = true;
                     justWokeUp = false;
                     return;
@@ -2087,6 +2342,10 @@ bool GUI::openBookById(int id)
     if (book.id == 0)
         return false;
 
+    bookMetricsComputed = false;
+    totalBookChars = 0;
+    chapterPrefixSums.clear();
+
     // Stop any background rendering
     abortRender = true;
 
@@ -2121,6 +2380,21 @@ bool GUI::openBookById(int id)
         }
     }
     isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
+    
+    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums)) {
+        bookMetricsComputed = true;
+        ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
+    } else {
+        // Kill any existing metrics task (e.g. from previous book)
+        if (metricsTaskHandle != nullptr) {
+            vTaskDelete(metricsTaskHandle);
+            metricsTaskHandle = nullptr;
+        }
+        // Spawn new task
+        metricsTaskTargetBookId = currentBook.id;
+        xTaskCreate([](void *arg)
+                { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+    }
 
     // Release mutex
     xSemaphoreGive(epubMutex);
@@ -2150,6 +2424,12 @@ void GUI::refreshLibrary()
     if (currentState == AppState::LIBRARY)
     {
         needsRedraw = true;
+    }
+
+    // Trigger background indexer if not running to process any new books
+    if (backgroundIndexerTaskHandle == nullptr) {
+         xTaskCreate([](void *arg)
+            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
     }
 }
 

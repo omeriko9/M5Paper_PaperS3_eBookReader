@@ -6,9 +6,13 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cctype>
+#include <limits>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "EPUB";
 static const int PAGE_SIZE = 800; // Characters per page (approx)
+static const size_t INVALID_CHAPTER_LENGTH = std::numeric_limits<size_t>::max();
 
 struct SkipCheckContext {
     std::string buffer;
@@ -66,6 +70,8 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex) {
         close();
         return false;
     }
+
+    chapterTextLengths.assign(spine.size(), INVALID_CHAPTER_LENGTH);
     
     currentChapterIndex = 0;
     
@@ -136,6 +142,7 @@ void EpubLoader::close() {
         isOpen = false;
     }
     spine.clear();
+    chapterTextLengths.clear();
     currentChapterContent.clear();
     currentChapterContent.shrink_to_fit();
 }
@@ -276,6 +283,86 @@ struct LoadChapterContext {
     std::string currentTag;
 };
 
+struct ChapterLengthContext {
+    size_t length = 0;
+    bool inTag = false;
+    bool lastSpace = true;
+    std::string currentTag;
+    size_t processedSinceYield = 0;
+    TickType_t lastYieldTick = 0;
+};
+
+static void appendSeparatorIfNeeded(ChapterLengthContext* ctx) {
+    if (!ctx) return;
+    if (!ctx->lastSpace) {
+        ctx->length++;
+        ctx->lastSpace = true;
+    }
+}
+
+static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
+    ChapterLengthContext* context = static_cast<ChapterLengthContext*>(ctx);
+    if (!context) return false;
+
+    for (size_t i = 0; i < len; ++i) {
+        char c = data[i];
+        if (c == '<') {
+            context->inTag = true;
+            context->currentTag.clear();
+            continue;
+        }
+
+        if (context->inTag) {
+            if (c == '>') {
+                context->inTag = false;
+
+                std::string& tag = context->currentTag;
+                bool isBlock = false;
+                if (tag == "p" || tag == "/p" || tag.find("p ") == 0) isBlock = true;
+                else if (tag == "div" || tag == "/div" || tag.find("div ") == 0) isBlock = true;
+                else if (tag == "br" || tag == "br/" || tag.find("br ") == 0) isBlock = true;
+                else if (tag == "li" || tag == "/li") isBlock = true;
+                else if (tag.length() >= 2 && (tag[0] == 'h' || (tag[0] == '/' && tag[1] == 'h'))) isBlock = true;
+
+                if (isBlock) {
+                    appendSeparatorIfNeeded(context);
+                } else if (tag == "img" || tag.find("img ") == 0) {
+                    context->length += 7; // "[Image]"
+                    context->lastSpace = false;
+                }
+            } else {
+                context->currentTag += c;
+            }
+            continue;
+        }
+
+        // Outside of tag
+        if (c == '\n' || c == '\r') {
+            c = ' ';
+        }
+
+        if (c == ' ') {
+            if (!context->lastSpace) {
+                context->length++;
+                context->lastSpace = true;
+            }
+        } else {
+            context->length++;
+            context->lastSpace = false;
+        }
+
+        // Give FreeRTOS a chance to run idle/other tasks during long scans
+        context->processedSinceYield++;
+        TickType_t now = xTaskGetTickCount();
+        if (context->processedSinceYield >= 2048 || (now - context->lastYieldTick) >= pdMS_TO_TICKS(20)) {
+            vTaskDelay(1);
+            context->processedSinceYield = 0;
+            context->lastYieldTick = xTaskGetTickCount();
+        }
+    }
+    return true;
+}
+
 static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
     LoadChapterContext* context = (LoadChapterContext*)ctx;
     for (size_t i = 0; i < len; ++i) {
@@ -372,10 +459,13 @@ void EpubLoader::loadChapter(int index) {
     // Stream process the HTML file directly from ZIP to text
     // This avoids loading the full HTML into memory
     zip.extractFile(spine[index], loadChapterCallback, ctx);
-    
+
     delete ctx;
 
     currentChapterSize = currentChapterContent.length();
+    if (chapterTextLengths.size() == spine.size()) {
+        chapterTextLengths[currentChapterIndex] = currentChapterSize;
+    }
     
     ESP_LOGI(TAG, "Loaded chapter %d, size: %u", index, (unsigned)currentChapterSize);
 }
@@ -395,6 +485,30 @@ std::string EpubLoader::getText(size_t offset, size_t length) {
     }
     
     return currentChapterContent.substr(offset, length);
+}
+
+size_t EpubLoader::getChapterTextLength(int index) {
+    if (index < 0 || index >= spine.size()) return 0;
+    if (!isOpen) return 0;
+
+    if (chapterTextLengths.size() != spine.size()) {
+        chapterTextLengths.assign(spine.size(), INVALID_CHAPTER_LENGTH);
+    }
+
+    if (index == currentChapterIndex && currentChapterSize > 0) {
+        chapterTextLengths[index] = currentChapterSize;
+        return currentChapterSize;
+    }
+
+    if (chapterTextLengths[index] != INVALID_CHAPTER_LENGTH) {
+        return chapterTextLengths[index];
+    }
+
+    ChapterLengthContext ctx;
+    ctx.lastYieldTick = xTaskGetTickCount();
+    zip.extractFile(spine[index], chapterLengthCallback, &ctx);
+    chapterTextLengths[index] = ctx.length;
+    return ctx.length;
 }
 
 bool EpubLoader::nextChapter() {

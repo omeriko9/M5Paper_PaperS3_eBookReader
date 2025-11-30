@@ -16,6 +16,7 @@ public:
     
     bool nextChapter();
     bool prevChapter();
+    size_t getChapterTextLength(int index);
     
     int getCurrentChapterIndex() const { return currentChapterIndex; }
     int getTotalChapters() const { return spine.size(); }
@@ -39,6 +40,7 @@ private:
     int currentChapterIndex = 0;
     int currentTextOffset = 0;
     size_t currentChapterSize = 0;
+    std::vector<size_t> chapterTextLengths;
     
     // Memory cache for current chapter
     std::string currentChapterContent;
