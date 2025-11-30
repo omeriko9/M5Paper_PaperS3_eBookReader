@@ -1,7 +1,9 @@
 #pragma once
 #include <M5Unified.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 #include "book_index.h"
-#include <vector>
 
 enum class AppState {
     LIBRARY,
@@ -10,6 +12,12 @@ enum class AppState {
     SETTINGS,
     WIFI_SCAN,
     WIFI_PASSWORD
+};
+
+struct RenderRequest {
+    size_t offset;
+    M5Canvas* target;
+    bool isNext; // true for next, false for prev
 };
 
 class GUI {
@@ -37,6 +45,9 @@ public:
     void setWebServerEnabled(bool enabled);
     bool isWifiEnabled() const { return wifiEnabled; }
 
+    // Public for the task to access
+    void renderTaskLoop();
+
 private:
     AppState currentState = AppState::LIBRARY;
     AppState previousState = AppState::LIBRARY; // For returning from settings
@@ -57,6 +68,14 @@ private:
     bool prevCanvasValid = false;
     size_t nextCanvasOffset = 0;
     size_t prevCanvasOffset = 0;
+    size_t nextCanvasCharCount = 0;
+    size_t prevCanvasCharCount = 0;
+    
+    // Background Rendering
+    TaskHandle_t renderTaskHandle = nullptr;
+    QueueHandle_t renderQueue = nullptr;
+    SemaphoreHandle_t epubMutex = nullptr;
+    volatile bool abortRender = false;
     
     // Library State
     int libraryPage = 0;
@@ -88,7 +107,8 @@ private:
     std::string wifiPasswordInput;
     std::string selectedSSID;
 
-    void drawStatusBar();
+    void drawStatusBar(LovyanGFX* target = nullptr);
+    void drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage);
     void drawSleepSymbol(const char* symbol);
     void drawLibrary();
     void drawReader(bool flush = true);
@@ -111,7 +131,7 @@ private:
     void goToSleep();
     
     size_t drawPageContent(bool draw);
-    size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas* target = nullptr);
+    size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas* target = nullptr, volatile bool* abort = nullptr);
     PageInfo calculatePageInfo();
     void resetPageInfoCache();
     void updateNextPrevCanvases();

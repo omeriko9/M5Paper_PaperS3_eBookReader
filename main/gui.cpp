@@ -91,12 +91,22 @@ static SettingsLayout computeSettingsLayout()
 }
 
 int GUI::getCurrentChapterIndex() const {
-    return epubLoader.getCurrentChapterIndex();
+    int idx = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        idx = epubLoader.getCurrentChapterIndex();
+        xSemaphoreGive(epubMutex);
+    }
+    return idx;
 }
 
 size_t GUI::getCurrentChapterSize() const {
     if (currentState != AppState::READER) return 0;
-    return epubLoader.getChapterSize();
+    size_t size = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        size = epubLoader.getChapterSize();
+        xSemaphoreGive(epubMutex);
+    }
+    return size;
 }
 
 size_t GUI::getCurrentOffset() const {
@@ -348,6 +358,13 @@ void GUI::init(bool isWakeFromSleep)
 {
     justWokeUp = isWakeFromSleep;
 
+    // Initialize background rendering
+    epubMutex = xSemaphoreCreateMutex();
+    renderQueue = xQueueCreate(5, sizeof(RenderRequest));
+    xTaskCreatePinnedToCore([](void* arg) {
+        static_cast<GUI*>(arg)->renderTaskLoop();
+    }, "RenderTask", 8192, this, 1, &renderTaskHandle, 0); // Core 0
+
     // Initialize NVS
     // Already done in main, but safe to call again or skip
     if (!isWakeFromSleep) {
@@ -368,12 +385,58 @@ void GUI::init(bool isWakeFromSleep)
 
     M5.Display.setTextColor(TFT_BLACK);
 
-    // Skip canvas sprite creation - they consistently fail due to memory constraints
-    // and aren't necessary for the restore path which renders directly to display.
-    // For page turns, we can use partial refresh or accept a brief redraw delay.
-    // This also eliminates the error messages on startup.
+    // Create sprites for buffering
+    // Use 2bpp (4 levels; effectively black/white) to save RAM.
+    // M5Paper is 960x540 -> ~129KB per sprite.
+    const int bufferColorDepth = 2;
+    const int bufW = M5.Display.width();
+    const int bufH = M5.Display.height();
+    const size_t bytesPerSprite = ((size_t)bufW * bufH * bufferColorDepth + 7) / 8;
+    const size_t freeBeforeDefault = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    const size_t freeBeforeSPIRAM  = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t largestDefault    = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    const size_t largestSPIRAM     = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+
+    canvasNext.setColorDepth(bufferColorDepth);
+    canvasPrev.setColorDepth(bufferColorDepth);
+    canvasNext.setPsram(true);
+    canvasPrev.setPsram(true);
     
-    // Mark canvases as invalid so rendering path knows to draw directly
+    ESP_LOGI(TAG, "Attempting to create buffer sprites (w=%d h=%d depth=%dbpp ~%u bytes each, PSRAM preferred). Free heap: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
+             bufW, bufH, bufferColorDepth, (unsigned)bytesPerSprite,
+             (unsigned)freeBeforeDefault, (unsigned)freeBeforeSPIRAM,
+             (unsigned)largestDefault, (unsigned)largestSPIRAM);
+    
+    if (canvasNext.createSprite(bufW, bufH)) {
+        ESP_LOGI(TAG, "canvasNext created successfully. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    } else {
+        ESP_LOGE(TAG, "Failed to create canvasNext. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u (needed ~%u bytes)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                 (unsigned)bytesPerSprite);
+    }
+
+    if (canvasPrev.createSprite(bufW, bufH)) {
+        ESP_LOGI(TAG, "canvasPrev created successfully. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    } else {
+        ESP_LOGE(TAG, "Failed to create canvasPrev. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u (needed ~%u bytes)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                 (unsigned)bytesPerSprite);
+    }
+
     nextCanvasValid = false;
     prevCanvasValid = false;
 
@@ -427,6 +490,48 @@ void GUI::init(bool isWakeFromSleep)
 
     M5.Display.fillScreen(TFT_WHITE);
     needsRedraw = true;
+}
+
+void GUI::renderTaskLoop() {
+    ESP_LOGI(TAG, "RenderTask loop started");
+    RenderRequest req;
+    while (true) {
+        if (xQueueReceive(renderQueue, &req, portMAX_DELAY)) {
+            ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
+            
+            // Clear abort flag before starting
+            abortRender = false;
+            
+            // Note: drawPageContentAt handles locking internally for epubLoader access.
+            // We don't lock here to avoid deadlock (since drawPageContentAt takes the lock)
+            // and to allow the main thread to interrupt (abort) if needed.
+            
+            req.target->fillScreen(TFT_WHITE);
+            size_t chars = drawPageContentAt(req.offset, true, req.target, &abortRender);
+            
+            if (!abortRender) {
+                // Overlay status/footers on the offscreen target so we can push once without extra redraw.
+                drawStatusBar(req.target);
+                drawFooter(req.target, req.offset, chars);
+
+                if (req.isNext) {
+                    nextCanvasCharCount = chars;
+                    nextCanvasOffset = req.offset;
+                    nextCanvasValid = true;
+                    ESP_LOGI(TAG, "RenderTask: Next page rendered. Offset=%zu Chars=%zu", nextCanvasOffset, nextCanvasCharCount);
+                } else {
+                    prevCanvasCharCount = chars;
+                    prevCanvasOffset = req.offset;
+                    prevCanvasValid = true;
+                    ESP_LOGI(TAG, "RenderTask: Prev page rendered. Offset=%zu Chars=%zu", prevCanvasOffset, prevCanvasCharCount);
+                }
+            } else {
+                ESP_LOGW(TAG, "RenderTask: Aborted");
+            }
+        } else {
+            ESP_LOGW(TAG, "RenderTask: xQueueReceive returned false");
+        }
+    }
 }
 
 void GUI::setWifiStatus(bool connected, int rssi)
@@ -533,33 +638,35 @@ void GUI::update()
     }
 }
 
-void GUI::drawStatusBar()
+void GUI::drawStatusBar(LovyanGFX* target)
 {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+
     // Use system font for status bar to ensure it fits
-    M5.Display.setFont(&lgfx::v1::fonts::Font2);
-    M5.Display.setTextSize(1.6f); // Larger, easier to read
+    gfx->setFont(&lgfx::v1::fonts::Font2);
+    gfx->setTextSize(1.6f); // Larger, easier to read
 
     // White background, black text, black separator line
-    M5.Display.fillRect(0, 0, M5.Display.width(), STATUS_BAR_HEIGHT, TFT_WHITE);
-    M5.Display.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, M5.Display.width(), TFT_BLACK);
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    gfx->fillRect(0, 0, gfx->width(), STATUS_BAR_HEIGHT, TFT_WHITE);
+    gfx->drawFastHLine(0, STATUS_BAR_HEIGHT - 1, gfx->width(), TFT_BLACK);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
     
     const int centerY = STATUS_BAR_HEIGHT / 2;
 
     // Time
-    M5.Display.setTextDatum(textdatum_t::middle_left);
+    gfx->setTextDatum(textdatum_t::middle_left);
     auto dt = M5.Rtc.getDateTime();
     char buf[32];
     snprintf(buf, sizeof(buf), "%02d:%02d", dt.time.hours, dt.time.minutes);
-    M5.Display.drawString(buf, 10, centerY);
+    gfx->drawString(buf, 10, centerY);
 
     // Battery (Right aligned)
-    M5.Display.setTextDatum(textdatum_t::middle_right);
+    gfx->setTextDatum(textdatum_t::middle_right);
     int bat = M5.Power.getBatteryLevel();
     snprintf(buf, sizeof(buf), "%d%%", bat);
-    int batteryX = M5.Display.width() - 10;
-    int batteryTextWidth = M5.Display.textWidth(buf);
-    M5.Display.drawString(buf, batteryX, centerY);
+    int batteryX = gfx->width() - 10;
+    int batteryTextWidth = gfx->textWidth(buf);
+    gfx->drawString(buf, batteryX, centerY);
 
     // Wifi (Left of Battery)
     if (wifiConnected)
@@ -572,32 +679,77 @@ void GUI::drawStatusBar()
     }
     // Give enough space for battery reading
     int wifiX = batteryX - batteryTextWidth - 12;
-    M5.Display.drawString(buf, wifiX, centerY);
+    gfx->drawString(buf, wifiX, centerY);
 
     // Restore font
     if (currentFont == "Default")
     {
-        M5.Display.setFont(&lgfx::v1::fonts::Font2);
+        gfx->setFont(&lgfx::v1::fonts::Font2);
     }
     else
     {
         if (currentFont == "Hebrew" && !fontDataHebrew.empty())
         {
-            M5.Display.loadFont(fontDataHebrew.data());
+            gfx->loadFont(fontDataHebrew.data());
         }
         else if (!fontData.empty())
         {
-            M5.Display.loadFont(fontData.data());
+            gfx->loadFont(fontData.data());
         }
         else
         {
-            M5.Display.setFont(&lgfx::v1::fonts::Font2);
+            gfx->setFont(&lgfx::v1::fonts::Font2);
         }
     }
 
     // Reset datum to default for other drawing functions
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    M5.Display.setTextColor(TFT_BLACK); // Transparent background for the rest of the UI
+    gfx->setTextDatum(textdatum_t::top_left);
+    gfx->setTextColor(TFT_BLACK); // Transparent background for the rest of the UI
+}
+
+void GUI::drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage)
+{
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+
+    const int footerY = gfx->height() - 50;
+    gfx->setTextSize(1.0f); // Reduced font size
+    gfx->setCursor(16, footerY);
+    
+    int chIdx = 0;
+    size_t chSize = 1;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        chIdx = epubLoader.getCurrentChapterIndex();
+        chSize = epubLoader.getChapterSize();
+        xSemaphoreGive(epubMutex);
+    }
+    if (chSize == 0) chSize = 1;
+
+    gfx->printf("Ch %d - %.1f%%", chIdx + 1,
+                (float)pageOffset / chSize * 100.0f);
+
+    // Page numbers based on the page we just rendered
+    size_t pageChars = charsOnPage > 0 ? charsOnPage : lastPageChars;
+    int current = 1;
+    int total = 1;
+    if (pageChars > 0) {
+        current = (int)(pageOffset / pageChars) + 1;
+        total = (int)((chSize + pageChars - 1) / pageChars);
+    } else {
+        PageInfo p = calculatePageInfo();
+        current = p.current;
+        total = p.total;
+    }
+
+    char pageBuf[24];
+    snprintf(pageBuf, sizeof(pageBuf), "Pg %d/%d", current, total);
+    gfx->setTextDatum(textdatum_t::top_right);
+    gfx->drawString(pageBuf, gfx->width() - 16, footerY);
+    gfx->setTextDatum(textdatum_t::top_left);
+
+    // Restore primary font size
+    gfx->setTextSize(fontSize);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
 }
 
 void GUI::drawLibrary()
@@ -705,7 +857,7 @@ size_t GUI::drawPageContent(bool draw)
     return drawPageContentAt(currentTextOffset, draw, nullptr);
 }
 
-size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
+size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, volatile bool* abort)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
     // ESP_LOGI(TAG, "drawPageContentAt: offset=%zu, draw=%d, target=%p, w=%d, h=%d", startOffset, draw, target, gfx->width(), gfx->height());
@@ -731,13 +883,20 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
     int lineHeight = gfx->fontHeight() * 1.4; // More breathing room
 
     // Fetch a large chunk
-    std::string text = epubLoader.getText(startOffset, 3000);
+    std::string text;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        text = epubLoader.getText(startOffset, 3000);
+        xSemaphoreGive(epubMutex);
+    }
     ESP_LOGI(TAG, "Fetched text at offset %zu, length: %zu", startOffset, text.length());
     if (text.empty())
     {
         ESP_LOGW(TAG, "No text fetched at offset %zu", startOffset);
         return 0;
     }
+
+    // Ensure consistent black text on white background
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
 
     if (draw)
         gfx->startWrite();
@@ -842,6 +1001,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target)
     int linesDrawn = 0;
     while (i < text.length())
     {
+        // Check abort flag
+        if (abort && *abort) {
+            if (draw) gfx->endWrite();
+            return 0;
+        }
+
         // Find next word boundary
         size_t nextSpace = text.find_first_of(" \n", i);
         if (nextSpace == std::string::npos)
@@ -959,7 +1124,12 @@ GUI::PageInfo GUI::calculatePageInfo()
         }
     }
 
-    size_t chapterSize = epubLoader.getChapterSize();
+    size_t chapterSize = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        chapterSize = epubLoader.getChapterSize();
+        xSemaphoreGive(epubMutex);
+    }
+
     if (lastPageChars > 0)
     {
         lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
@@ -979,32 +1149,72 @@ GUI::PageInfo GUI::calculatePageInfo()
 
 void GUI::updateNextPrevCanvases()
 {
-    // Update Next
-    size_t charsOnCurrent = drawPageContentAt(currentTextOffset, false);
-    nextCanvasOffset = currentTextOffset + charsOnCurrent;
+    // Abort any ongoing background render
+    abortRender = true;
+    ESP_LOGI(TAG, "updateNextPrevCanvases: lastPageChars=%zu nextValid=%d prevValid=%d nextOffset=%zu prevOffset=%zu",
+             lastPageChars, nextCanvasValid, prevCanvasValid, nextCanvasOffset, prevCanvasOffset);
 
-    if (nextCanvasOffset < epubLoader.getChapterSize() && canvasNext.width() > 0)
+    // Update Next
+    size_t charsOnCurrent = lastPageChars;
+    size_t newNextOffset = currentTextOffset + charsOnCurrent;
+
+    size_t chSize = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        chSize = epubLoader.getChapterSize();
+        xSemaphoreGive(epubMutex);
+    }
+
+    if (newNextOffset < chSize && canvasNext.width() > 0)
     {
-        canvasNext.fillScreen(TFT_WHITE);
-        drawPageContentAt(nextCanvasOffset, true, &canvasNext);
-        nextCanvasValid = true;
+        // Only redraw if invalid or offset changed
+        if (!nextCanvasValid || nextCanvasOffset != newNextOffset) {
+             RenderRequest req;
+             req.offset = newNextOffset;
+             req.target = &canvasNext;
+             req.isNext = true;
+             BaseType_t sent = xQueueSend(renderQueue, &req, 0);
+             if (sent == pdTRUE) {
+                 ESP_LOGI(TAG, "Queued next canvas render: offset=%zu", newNextOffset);
+             } else {
+                 ESP_LOGW(TAG, "Failed to queue next canvas render: offset=%zu (queue full?)", newNextOffset);
+             }
+        }
+        else {
+            ESP_LOGI(TAG, "Next canvas already valid for offset=%zu", newNextOffset);
+        }
     }
     else
     {
         nextCanvasValid = false;
+        ESP_LOGI(TAG, "Skipping next canvas render. newNextOffset=%zu chSize=%zu canvasWidth=%d",
+                 newNextOffset, chSize, canvasNext.width());
     }
 
     // Update Prev
     if (!pageHistory.empty() && canvasPrev.width() > 0)
     {
-        prevCanvasOffset = pageHistory.back();
-        canvasPrev.fillScreen(TFT_WHITE);
-        drawPageContentAt(prevCanvasOffset, true, &canvasPrev);
-        prevCanvasValid = true;
+        size_t newPrevOffset = pageHistory.back();
+        if (!prevCanvasValid || prevCanvasOffset != newPrevOffset) {
+             RenderRequest req;
+             req.offset = newPrevOffset;
+             req.target = &canvasPrev;
+             req.isNext = false;
+             BaseType_t sent = xQueueSend(renderQueue, &req, 0);
+             if (sent == pdTRUE) {
+                 ESP_LOGI(TAG, "Queued prev canvas render: offset=%zu", newPrevOffset);
+             } else {
+                 ESP_LOGW(TAG, "Failed to queue prev canvas render: offset=%zu (queue full?)", newPrevOffset);
+             }
+        }
+        else {
+            ESP_LOGI(TAG, "Prev canvas already valid for offset=%zu", newPrevOffset);
+        }
     }
     else
     {
         prevCanvasValid = false;
+        ESP_LOGI(TAG, "Skipping prev canvas render. pageHistory empty=%d canvasWidth=%d",
+                 pageHistory.empty(), canvasPrev.width());
     }
 }
 
@@ -1016,60 +1226,58 @@ void GUI::drawReader(bool flush)
     M5.Display.waitDisplay();
 
     bool drawnFromBuffer = false;
+    size_t charsDrawn = 0;
 
     // Only use buffers if they are valid (width > 0)
     if (nextCanvasValid && nextCanvasOffset == currentTextOffset && canvasNext.width() > 0)
     {
         ESP_LOGI(TAG, "Drawing from next buffer");
         canvasNext.pushSprite(&M5.Display, 0, 0);
+        charsDrawn = nextCanvasCharCount;
         drawnFromBuffer = true;
     }
     else if (prevCanvasValid && prevCanvasOffset == currentTextOffset && canvasPrev.width() > 0)
     {
         ESP_LOGI(TAG, "Drawing from prev buffer");
         canvasPrev.pushSprite(&M5.Display, 0, 0);
+        charsDrawn = prevCanvasCharCount;
         drawnFromBuffer = true;
+    }
+    else {
+        ESP_LOGI(TAG, "Buffer not used. nextValid=%d nextOffset=%zu prevValid=%d prevOffset=%zu canvasW=%d",
+                 nextCanvasValid, nextCanvasOffset, prevCanvasValid, prevCanvasOffset, canvasNext.width());
     }
 
     if (!drawnFromBuffer)
     {
         ESP_LOGI(TAG, "Drawing to current buffer");
         M5.Display.fillScreen(TFT_WHITE);
-        drawPageContentAt(currentTextOffset, true, nullptr);
+        // Capture the char count directly from the draw call
+        charsDrawn = drawPageContentAt(currentTextOffset, true, nullptr);
     }
 
-    // Draw Status Bar (Fresh)
-    drawStatusBar();
-
-    // Get chars drawn from the actual drawing (no redundant measurement)
-    size_t charsDrawn = lastPageChars; // Use cached value if drawing from buffer
+    // Draw Status Bar (Fresh). If we rendered from a buffer, prefer drawing the bar onto the buffer during render task.
     if (!drawnFromBuffer) {
-        // If we drew fresh, we need to measure
-        charsDrawn = drawPageContentAt(currentTextOffset, false);
-        ESP_LOGI(TAG, "Chars drawn: %zu", charsDrawn);
-        if (charsDrawn > 0)
-        {
-            lastPageChars = charsDrawn;
-            size_t chapterSize = epubLoader.getChapterSize();
-            lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
-            if (lastPageTotal < 1)
-                lastPageTotal = 1;
-        }
+        drawStatusBar();
     }
 
-    PageInfo pageInfo = calculatePageInfo();
+    // Update cached char count
+    if (charsDrawn > 0)
+    {
+        lastPageChars = charsDrawn;
+        size_t chapterSize = 0;
+        if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+            chapterSize = epubLoader.getChapterSize();
+            xSemaphoreGive(epubMutex);
+        }
+        lastPageTotal = static_cast<int>((chapterSize + lastPageChars - 1) / lastPageChars);
+        if (lastPageTotal < 1)
+            lastPageTotal = 1;
+    }
 
-    const int footerY = M5.Display.height() - 50;
-    M5.Display.setTextSize(1.0f); // Reduced font size
-    M5.Display.setCursor(16, footerY);
-    M5.Display.printf("Ch %d - %.1f%%", epubLoader.getCurrentChapterIndex() + 1,
-                      (float)currentTextOffset / epubLoader.getChapterSize() * 100.0f);
-
-    char pageBuf[24];
-    snprintf(pageBuf, sizeof(pageBuf), "Pg %d/%d", pageInfo.current, pageInfo.total);
-    M5.Display.setTextDatum(textdatum_t::top_right);
-    M5.Display.drawString(pageBuf, M5.Display.width() - 16, footerY);
-    M5.Display.setTextDatum(textdatum_t::top_left);
+    if (!drawnFromBuffer) {
+        drawFooter(&M5.Display, currentTextOffset, charsDrawn);
+    }
 
     if (flush) {
         ESP_LOGI(TAG, "Calling M5.Display.display()");
@@ -1094,7 +1302,12 @@ void GUI::drawSleepSymbol(const char *symbol)
 void GUI::goToSleep()
 {
     // Save progress
-    bookIndex.updateProgress(currentBook.id, epubLoader.getCurrentChapterIndex(), currentTextOffset);
+    int chIdx = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        chIdx = epubLoader.getCurrentChapterIndex();
+        xSemaphoreGive(epubMutex);
+    }
+    bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
     // Ensure we always remember the last-opened book for deep sleep wake restores
     {
         nvs_handle_t my_handle;
@@ -1318,22 +1531,22 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
 
     if (isDouble) {
         ESP_LOGI(TAG, "Double click detected! Next=%d", next);
-        if (next) {
-            // Next Chapter
-            if (epubLoader.nextChapter()) {
-                currentTextOffset = 0;
-                pageHistory.clear();
-                resetPageInfoCache();
-                needsRedraw = true;
+        abortRender = true;
+        bool changed = false;
+        if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+            if (next) {
+                changed = epubLoader.nextChapter();
+            } else {
+                changed = epubLoader.prevChapter();
             }
-        } else {
-            // Prev Chapter
-            if (epubLoader.prevChapter()) {
-                currentTextOffset = 0;
-                pageHistory.clear();
-                resetPageInfoCache();
-                needsRedraw = true;
-            }
+            xSemaphoreGive(epubMutex);
+        }
+
+        if (changed) {
+            currentTextOffset = 0;
+            pageHistory.clear();
+            resetPageInfoCache();
+            needsRedraw = true;
         }
     } else {
         // Single Click - Page Turn
@@ -1343,12 +1556,24 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
             if (pageHistory.empty())
             {
                 // Try prev chapter
-                if (epubLoader.prevChapter())
+                bool changed = false;
+                abortRender = true;
+                if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                    changed = epubLoader.prevChapter();
+                    xSemaphoreGive(epubMutex);
+                }
+
+                if (changed)
                 {
                     // We want to go to the LAST page of the previous chapter.
                     // To do this, we must simulate paging through the entire chapter
                     // to build the pageHistory and find the last offset.
-                    size_t chapterSize = epubLoader.getChapterSize();
+                    size_t chapterSize = 0;
+                    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                        chapterSize = epubLoader.getChapterSize();
+                        xSemaphoreGive(epubMutex);
+                    }
+
                     if (chapterSize == 0) {
                         currentTextOffset = 0;
                         pageHistory.clear();
@@ -1392,11 +1617,29 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
         else
         {
             // Next Page
-            size_t charsOnPage = drawPageContent(false);
-            if (currentTextOffset + charsOnPage >= epubLoader.getChapterSize())
+            // Use cached char count if available to avoid re-measuring
+            size_t charsOnPage = lastPageChars;
+            if (charsOnPage == 0) {
+                charsOnPage = drawPageContent(false);
+            }
+            
+            size_t chSize = 0;
+            if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                chSize = epubLoader.getChapterSize();
+                xSemaphoreGive(epubMutex);
+            }
+
+            if (currentTextOffset + charsOnPage >= chSize)
             {
                 // Next chapter
-                if (epubLoader.nextChapter())
+                bool changed = false;
+                abortRender = true;
+                if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                    changed = epubLoader.nextChapter();
+                    xSemaphoreGive(epubMutex);
+                }
+
+                if (changed)
                 {
                     currentTextOffset = 0;
                     pageHistory.clear();
@@ -1632,7 +1875,12 @@ void GUI::jumpTo(float percent)
         return;
     }
 
-    size_t size = epubLoader.getChapterSize();
+    size_t size = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        size = epubLoader.getChapterSize();
+        xSemaphoreGive(epubMutex);
+    }
+
     if (size == 0) {
         ESP_LOGW(TAG, "jumpTo: current chapter size is 0, ignoring");
         return;
@@ -1660,7 +1908,16 @@ void GUI::jumpToChapter(int chapter)
         return;
     }
 
-    if (epubLoader.jumpToChapter(chapter))
+    // Abort any background rendering
+    abortRender = true;
+    
+    bool success = false;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        success = epubLoader.jumpToChapter(chapter);
+        xSemaphoreGive(epubMutex);
+    }
+
+    if (success)
     {
         ESP_LOGI(TAG, "jumpToChapter: loaded chapter %d size=%zu", chapter, epubLoader.getChapterSize());
         currentTextOffset = 0;
@@ -1678,8 +1935,17 @@ bool GUI::openBookById(int id)
     if (book.id == 0)
         return false;
 
+    // Stop any background rendering
+    abortRender = true;
+
+    // Lock mutex for the entire loading process
+    if (!xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        return false;
+    }
+
     if (!epubLoader.load(book.path.c_str()))
     {
+        xSemaphoreGive(epubMutex);
         return false;
     }
 
@@ -1688,10 +1954,7 @@ bool GUI::openBookById(int id)
 
     // Auto-detect language for font
     std::string lang = epubLoader.getLanguage();
-    if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos)
-    {
-        setFont("Hebrew");
-    }
+    bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
 
     // Restore progress
     currentTextOffset = currentBook.currentOffset;
@@ -1705,6 +1968,14 @@ bool GUI::openBookById(int id)
         }
     }
     isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
+
+    // Release mutex
+    xSemaphoreGive(epubMutex);
+
+    if (isHebrew)
+    {
+        setFont("Hebrew");
+    }
 
     pageHistory.clear();
     needsRedraw = true;
