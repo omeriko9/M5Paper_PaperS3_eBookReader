@@ -18,9 +18,11 @@
 #include <errno.h>
 #include <string.h>
 #include <esp_heap_caps.h>
+#include <new>
 
 static const char *TAG = "GUI";
-bool GUI::canJump() const {
+bool GUI::canJump() const
+{
     return currentState == AppState::READER;
 }
 
@@ -34,7 +36,6 @@ extern WebServer webServer;
 static constexpr int STATUS_BAR_HEIGHT = 44;
 static constexpr int LIBRARY_LIST_START_Y = 120;
 static constexpr int LIBRARY_LINE_HEIGHT = 48;
-
 
 struct SettingsLayout
 {
@@ -90,27 +91,34 @@ static SettingsLayout computeSettingsLayout()
     return l;
 }
 
-int GUI::getCurrentChapterIndex() const {
+int GUI::getCurrentChapterIndex() const
+{
     int idx = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         idx = epubLoader.getCurrentChapterIndex();
         xSemaphoreGive(epubMutex);
     }
     return idx;
 }
 
-size_t GUI::getCurrentChapterSize() const {
-    if (currentState != AppState::READER) return 0;
+size_t GUI::getCurrentChapterSize() const
+{
+    if (currentState != AppState::READER)
+        return 0;
     size_t size = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         size = epubLoader.getChapterSize();
         xSemaphoreGive(epubMutex);
     }
     return size;
 }
 
-size_t GUI::getCurrentOffset() const {
-    if (currentState != AppState::READER) return 0;
+size_t GUI::getCurrentOffset() const
+{
+    if (currentState != AppState::READER)
+        return 0;
     return currentTextOffset;
 }
 static constexpr int PAGEINFO_ESTIMATE_MIN_CHARS = 50;
@@ -227,27 +235,32 @@ static std::string processTextForDisplay(const std::string &text)
             // Replace HTML entities before reversing
             std::string processedWord = word;
             size_t pos = 0;
-            while ((pos = processedWord.find("&quot;", pos)) != std::string::npos) {
+            while ((pos = processedWord.find("&quot;", pos)) != std::string::npos)
+            {
                 processedWord.replace(pos, 6, "\"");
                 pos += 1;
             }
             pos = 0;
-            while ((pos = processedWord.find("&amp;", pos)) != std::string::npos) {
+            while ((pos = processedWord.find("&amp;", pos)) != std::string::npos)
+            {
                 processedWord.replace(pos, 5, "&");
                 pos += 1;
             }
             pos = 0;
-            while ((pos = processedWord.find("&lt;", pos)) != std::string::npos) {
+            while ((pos = processedWord.find("&lt;", pos)) != std::string::npos)
+            {
                 processedWord.replace(pos, 4, "<");
                 pos += 1;
             }
             pos = 0;
-            while ((pos = processedWord.find("&gt;", pos)) != std::string::npos) {
+            while ((pos = processedWord.find("&gt;", pos)) != std::string::npos)
+            {
                 processedWord.replace(pos, 4, ">");
                 pos += 1;
             }
             pos = 0;
-            while ((pos = processedWord.find("&apos;", pos)) != std::string::npos) {
+            while ((pos = processedWord.find("&apos;", pos)) != std::string::npos)
+            {
                 processedWord.replace(pos, 6, "'");
                 pos += 1;
             }
@@ -321,15 +334,17 @@ static void enterDeepSleepWithTouchWake()
     // Ensure the pin is configured as input
     gpio_reset_pin(TOUCH_INT_PIN);
     gpio_set_direction(TOUCH_INT_PIN, GPIO_MODE_INPUT);
-    
+
     // Wait for line to go HIGH (inactive) - it is active LOW
     int retries = 0;
-    while (gpio_get_level(TOUCH_INT_PIN) == 0 && retries < 50) {
-        M5.update(); 
+    while (gpio_get_level(TOUCH_INT_PIN) == 0 && retries < 50)
+    {
+        M5.update();
         vTaskDelay(50 / portTICK_PERIOD_MS);
         retries++;
     }
-    if (gpio_get_level(TOUCH_INT_PIN) == 0) {
+    if (gpio_get_level(TOUCH_INT_PIN) == 0)
+    {
         ESP_LOGW(TAG, "Touch interrupt pin still LOW after flushing");
     }
 
@@ -361,13 +376,13 @@ void GUI::init(bool isWakeFromSleep)
     // Initialize background rendering
     epubMutex = xSemaphoreCreateMutex();
     renderQueue = xQueueCreate(5, sizeof(RenderRequest));
-    xTaskCreatePinnedToCore([](void* arg) {
-        static_cast<GUI*>(arg)->renderTaskLoop();
-    }, "RenderTask", 8192, this, 1, &renderTaskHandle, 0); // Core 0
+    xTaskCreatePinnedToCore([](void *arg)
+                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 8192, this, 1, &renderTaskHandle, 0); // Core 0
 
     // Initialize NVS
     // Already done in main, but safe to call again or skip
-    if (!isWakeFromSleep) {
+    if (!isWakeFromSleep)
+    {
         esp_err_t ret = nvs_flash_init();
         if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
         {
@@ -377,9 +392,8 @@ void GUI::init(bool isWakeFromSleep)
         ESP_ERROR_CHECK(ret);
     }
 
-    
     loadSettings();
-    loadFonts();    
+    loadFonts();
     bookIndex.init(isWakeFromSleep);
     resetPageInfoCache();
 
@@ -393,27 +407,30 @@ void GUI::init(bool isWakeFromSleep)
     const int bufH = M5.Display.height();
     const size_t bytesPerSprite = ((size_t)bufW * bufH * bufferColorDepth + 7) / 8;
     const size_t freeBeforeDefault = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-    const size_t freeBeforeSPIRAM  = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    const size_t largestDefault    = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-    const size_t largestSPIRAM     = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    const size_t freeBeforeSPIRAM = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t largestDefault = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    const size_t largestSPIRAM = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
 
     canvasNext.setColorDepth(bufferColorDepth);
     canvasPrev.setColorDepth(bufferColorDepth);
     canvasNext.setPsram(true);
     canvasPrev.setPsram(true);
-    
+
     ESP_LOGI(TAG, "Attempting to create buffer sprites (w=%d h=%d depth=%dbpp ~%u bytes each, PSRAM preferred). Free heap: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
              bufW, bufH, bufferColorDepth, (unsigned)bytesPerSprite,
              (unsigned)freeBeforeDefault, (unsigned)freeBeforeSPIRAM,
              (unsigned)largestDefault, (unsigned)largestSPIRAM);
-    
-    if (canvasNext.createSprite(bufW, bufH)) {
+
+    if (canvasNext.createSprite(bufW, bufH))
+    {
         ESP_LOGI(TAG, "canvasNext created successfully. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Failed to create canvasNext. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u (needed ~%u bytes)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -422,13 +439,16 @@ void GUI::init(bool isWakeFromSleep)
                  (unsigned)bytesPerSprite);
     }
 
-    if (canvasPrev.createSprite(bufW, bufH)) {
+    if (canvasPrev.createSprite(bufW, bufH))
+    {
         ESP_LOGI(TAG, "canvasPrev created successfully. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Failed to create canvasPrev. Free heap now: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u (needed ~%u bytes)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -475,9 +495,9 @@ void GUI::init(bool isWakeFromSleep)
                 // Restore progress
                 currentTextOffset = currentBook.currentOffset;
                 resetPageInfoCache();
-                
+
                 // No need to loop nextChapter() anymore because we loaded the correct chapter directly
-                
+
                 // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
                 isRTLDocument = isHebrew;
 
@@ -492,43 +512,54 @@ void GUI::init(bool isWakeFromSleep)
     needsRedraw = true;
 }
 
-void GUI::renderTaskLoop() {
+void GUI::renderTaskLoop()
+{
     ESP_LOGI(TAG, "RenderTask loop started");
     RenderRequest req;
-    while (true) {
-        if (xQueueReceive(renderQueue, &req, portMAX_DELAY)) {
+    while (true)
+    {
+        if (xQueueReceive(renderQueue, &req, portMAX_DELAY))
+        {
             ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
-            
+
             // Clear abort flag before starting
             abortRender = false;
-            
+
             // Note: drawPageContentAt handles locking internally for epubLoader access.
             // We don't lock here to avoid deadlock (since drawPageContentAt takes the lock)
             // and to allow the main thread to interrupt (abort) if needed.
-            
+
             req.target->fillScreen(TFT_WHITE);
             size_t chars = drawPageContentAt(req.offset, true, req.target, &abortRender);
-            
-            if (!abortRender) {
+
+            if (!abortRender)
+            {
                 // Overlay status/footers on the offscreen target so we can push once without extra redraw.
                 drawStatusBar(req.target);
                 drawFooter(req.target, req.offset, chars);
 
-                if (req.isNext) {
+                if (req.isNext)
+                {
                     nextCanvasCharCount = chars;
                     nextCanvasOffset = req.offset;
                     nextCanvasValid = true;
                     ESP_LOGI(TAG, "RenderTask: Next page rendered. Offset=%zu Chars=%zu", nextCanvasOffset, nextCanvasCharCount);
-                } else {
+                }
+                else
+                {
                     prevCanvasCharCount = chars;
                     prevCanvasOffset = req.offset;
                     prevCanvasValid = true;
                     ESP_LOGI(TAG, "RenderTask: Prev page rendered. Offset=%zu Chars=%zu", prevCanvasOffset, prevCanvasCharCount);
                 }
-            } else {
+            }
+            else
+            {
                 ESP_LOGW(TAG, "RenderTask: Aborted");
             }
-        } else {
+        }
+        else
+        {
             ESP_LOGW(TAG, "RenderTask: xQueueReceive returned false");
         }
     }
@@ -638,9 +669,9 @@ void GUI::update()
     }
 }
 
-void GUI::drawStatusBar(LovyanGFX* target)
+void GUI::drawStatusBar(LovyanGFX *target)
 {
-    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    LovyanGFX *gfx = target ? target : (LovyanGFX *)&M5.Display;
 
     // Use system font for status bar to ensure it fits
     gfx->setFont(&lgfx::v1::fonts::Font2);
@@ -650,7 +681,7 @@ void GUI::drawStatusBar(LovyanGFX* target)
     gfx->fillRect(0, 0, gfx->width(), STATUS_BAR_HEIGHT, TFT_WHITE);
     gfx->drawFastHLine(0, STATUS_BAR_HEIGHT - 1, gfx->width(), TFT_BLACK);
     gfx->setTextColor(TFT_BLACK, TFT_WHITE);
-    
+
     const int centerY = STATUS_BAR_HEIGHT / 2;
 
     // Time
@@ -707,23 +738,25 @@ void GUI::drawStatusBar(LovyanGFX* target)
     gfx->setTextColor(TFT_BLACK); // Transparent background for the rest of the UI
 }
 
-void GUI::drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage)
+void GUI::drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage)
 {
-    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    LovyanGFX *gfx = target ? target : (LovyanGFX *)&M5.Display;
     gfx->setTextColor(TFT_BLACK, TFT_WHITE);
 
     const int footerY = gfx->height() - 50;
     gfx->setTextSize(1.0f); // Reduced font size
     gfx->setCursor(16, footerY);
-    
+
     int chIdx = 0;
     size_t chSize = 1;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         chIdx = epubLoader.getCurrentChapterIndex();
         chSize = epubLoader.getChapterSize();
         xSemaphoreGive(epubMutex);
     }
-    if (chSize == 0) chSize = 1;
+    if (chSize == 0)
+        chSize = 1;
 
     gfx->printf("Ch %d - %.1f%%", chIdx + 1,
                 (float)pageOffset / chSize * 100.0f);
@@ -732,10 +765,13 @@ void GUI::drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage)
     size_t pageChars = charsOnPage > 0 ? charsOnPage : lastPageChars;
     int current = 1;
     int total = 1;
-    if (pageChars > 0) {
+    if (pageChars > 0)
+    {
         current = (int)(pageOffset / pageChars) + 1;
         total = (int)((chSize + pageChars - 1) / pageChars);
-    } else {
+    }
+    else
+    {
         PageInfo p = calculatePageInfo();
         current = p.current;
         total = p.total;
@@ -857,17 +893,22 @@ size_t GUI::drawPageContent(bool draw)
     return drawPageContentAt(currentTextOffset, draw, nullptr);
 }
 
-size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, volatile bool* abort)
+size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, volatile bool *abort)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
     // ESP_LOGI(TAG, "drawPageContentAt: offset=%zu, draw=%d, target=%p, w=%d, h=%d", startOffset, draw, target, gfx->width(), gfx->height());
-    
+
     // Ensure correct base font is loaded on the target
-    if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+    if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+    {
         gfx->loadFont(fontDataHebrew.data());
-    } else if (currentFont != "Default" && !fontData.empty()) {
+    }
+    else if (currentFont != "Default" && !fontData.empty())
+    {
         gfx->loadFont(fontData.data());
-    } else {
+    }
+    else
+    {
         gfx->unloadFont();
     }
     gfx->setTextSize(fontSize);
@@ -884,7 +925,8 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
     // Fetch a large chunk
     std::string text;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         text = epubLoader.getText(startOffset, 3000);
         xSemaphoreGive(epubMutex);
     }
@@ -904,7 +946,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     // Store indices (start, length) instead of strings to save memory
     std::vector<std::pair<size_t, size_t>> currentLine;
     currentLine.reserve(20); // Pre-allocate to avoid reallocations
-    
+
     int currentLineWidth = 0;
     int currentY = y;
     size_t i = 0;
@@ -923,15 +965,18 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             for (const auto &p : line)
             {
                 // Check if word is Hebrew
-                const char* wordStart = text.c_str() + p.first;
-                for(size_t k=0; k<p.second; ++k) {
+                const char *wordStart = text.c_str() + p.first;
+                for (size_t k = 0; k < p.second; ++k)
+                {
                     unsigned char c = (unsigned char)wordStart[k];
-                    if (c >= 0xD6 && c <= 0xD7) {
+                    if (c >= 0xD6 && c <= 0xD7)
+                    {
                         isRTL = true;
                         break;
                     }
                 }
-                if (isRTL) break;
+                if (isRTL)
+                    break;
             }
         }
 
@@ -947,27 +992,32 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             {
                 // Replace HTML entities
                 size_t pos = 0;
-                while ((pos = displayWord.find("&quot;", pos)) != std::string::npos) {
+                while ((pos = displayWord.find("&quot;", pos)) != std::string::npos)
+                {
                     displayWord.replace(pos, 6, "\"");
                     pos += 1;
                 }
                 pos = 0;
-                while ((pos = displayWord.find("&amp;", pos)) != std::string::npos) {
+                while ((pos = displayWord.find("&amp;", pos)) != std::string::npos)
+                {
                     displayWord.replace(pos, 5, "&");
                     pos += 1;
                 }
                 pos = 0;
-                while ((pos = displayWord.find("&lt;", pos)) != std::string::npos) {
+                while ((pos = displayWord.find("&lt;", pos)) != std::string::npos)
+                {
                     displayWord.replace(pos, 4, "<");
                     pos += 1;
                 }
                 pos = 0;
-                while ((pos = displayWord.find("&gt;", pos)) != std::string::npos) {
+                while ((pos = displayWord.find("&gt;", pos)) != std::string::npos)
+                {
                     displayWord.replace(pos, 4, ">");
                     pos += 1;
                 }
                 pos = 0;
-                while ((pos = displayWord.find("&apos;", pos)) != std::string::npos) {
+                while ((pos = displayWord.find("&apos;", pos)) != std::string::npos)
+                {
                     displayWord.replace(pos, 6, "'");
                     pos += 1;
                 }
@@ -978,7 +1028,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             int spaceWLocal = gfx->textWidth(" ");
             if (spaceWLocal == 0)
                 spaceWLocal = 5;
-            
+
             if (debugWordsLogged < 6)
             {
                 ESP_LOGI(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), w, spaceWLocal, isRTL, startX, currentY);
@@ -1002,8 +1052,10 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     while (i < text.length())
     {
         // Check abort flag
-        if (abort && *abort) {
-            if (draw) gfx->endWrite();
+        if (abort && *abort)
+        {
+            if (draw)
+                gfx->endWrite();
             return 0;
         }
 
@@ -1015,10 +1067,10 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         bool isNewline = (nextSpace < text.length() && text[nextSpace] == '\n');
 
         size_t wordLen = nextSpace - i;
-        
+
         // Measure word using reusable buffer
         tempWord.assign(text, i, wordLen);
-        
+
         bool wordIsHebrew = isHebrew(tempWord);
         if (wordIsHebrew)
             tempWord = reverseHebrewWord(tempWord);
@@ -1125,7 +1177,8 @@ GUI::PageInfo GUI::calculatePageInfo()
     }
 
     size_t chapterSize = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         chapterSize = epubLoader.getChapterSize();
         xSemaphoreGive(epubMutex);
     }
@@ -1159,7 +1212,8 @@ void GUI::updateNextPrevCanvases()
     size_t newNextOffset = currentTextOffset + charsOnCurrent;
 
     size_t chSize = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         chSize = epubLoader.getChapterSize();
         xSemaphoreGive(epubMutex);
     }
@@ -1167,19 +1221,24 @@ void GUI::updateNextPrevCanvases()
     if (newNextOffset < chSize && canvasNext.width() > 0)
     {
         // Only redraw if invalid or offset changed
-        if (!nextCanvasValid || nextCanvasOffset != newNextOffset) {
-             RenderRequest req;
-             req.offset = newNextOffset;
-             req.target = &canvasNext;
-             req.isNext = true;
-             BaseType_t sent = xQueueSend(renderQueue, &req, 0);
-             if (sent == pdTRUE) {
-                 ESP_LOGI(TAG, "Queued next canvas render: offset=%zu", newNextOffset);
-             } else {
-                 ESP_LOGW(TAG, "Failed to queue next canvas render: offset=%zu (queue full?)", newNextOffset);
-             }
+        if (!nextCanvasValid || nextCanvasOffset != newNextOffset)
+        {
+            RenderRequest req;
+            req.offset = newNextOffset;
+            req.target = &canvasNext;
+            req.isNext = true;
+            BaseType_t sent = xQueueSend(renderQueue, &req, 0);
+            if (sent == pdTRUE)
+            {
+                ESP_LOGI(TAG, "Queued next canvas render: offset=%zu", newNextOffset);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "Failed to queue next canvas render: offset=%zu (queue full?)", newNextOffset);
+            }
         }
-        else {
+        else
+        {
             ESP_LOGI(TAG, "Next canvas already valid for offset=%zu", newNextOffset);
         }
     }
@@ -1194,19 +1253,24 @@ void GUI::updateNextPrevCanvases()
     if (!pageHistory.empty() && canvasPrev.width() > 0)
     {
         size_t newPrevOffset = pageHistory.back();
-        if (!prevCanvasValid || prevCanvasOffset != newPrevOffset) {
-             RenderRequest req;
-             req.offset = newPrevOffset;
-             req.target = &canvasPrev;
-             req.isNext = false;
-             BaseType_t sent = xQueueSend(renderQueue, &req, 0);
-             if (sent == pdTRUE) {
-                 ESP_LOGI(TAG, "Queued prev canvas render: offset=%zu", newPrevOffset);
-             } else {
-                 ESP_LOGW(TAG, "Failed to queue prev canvas render: offset=%zu (queue full?)", newPrevOffset);
-             }
+        if (!prevCanvasValid || prevCanvasOffset != newPrevOffset)
+        {
+            RenderRequest req;
+            req.offset = newPrevOffset;
+            req.target = &canvasPrev;
+            req.isNext = false;
+            BaseType_t sent = xQueueSend(renderQueue, &req, 0);
+            if (sent == pdTRUE)
+            {
+                ESP_LOGI(TAG, "Queued prev canvas render: offset=%zu", newPrevOffset);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "Failed to queue prev canvas render: offset=%zu (queue full?)", newPrevOffset);
+            }
         }
-        else {
+        else
+        {
             ESP_LOGI(TAG, "Prev canvas already valid for offset=%zu", newPrevOffset);
         }
     }
@@ -1243,7 +1307,8 @@ void GUI::drawReader(bool flush)
         charsDrawn = prevCanvasCharCount;
         drawnFromBuffer = true;
     }
-    else {
+    else
+    {
         ESP_LOGI(TAG, "Buffer not used. nextValid=%d nextOffset=%zu prevValid=%d prevOffset=%zu canvasW=%d",
                  nextCanvasValid, nextCanvasOffset, prevCanvasValid, prevCanvasOffset, canvasNext.width());
     }
@@ -1257,7 +1322,8 @@ void GUI::drawReader(bool flush)
     }
 
     // Draw Status Bar (Fresh). If we rendered from a buffer, prefer drawing the bar onto the buffer during render task.
-    if (!drawnFromBuffer) {
+    if (!drawnFromBuffer)
+    {
         drawStatusBar();
     }
 
@@ -1266,7 +1332,8 @@ void GUI::drawReader(bool flush)
     {
         lastPageChars = charsDrawn;
         size_t chapterSize = 0;
-        if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+        {
             chapterSize = epubLoader.getChapterSize();
             xSemaphoreGive(epubMutex);
         }
@@ -1275,11 +1342,13 @@ void GUI::drawReader(bool flush)
             lastPageTotal = 1;
     }
 
-    if (!drawnFromBuffer) {
+    if (!drawnFromBuffer)
+    {
         drawFooter(&M5.Display, currentTextOffset, charsDrawn);
     }
 
-    if (flush) {
+    if (flush)
+    {
         ESP_LOGI(TAG, "Calling M5.Display.display()");
         M5.Display.display();
     }
@@ -1303,7 +1372,8 @@ void GUI::goToSleep()
 {
     // Save progress
     int chIdx = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         chIdx = epubLoader.getCurrentChapterIndex();
         xSemaphoreGive(epubMutex);
     }
@@ -1340,17 +1410,24 @@ void GUI::goToSleep()
     // drawSleepSymbol changed font, size, and datum. We must restore them.
     M5.Display.setTextDatum(textdatum_t::top_left);
     M5.Display.setTextColor(TFT_BLACK); // Restore transparent background
-    if (currentFont == "Default") {
+    if (currentFont == "Default")
+    {
         M5.Display.setFont(&lgfx::v1::fonts::Font2); // Or whatever default is
-    } else if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+    }
+    else if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+    {
         M5.Display.loadFont(fontDataHebrew.data());
-    } else if (!fontData.empty()) {
+    }
+    else if (!fontData.empty())
+    {
         M5.Display.loadFont(fontData.data());
-    } else {
+    }
+    else
+    {
         M5.Display.unloadFont();
     }
     M5.Display.setTextSize(fontSize);
-    
+
     // Check for touch immediately after wake to process the wake-up interaction
     M5.update();
     justWokeUp = true;
@@ -1366,7 +1443,7 @@ void GUI::goToSleep()
     {
         ESP_LOGI(TAG, "Light sleep timer elapsed, entering deep sleep");
         drawSleepSymbol("Zz");
-        
+
         enterDeepSleepWithTouchWake();
         return;
     }
@@ -1392,7 +1469,8 @@ void GUI::drawSettings()
 {
     // Only redraw the reader content if specifically requested (e.g. font change)
     // Otherwise, we draw the settings panel on top of the existing screen content.
-    if (settingsNeedsUnderlayRefresh) {
+    if (settingsNeedsUnderlayRefresh)
+    {
         drawReader(false); // Draw but don't flush yet
         settingsNeedsUnderlayRefresh = false;
     }
@@ -1400,20 +1478,49 @@ void GUI::drawSettings()
     SettingsLayout layout = computeSettingsLayout();
 
     // Initialize settings canvas if needed
-    if (!settingsCanvasCreated) {
-        settingsCanvas.setColorDepth(16); // Use 16-bit color to match display
-        ESP_LOGI(TAG, "Before createSprite: free heap = %d bytes", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-        if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight)) {
-            ESP_LOGI(TAG, "After createSprite success: free heap = %d bytes", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    if (!settingsCanvasCreated)
+    {
+        // Use 1bpp to minimize RAM and avoid palette crashes; only black/white UI is needed.
+        const int depth = 1;
+        const size_t bytesPerSprite = ((size_t)layout.panelWidth * layout.panelHeight * depth + 7) / 8;
+        const size_t freeDef = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+        const size_t freeSpi = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        const size_t largestDef = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+        const size_t largestSpi = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+
+        settingsCanvas.setColorDepth(depth);
+        settingsCanvas.setPsram(true);
+        ESP_LOGI(TAG, "Settings canvas alloc: w=%d h=%d depth=%dbpp ~%u bytes. Free: default=%u (largest %u) SPIRAM=%u (largest %u)",
+                 layout.panelWidth, layout.panelHeight, depth, (unsigned)bytesPerSprite,
+                 (unsigned)freeDef, (unsigned)largestDef,
+                 (unsigned)freeSpi, (unsigned)largestSpi);
+        if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight))
+        {
+            settingsCanvas.setPaletteColor(0, TFT_WHITE);
+            settingsCanvas.setPaletteColor(1, TFT_BLACK);
+            ESP_LOGI(TAG, "Settings canvas created. Free now: default=%u (largest %u) SPIRAM=%u (largest %u)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
             settingsCanvasCreated = true;
-        } else {
-            ESP_LOGI(TAG, "After createSprite failure: free heap = %d bytes", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-            ESP_LOGE(TAG, "Failed to create settings canvas - falling back to direct draw");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "Failed to create settings canvas. Free now: default=%u (largest %u) SPIRAM=%u (largest %u) (needed ~%u bytes)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                     (unsigned)bytesPerSprite);
         }
     }
 
-    LovyanGFX* target = settingsCanvasCreated ? (LovyanGFX*)&settingsCanvas : (LovyanGFX*)&M5.Display;
+    LovyanGFX *target = settingsCanvasCreated ? (LovyanGFX *)&settingsCanvas : (LovyanGFX *)&M5.Display;
     int yOffset = settingsCanvasCreated ? -layout.panelTop : 0;
+
+    // Use a fixed system font regardless of reader font settings
+    target->setFont(&lgfx::v1::fonts::Font2);
 
     // Clear background for settings panel
     target->fillRect(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelHeight, TFT_WHITE);
@@ -1436,12 +1543,13 @@ void GUI::drawSettings()
     target->setTextColor(TFT_BLACK, TFT_WHITE);
 
     // Title
-    target->setTextSize(1.6f);
+    const float settingsTitleSize = 2.4f;
+    target->setTextSize(settingsTitleSize);
     target->setTextDatum(textdatum_t::top_left);
     target->drawString("Settings", layout.padding, layout.titleY + yOffset);
 
     // Body styling
-    const float bodyTextSize = 1.2f;
+    const float bodyTextSize = 1.8f;
     target->setTextSize(bodyTextSize);
     target->setTextDatum(textdatum_t::middle_left);
 
@@ -1488,7 +1596,7 @@ void GUI::drawSettings()
         std::string ip = wifiManager.getIpAddress();
         status = "URL: http://" + ip + "/";
     }
-    target->setTextSize(1.0f);
+    target->setTextSize(bodyTextSize);
     target->setTextDatum(textdatum_t::middle_left);
     // Increased offset to avoid overlap
     target->drawString(status.c_str(), layout.padding + 180, row4CenterY + yOffset);
@@ -1499,8 +1607,9 @@ void GUI::drawSettings()
     drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_WHITE, TFT_BLACK);
 
     // Push the canvas to the display
-    if (settingsCanvasCreated) {
-        settingsCanvas.pushSprite(0, layout.panelTop);
+    if (settingsCanvasCreated)
+    {
+        settingsCanvas.pushSprite(&M5.Display, 0, layout.panelTop);
     }
 }
 
@@ -1529,26 +1638,34 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
         next = !isRTL; // If RTL, right is prev. If LTR, right is next.
     }
 
-    if (isDouble) {
+    if (isDouble)
+    {
         ESP_LOGI(TAG, "Double click detected! Next=%d", next);
         abortRender = true;
         bool changed = false;
-        if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
-            if (next) {
+        if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+        {
+            if (next)
+            {
                 changed = epubLoader.nextChapter();
-            } else {
+            }
+            else
+            {
                 changed = epubLoader.prevChapter();
             }
             xSemaphoreGive(epubMutex);
         }
 
-        if (changed) {
+        if (changed)
+        {
             currentTextOffset = 0;
             pageHistory.clear();
             resetPageInfoCache();
             needsRedraw = true;
         }
-    } else {
+    }
+    else
+    {
         // Single Click - Page Turn
         if (!next)
         {
@@ -1558,7 +1675,8 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
                 // Try prev chapter
                 bool changed = false;
                 abortRender = true;
-                if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+                {
                     changed = epubLoader.prevChapter();
                     xSemaphoreGive(epubMutex);
                 }
@@ -1569,40 +1687,47 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
                     // To do this, we must simulate paging through the entire chapter
                     // to build the pageHistory and find the last offset.
                     size_t chapterSize = 0;
-                    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+                    {
                         chapterSize = epubLoader.getChapterSize();
                         xSemaphoreGive(epubMutex);
                     }
 
-                    if (chapterSize == 0) {
+                    if (chapterSize == 0)
+                    {
                         currentTextOffset = 0;
                         pageHistory.clear();
-                    } else {
+                    }
+                    else
+                    {
                         size_t scanOffset = 0;
                         std::vector<size_t> newHistory;
-                        
+
                         // Scan chapter to find page breaks
-                        while (scanOffset < chapterSize) {
+                        while (scanOffset < chapterSize)
+                        {
                             size_t chars = drawPageContentAt(scanOffset, false);
-                            if (chars == 0) {
+                            if (chars == 0)
+                            {
                                 // Should not happen unless error, fallback to start
                                 currentTextOffset = 0;
                                 newHistory.clear();
                                 break;
                             }
-                            
-                            if (scanOffset + chars >= chapterSize) {
+
+                            if (scanOffset + chars >= chapterSize)
+                            {
                                 // This is the last page
                                 currentTextOffset = scanOffset;
                                 break;
                             }
-                            
+
                             newHistory.push_back(scanOffset);
                             scanOffset += chars;
                         }
                         pageHistory = newHistory;
                     }
-                    
+
                     resetPageInfoCache();
                     needsRedraw = true;
                 }
@@ -1619,12 +1744,14 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
             // Next Page
             // Use cached char count if available to avoid re-measuring
             size_t charsOnPage = lastPageChars;
-            if (charsOnPage == 0) {
+            if (charsOnPage == 0)
+            {
                 charsOnPage = drawPageContent(false);
             }
-            
+
             size_t chSize = 0;
-            if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+            if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+            {
                 chSize = epubLoader.getChapterSize();
                 xSemaphoreGive(epubMutex);
             }
@@ -1634,7 +1761,8 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
                 // Next chapter
                 bool changed = false;
                 abortRender = true;
-                if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+                if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+                {
                     changed = epubLoader.nextChapter();
                     xSemaphoreGive(epubMutex);
                 }
@@ -1675,14 +1803,16 @@ void GUI::handleTouch()
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
-            if (justWokeUp) {
+            if (justWokeUp)
+            {
                 ESP_LOGI(TAG, "Processing wake-up touch at %d, %d", t.x, t.y);
             }
-            
+
             if (currentState == AppState::LIBRARY)
             {
                 // Check for status bar tap
-                if (t.y < STATUS_BAR_HEIGHT) {
+                if (t.y < STATUS_BAR_HEIGHT)
+                {
                     currentState = AppState::WIFI_SCAN;
                     wifiList.clear();
                     needsRedraw = true;
@@ -1757,24 +1887,30 @@ void GUI::handleTouch()
                 }
 
                 // Middle area - Page Turn / Chapter Skip
-                if (clickPending) {
+                if (clickPending)
+                {
                     // Check if second click
                     bool sameSide = (t.x < M5.Display.width() / 2) == (lastClickX < M5.Display.width() / 2);
-                    if (sameSide) {
+                    if (sameSide)
+                    {
                         // Double Click!
                         clickPending = false;
                         processReaderTap(t.x, t.y, true); // true = double
-                    } else {
+                    }
+                    else
+                    {
                         // Different side - treat previous as single, and this as new pending
                         clickPending = false;
                         processReaderTap(lastClickX, lastClickY, false);
-                        
+
                         lastClickTime = now;
                         lastClickX = t.x;
                         lastClickY = t.y;
                         clickPending = true;
                     }
-                } else {
+                }
+                else
+                {
                     // First click
                     lastClickTime = now;
                     lastClickX = t.x;
@@ -1785,13 +1921,14 @@ void GUI::handleTouch()
             else if (currentState == AppState::SETTINGS)
             {
                 SettingsLayout layout = computeSettingsLayout();
-                
+
                 // Close if clicked outside the panel (upper half)
                 if (t.y < layout.panelTop)
                 {
                     currentState = previousState;
                     needsRedraw = true;
-                    if (settingsCanvasCreated) {
+                    if (settingsCanvasCreated)
+                    {
                         settingsCanvas.deleteSprite();
                         settingsCanvasCreated = false;
                     }
@@ -1819,9 +1956,12 @@ void GUI::handleTouch()
                 // Font Change
                 else if (t.y >= changeButtonY && t.y <= changeButtonY + layout.fontButtonH && t.x >= layout.changeButtonX && t.x <= layout.changeButtonX + layout.changeButtonW)
                 {
-                    if (currentFont == "Default") setFont("Hebrew");
-                    else if (currentFont == "Hebrew") setFont("Roboto");
-                    else setFont("Default");
+                    if (currentFont == "Default")
+                        setFont("Hebrew");
+                    else if (currentFont == "Hebrew")
+                        setFont("Roboto");
+                    else
+                        setFont("Default");
                     settingsNeedsUnderlayRefresh = true;
                 }
                 // WiFi Toggle
@@ -1829,14 +1969,18 @@ void GUI::handleTouch()
                 {
                     wifiEnabled = !wifiEnabled;
                     saveSettings();
-                    
-                    if (wifiEnabled) {
-                        if (!wifiManager.isInitialized()) {
+
+                    if (wifiEnabled)
+                    {
+                        if (!wifiManager.isInitialized())
+                        {
                             wifiManager.init();
                         }
                         wifiManager.connect();
                         webServer.init("/spiffs");
-                    } else {
+                    }
+                    else
+                    {
                         webServer.stop();
                         wifiManager.disconnect();
                         wifiConnected = false;
@@ -1848,7 +1992,8 @@ void GUI::handleTouch()
                 {
                     currentState = previousState;
                     needsRedraw = true;
-                    if (settingsCanvasCreated) {
+                    if (settingsCanvasCreated)
+                    {
                         settingsCanvas.deleteSprite();
                         settingsCanvasCreated = false;
                     }
@@ -1870,18 +2015,21 @@ void GUI::handleTouch()
 void GUI::jumpTo(float percent)
 {
     ESP_LOGI(TAG, "GUI::jumpTo called with percent=%.2f (state=%d)", percent, (int)currentState);
-    if (currentState != AppState::READER) {
+    if (currentState != AppState::READER)
+    {
         ESP_LOGW(TAG, "jumpTo ignored - not in READER state");
         return;
     }
 
     size_t size = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         size = epubLoader.getChapterSize();
         xSemaphoreGive(epubMutex);
     }
 
-    if (size == 0) {
+    if (size == 0)
+    {
         ESP_LOGW(TAG, "jumpTo: current chapter size is 0, ignoring");
         return;
     }
@@ -1903,16 +2051,18 @@ void GUI::jumpTo(float percent)
 void GUI::jumpToChapter(int chapter)
 {
     ESP_LOGI(TAG, "GUI::jumpToChapter called chapter=%d (state=%d)", chapter, (int)currentState);
-    if (currentState != AppState::READER) {
+    if (currentState != AppState::READER)
+    {
         ESP_LOGW(TAG, "jumpToChapter ignored - not in READER state");
         return;
     }
 
     // Abort any background rendering
     abortRender = true;
-    
+
     bool success = false;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         success = epubLoader.jumpToChapter(chapter);
         xSemaphoreGive(epubMutex);
     }
@@ -1924,7 +2074,9 @@ void GUI::jumpToChapter(int chapter)
         pageHistory.clear();
         resetPageInfoCache();
         needsRedraw = true;
-    } else {
+    }
+    else
+    {
         ESP_LOGW(TAG, "jumpToChapter: failed to load chapter %d", chapter);
     }
 }
@@ -1939,7 +2091,8 @@ bool GUI::openBookById(int id)
     abortRender = true;
 
     // Lock mutex for the entire loading process
-    if (!xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (!xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         return false;
     }
 
@@ -2185,21 +2338,26 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
         {
             bool swapped = false;
             // Only swap if not already using Hebrew font
-            if (currentFont != "Hebrew") {
+            if (currentFont != "Hebrew")
+            {
                 gfx->loadFont(fontDataHebrew.data());
                 swapped = true;
             }
-            
+
             std::string processedText = text;
-            // HTML entity replacements are done before reversing in the calling functions     
+            // HTML entity replacements are done before reversing in the calling functions
 
             gfx->setTextSize(effectiveSize);
             gfx->drawString(processedText.c_str(), x, y);
 
-            if (swapped) {
-                if (currentFont != "Default" && !fontData.empty()) {
+            if (swapped)
+            {
+                if (currentFont != "Default" && !fontData.empty())
+                {
                     gfx->loadFont(fontData.data());
-                } else {
+                }
+                else
+                {
                     gfx->unloadFont();
                 }
                 // Restore size to effectiveSize to ensure consistency for caller
@@ -2220,28 +2378,39 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
         std::string processedText = text;
         // Replace HTML entities
         size_t pos = 0;
-        while ((pos = processedText.find("&quot;", pos)) != std::string::npos) {
+        while ((pos = processedText.find("&quot;", pos)) != std::string::npos)
+        {
             processedText.replace(pos, 6, "\"");
             pos += 1;
         }
         pos = 0;
-        while ((pos = processedText.find("&amp;", pos)) != std::string::npos) {
+        while ((pos = processedText.find("&amp;", pos)) != std::string::npos)
+        {
             processedText.replace(pos, 5, "&");
             pos += 1;
         }
         pos = 0;
-        while ((pos = processedText.find("&lt;", pos)) != std::string::npos) {
+        while ((pos = processedText.find("&lt;", pos)) != std::string::npos)
+        {
             processedText.replace(pos, 4, "<");
             pos += 1;
         }
         pos = 0;
-        while ((pos = processedText.find("&gt;", pos)) != std::string::npos) {
+        while ((pos = processedText.find("&gt;", pos)) != std::string::npos)
+        {
             processedText.replace(pos, 4, ">");
             pos += 1;
         }
         pos = 0;
-        while ((pos = processedText.find("&apos;", pos)) != std::string::npos) {
+        while ((pos = processedText.find("&apos;", pos)) != std::string::npos)
+        {
             processedText.replace(pos, 6, "'");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = processedText.find("&#160;", pos)) != std::string::npos)
+        {
+            processedText.replace(pos, 6, " ");
             pos += 1;
         }
         gfx->setTextSize(effectiveSize);
@@ -2255,7 +2424,8 @@ void GUI::drawWifiScan()
     {
         M5Canvas wifiCanvas;
         wifiCanvas.setColorDepth(1); // Use 1-bit color to save RAM
-        if (wifiCanvas.createSprite(M5.Display.width(), M5.Display.height())) {
+        if (wifiCanvas.createSprite(M5.Display.width(), M5.Display.height()))
+        {
             wifiCanvas.fillScreen(TFT_WHITE);
             // Draw status bar to canvas
             wifiCanvas.setFont(&lgfx::v1::fonts::Font2);
@@ -2287,39 +2457,45 @@ void GUI::drawWifiScan()
             wifiCanvas.drawString(buf, wifiX, centerY);
             wifiCanvas.setTextDatum(textdatum_t::top_left);
             wifiCanvas.setTextColor(TFT_BLACK);
-            
+
             wifiCanvas.setTextSize(2.0f);
             wifiCanvas.setTextColor(TFT_BLACK);
             wifiCanvas.setCursor(20, 60);
             wifiCanvas.println("Select WiFi Network:");
-            
-            if (wifiList.empty()) {
+
+            if (wifiList.empty())
+            {
                 wifiCanvas.setCursor(20, 100);
                 wifiCanvas.println("Scanning...");
                 wifiCanvas.pushSprite(&M5.Display, 0, 0);
-                
+
                 wifiList = wifiManager.scanNetworks();
-                
+
                 // If still empty after scan
-                if (wifiList.empty()) {
+                if (wifiList.empty())
+                {
                     wifiCanvas.setCursor(20, 100);
                     wifiCanvas.println("No networks found.");
                     wifiCanvas.pushSprite(&M5.Display, 0, 0);
-                } else {
+                }
+                else
+                {
                     // Redraw with list
                     drawWifiScan();
                     return;
                 }
             }
-            
+
             int y = 100;
-            for (const auto& ssid : wifiList) {
+            for (const auto &ssid : wifiList)
+            {
                 wifiCanvas.drawRect(20, y, wifiCanvas.width() - 40, 50, TFT_BLACK);
                 wifiCanvas.drawString(ssid.c_str(), 30, y + 15);
                 y += 60;
-                if (y > wifiCanvas.height() - 80) break; // Limit list
+                if (y > wifiCanvas.height() - 80)
+                    break; // Limit list
             }
-            
+
             // Cancel Button
             int footerY = wifiCanvas.height() - 60;
             wifiCanvas.fillRect(20, footerY, 150, 40, TFT_LIGHTGREY);
@@ -2328,7 +2504,7 @@ void GUI::drawWifiScan()
             wifiCanvas.setTextDatum(textdatum_t::middle_center);
             wifiCanvas.drawString("Cancel", 95, footerY + 20);
             wifiCanvas.setTextDatum(textdatum_t::top_left);
-            
+
             wifiCanvas.pushSprite(&M5.Display, 0, 0);
             return;
         }
@@ -2366,38 +2542,44 @@ void GUI::drawWifiScan()
     M5.Display.drawString(buf, wifiX, centerY);
     M5.Display.setTextDatum(textdatum_t::top_left);
     M5.Display.setTextColor(TFT_BLACK);
-    
+
     M5.Display.setTextSize(2.0f);
     M5.Display.setTextColor(TFT_BLACK);
     M5.Display.setCursor(20, 60);
     M5.Display.println("Select WiFi Network:");
-    
-    if (wifiList.empty()) {
+
+    if (wifiList.empty())
+    {
         M5.Display.setCursor(20, 100);
         M5.Display.println("Scanning...");
         M5.Display.display();
-        
+
         wifiList = wifiManager.scanNetworks();
-        
+
         // If still empty after scan
-        if (wifiList.empty()) {
+        if (wifiList.empty())
+        {
             M5.Display.setCursor(20, 100);
             M5.Display.println("No networks found.");
-        } else {
+        }
+        else
+        {
             // Redraw with list
             drawWifiScan();
             return;
         }
     }
-    
+
     int y = 100;
-    for (const auto& ssid : wifiList) {
+    for (const auto &ssid : wifiList)
+    {
         M5.Display.drawRect(20, y, M5.Display.width() - 40, 50, TFT_BLACK);
         M5.Display.drawString(ssid.c_str(), 30, y + 15);
         y += 60;
-        if (y > M5.Display.height() - 80) break; // Limit list
+        if (y > M5.Display.height() - 80)
+            break; // Limit list
     }
-    
+
     // Cancel Button
     int footerY = M5.Display.height() - 60;
     M5.Display.fillRect(20, footerY, 150, 40, TFT_LIGHTGREY);
@@ -2406,7 +2588,7 @@ void GUI::drawWifiScan()
     M5.Display.setTextDatum(textdatum_t::middle_center);
     M5.Display.drawString("Cancel", 95, footerY + 20);
     M5.Display.setTextDatum(textdatum_t::top_left);
-    
+
     M5.Display.display();
 }
 
@@ -2414,16 +2596,19 @@ void GUI::onWifiScanClick(int x, int y)
 {
     // Check Cancel
     int footerY = M5.Display.height() - 60;
-    if (y >= footerY && y <= footerY + 40 && x >= 20 && x <= 170) {
+    if (y >= footerY && y <= footerY + 40 && x >= 20 && x <= 170)
+    {
         currentState = AppState::LIBRARY;
         needsRedraw = true;
         return;
     }
-    
+
     // Check List
     int listY = 100;
-    for (const auto& ssid : wifiList) {
-        if (y >= listY && y <= listY + 50 && x >= 20 && x <= M5.Display.width() - 20) {
+    for (const auto &ssid : wifiList)
+    {
+        if (y >= listY && y <= listY + 50 && x >= 20 && x <= M5.Display.width() - 20)
+        {
             selectedSSID = ssid;
             wifiPasswordInput = "";
             currentState = AppState::WIFI_PASSWORD;
@@ -2431,73 +2616,74 @@ void GUI::onWifiScanClick(int x, int y)
             return;
         }
         listY += 60;
-        if (listY > M5.Display.height() - 80) break;
+        if (listY > M5.Display.height() - 80)
+            break;
     }
 }
 
-
 void GUI::drawWifiPassword()
 {
-    //M5.Display.unloadFont(); // Use default font
+    // M5.Display.unloadFont(); // Use default font
     M5.Display.fillScreen(TFT_WHITE);
     previousFont = std::string(currentFont);
     this->setFont("Default");
     drawStatusBar();
-    
+
     M5.Display.setTextSize(2.0f);
     M5.Display.setTextColor(TFT_BLACK);
     M5.Display.setCursor(20, 60);
     M5.Display.printf("Enter Password for %s:", selectedSSID.c_str());
-    
+
     // Input Box
     M5.Display.drawRect(20, 100, M5.Display.width() - 40, 50, TFT_BLACK);
     M5.Display.drawString(wifiPasswordInput.c_str(), 30, 115);
-    
+
     // Keyboard (Simple QWERTY)
-    const char* rows[] = {
+    const char *rows[] = {
         "1234567890",
         "qwertyuiop",
         "asdfghjkl",
-        "zxcvbnm"
-    };
-    
+        "zxcvbnm"};
+
     int keySize = 45;
     int startY = 180;
     int startX = 20;
-    
+
     M5.Display.setTextDatum(textdatum_t::middle_center);
-    
-    for (int r = 0; r < 4; r++) {
+
+    for (int r = 0; r < 4; r++)
+    {
         int x = startX + (r * 20); // Indent
-        for (int c = 0; c < strlen(rows[r]); c++) {
+        for (int c = 0; c < strlen(rows[r]); c++)
+        {
             char key[2] = {rows[r][c], 0};
             M5.Display.drawRect(x, startY + (r * keySize), keySize, keySize, TFT_BLACK);
-            M5.Display.drawString(key, x + keySize/2, startY + (r * keySize) + keySize/2);
+            M5.Display.drawString(key, x + keySize / 2, startY + (r * keySize) + keySize / 2);
             x += keySize;
         }
     }
-    
+
     // Special Keys: Backspace, Space, Clear
     int specialY = startY + (4 * keySize) + 10;
-    
+
     // Backspace
     M5.Display.drawRect(20, specialY, 100, 40, TFT_BLACK);
     M5.Display.drawString("Bksp", 70, specialY + 20);
-    
+
     // Space
     M5.Display.drawRect(130, specialY, 200, 40, TFT_BLACK);
     M5.Display.drawString("Space", 230, specialY + 20);
-    
+
     // Connect
     M5.Display.fillRect(M5.Display.width() - 140, specialY, 120, 40, TFT_BLACK);
     M5.Display.setTextColor(TFT_WHITE);
     M5.Display.drawString("Connect", M5.Display.width() - 80, specialY + 20);
-    
+
     // Cancel
     M5.Display.setTextColor(TFT_BLACK);
     M5.Display.drawRect(M5.Display.width() - 270, specialY, 120, 40, TFT_BLACK);
     M5.Display.drawString("Cancel", M5.Display.width() - 210, specialY + 20);
-    
+
     M5.Display.setTextDatum(textdatum_t::top_left);
     M5.Display.display();
 }
@@ -2507,58 +2693,66 @@ void GUI::onWifiPasswordClick(int x, int y)
     int keySize = 45;
     int startY = 180;
     int startX = 20;
-    
+
     // Check Keyboard
-    const char* rows[] = {
+    const char *rows[] = {
         "1234567890",
         "qwertyuiop",
         "asdfghjkl",
-        "zxcvbnm"
-    };
-    
+        "zxcvbnm"};
+
     bool inputChanged = false;
-    
-    for (int r = 0; r < 4; r++) {
+
+    for (int r = 0; r < 4; r++)
+    {
         int rowX = startX + (r * 20);
-        if (y >= startY + (r * keySize) && y < startY + ((r+1) * keySize)) {
+        if (y >= startY + (r * keySize) && y < startY + ((r + 1) * keySize))
+        {
             int col = (x - rowX) / keySize;
-            if (col >= 0 && col < strlen(rows[r])) {
+            if (col >= 0 && col < strlen(rows[r]))
+            {
                 wifiPasswordInput += rows[r][col];
                 inputChanged = true;
             }
         }
     }
-    
+
     int specialY = startY + (4 * keySize) + 10;
-    if (y >= specialY && y <= specialY + 40) {
+    if (y >= specialY && y <= specialY + 40)
+    {
         // Backspace
-        if (x >= 20 && x <= 120) {
-            if (!wifiPasswordInput.empty()) {
+        if (x >= 20 && x <= 120)
+        {
+            if (!wifiPasswordInput.empty())
+            {
                 wifiPasswordInput.pop_back();
                 inputChanged = true;
             }
         }
         // Space
-        else if (x >= 130 && x <= 330) {
+        else if (x >= 130 && x <= 330)
+        {
             wifiPasswordInput += ' ';
             inputChanged = true;
         }
         // Cancel
-        else if (x >= M5.Display.width() - 270 && x <= M5.Display.width() - 150) {
+        else if (x >= M5.Display.width() - 270 && x <= M5.Display.width() - 150)
+        {
             currentState = AppState::WIFI_SCAN;
             needsRedraw = true;
         }
         // Connect
-        else if (x >= M5.Display.width() - 140 && x <= M5.Display.width() - 20) {
+        else if (x >= M5.Display.width() - 140 && x <= M5.Display.width() - 20)
+        {
             M5.Display.fillScreen(TFT_WHITE);
             M5.Display.setCursor(20, 100);
             M5.Display.setTextSize(2.0f);
             M5.Display.println("Connecting...");
             M5.Display.display();
-            
+
             wifiManager.saveCredentials(selectedSSID.c_str(), wifiPasswordInput.c_str());
             wifiManager.connect();
-                   
+
             loadSettings();
             loadFonts();
 
@@ -2566,8 +2760,9 @@ void GUI::onWifiPasswordClick(int x, int y)
             needsRedraw = true;
         }
     }
-    
-    if (inputChanged) {
+
+    if (inputChanged)
+    {
         // Update only the input box area
         M5.Display.fillRect(21, 101, M5.Display.width() - 42, 48, TFT_WHITE);
         M5.Display.setTextColor(TFT_BLACK);
@@ -2575,4 +2770,3 @@ void GUI::onWifiPasswordClick(int x, int y)
         M5.Display.display();
     }
 }
-

@@ -108,6 +108,28 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex) {
     return true;
 }
 
+bool EpubLoader::loadMetadataOnly(const char* path) {
+    close();
+    currentPath = path;
+    ESP_LOGI(TAG, "Loading metadata only for %s", path);
+
+    if (!zip.open(path)) {
+        ESP_LOGE(TAG, "Failed to open ZIP (metadata)");
+        return false;
+    }
+    isOpen = true;
+
+    if (!parseContainer()) {
+        ESP_LOGE(TAG, "Failed to parse container.xml (metadata)");
+        close();
+        return false;
+    }
+
+    // Metadata is parsed inside parseOPF -> title/language are now set.
+    close(); // We don't need to keep the ZIP open for metadata.
+    return true;
+}
+
 void EpubLoader::close() {
     if (isOpen) {
         zip.close();

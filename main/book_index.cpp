@@ -62,14 +62,14 @@ bool BookIndex::scanDirectory(const char *basePath)
                 {
                     if (book.path == fullPath)
                     {
-                        foundNewBooks = found = true;
+                        found = true;
                         // Check if file changed
                         if (book.fileSize != currentSize || book.fileSize == 0)
                         {
                             ESP_LOGI(TAG, "Book changed or no size cached: %s", fname.c_str());
-                            // Reload title
+                            // Reload title (metadata only, avoids chapter parsing)
                             EpubLoader loader;
-                            if (loader.load(fullPath.c_str()))
+                            if (loader.loadMetadataOnly(fullPath.c_str()))
                             {
                                 std::string metaTitle = loader.getTitle();
                                 if (!metaTitle.empty() && metaTitle != "Unknown Title")
@@ -79,6 +79,7 @@ bool BookIndex::scanDirectory(const char *basePath)
                                 loader.close();
                             }
                             book.fileSize = currentSize;
+                            foundNewBooks = true; // Treat changed book as "new" for refresh
                         }
                         break;
                     }
@@ -92,7 +93,7 @@ bool BookIndex::scanDirectory(const char *basePath)
 
                     // Try to load title from metadata
                     EpubLoader loader;
-                    if (loader.load(fullPath.c_str()))
+                    if (loader.loadMetadataOnly(fullPath.c_str()))
                     {
                         std::string metaTitle = loader.getTitle();
                         if (!metaTitle.empty() && metaTitle != "Unknown Title")
