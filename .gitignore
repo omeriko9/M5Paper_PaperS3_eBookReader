@@ -5,6 +5,7 @@ build/*
 managed-componponents/
 *.epub
 bootloader-prefix/
+old-books/
 
 # ESP-IDF specific
 sdkconfig

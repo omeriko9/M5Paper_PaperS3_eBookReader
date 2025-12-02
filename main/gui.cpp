@@ -998,20 +998,25 @@ void GUI::drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage)
 
 void GUI::drawLibrary()
 {
-    M5.Display.fillScreen(TFT_WHITE);
-    drawStatusBar();
+    abortRender = true; // Stop any background rendering
+    // Use canvasNext as a buffer if available to speed up drawing
+    M5Canvas* sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
+    LovyanGFX* target = sprite ? (LovyanGFX*)sprite : (LovyanGFX*)&M5.Display;
 
-    M5.Display.setTextColor(TFT_BLACK);
+    target->fillScreen(TFT_WHITE);
+    drawStatusBar(target);
+
+    target->setTextColor(TFT_BLACK);
     const float headingSize = 2.4f;
     const float itemSize = 1.6f; // Reduced size
-    M5.Display.setTextSize(headingSize);
-    M5.Display.setCursor(16, 58);
-    M5.Display.println("Library");
+    target->setTextSize(headingSize);
+    target->setCursor(16, 58);
+    target->println("Library");
 
     auto books = bookIndex.getBooks();
 
     // Paging logic
-    int availableHeight = M5.Display.height() - LIBRARY_LIST_START_Y - 60; // 60 for footer
+    int availableHeight = target->height() - LIBRARY_LIST_START_Y - 60; // 60 for footer
     int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
     if (itemsPerPage < 1)
         itemsPerPage = 1;
@@ -1026,7 +1031,11 @@ void GUI::drawLibrary()
     int endIdx = std::min((int)books.size(), startIdx + itemsPerPage);
 
     int y = LIBRARY_LIST_START_Y;
-    M5.Display.setTextSize(itemSize);
+    target->setTextSize(itemSize);
+
+    // Use startWrite to batch operations if supported
+    target->startWrite();
+
     for (int i = startIdx; i < endIdx; ++i)
     {
         const auto &book = books[i];
@@ -1038,58 +1047,67 @@ void GUI::drawLibrary()
         displayTitle = processTextForDisplay(displayTitle);
 
         // Draw bullet
-        M5.Display.setCursor(20, y);
-        M5.Display.print("- ");
+        target->setCursor(20, y);
+        target->print("- ");
 
         // Draw title with mixed font support
-        int titleX = 20 + M5.Display.textWidth("- ");
-        drawStringMixed(displayTitle, titleX, y, nullptr, itemSize);
+        int titleX = 20 + target->textWidth("- ");
+        // Note: drawStringMixed takes M5Canvas*, so we pass sprite (which might be null)
+        // If sprite is null, drawStringMixed uses M5.Display.
+        drawStringMixed(displayTitle, titleX, y, sprite, itemSize);
 
         y += LIBRARY_LINE_HEIGHT;
     }
 
+    target->endWrite();
+
     // Draw Paging Controls
     if (totalPages > 1)
     {
-        int footerY = M5.Display.height() - 60;
-        M5.Display.setTextSize(1.5f);
+        int footerY = target->height() - 60;
+        target->setTextSize(1.5f);
 
         if (libraryPage > 0)
         {
-            M5.Display.fillRect(20, footerY, 100, 40, TFT_LIGHTGREY);
-            M5.Display.setTextColor(TFT_BLACK);
-            M5.Display.drawString("Prev", 45, footerY + 10);
+            target->fillRect(20, footerY, 100, 40, TFT_LIGHTGREY);
+            target->setTextColor(TFT_BLACK);
+            target->drawString("Prev", 45, footerY + 10);
         }
 
         if (libraryPage < totalPages - 1)
         {
-            M5.Display.fillRect(M5.Display.width() - 120, footerY, 100, 40, TFT_LIGHTGREY);
-            M5.Display.setTextColor(TFT_BLACK);
-            M5.Display.drawString("Next", M5.Display.width() - 95, footerY + 10);
+            target->fillRect(target->width() - 120, footerY, 100, 40, TFT_LIGHTGREY);
+            target->setTextColor(TFT_BLACK);
+            target->drawString("Next", target->width() - 95, footerY + 10);
         }
 
         char pageStr[32];
         snprintf(pageStr, sizeof(pageStr), "%d / %d", libraryPage + 1, totalPages);
-        M5.Display.setTextDatum(textdatum_t::top_center);
-        M5.Display.drawString(pageStr, M5.Display.width() / 2, footerY + 10);
-        M5.Display.setTextDatum(textdatum_t::top_left);
+        target->setTextDatum(textdatum_t::top_center);
+        target->drawString(pageStr, target->width() / 2, footerY + 10);
+        target->setTextDatum(textdatum_t::top_left);
     }
 
     if (books.empty())
     {
-        M5.Display.setCursor(20, LIBRARY_LIST_START_Y);
-        M5.Display.println("No books found.");
-        M5.Display.setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
-        M5.Display.println("Upload via WiFi:");
-        M5.Display.setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT * 2);
+        target->setCursor(20, LIBRARY_LIST_START_Y);
+        target->println("No books found.");
+        target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
+        target->println("Upload via WiFi:");
+        target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT * 2);
         if (wifiConnected)
         {
-            M5.Display.printf("http://%s/", wifiManager.getIpAddress().c_str());
+            target->printf("http://%s/", wifiManager.getIpAddress().c_str());
         }
         else
         {
-            M5.Display.println("Connect to AP 'M5Paper_Reader'");
+            target->println("Connect to AP 'M5Paper_Reader'");
         }
+    }
+
+    if (sprite)
+    {
+        sprite->pushSprite(&M5.Display, 0, 0);
     }
 
     M5.Display.display();

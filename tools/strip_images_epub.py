@@ -253,7 +253,7 @@ def main():
         if filename.lower().endswith('.epub'):
             full_path = os.path.join(target_dir, filename)
             if os.path.isfile(full_path):
-                #process_epub(full_path)
+                process_epub(full_path)
                 rename_epub_by_metadata(full_path)
                 count += 1
                 

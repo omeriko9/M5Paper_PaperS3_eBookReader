@@ -96,6 +96,7 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
 .progress { height: 4px; background: #eee; margin-top: 10px; border-radius: 2px; overflow: hidden; display: none; }
 .bar { height: 100%; background: #34c759; width: 0%; transition: width 0.2s; }
 .stat { font-size: 14px; color: #666; margin-bottom: 10px; }
+#drop-zone.highlight { background: #f0f8ff; border-color: #007aff; }
 </style>
 </head>
 <body>
@@ -138,19 +139,28 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
     </div>
     <button onclick="syncTime()" style="margin-top: 10px;">Sync Time (NTP)</button>
   </div>
-</div><div class="card">
-  <h2>Library</h2>
-  <ul id="list">Loading...</ul>
-  <div style="margin-top: 20px;">
-    <input type="file" id="upfile" accept=".epub">
-    <div style="margin-bottom: 10px;">
-        <input type="checkbox" id="stripImg" checked style="width: auto;"> <label for="stripImg">Strip Images (Save Space)</label>
-    </div>
-    <button onclick="upload()" id="upbtn">Upload Book</button>
-    <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
-    <p id="status"></p>
-  </div>
 </div>
+
+<div class="card">
+  <h2>Library</h2>
+  
+  <div id="drop-zone" style="border: 2px dashed #ccc; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; transition: all 0.2s;">
+    <p style="margin: 0 0 10px 0; color: #666; font-weight: 500;">Drag & Drop EPUB files here</p>
+    <p style="margin: 0 0 10px 0; color: #999; font-size: 12px;">or</p>
+    <input type="file" id="upfile" accept=".epub" multiple style="display: none;">
+    <button onclick="document.getElementById('upfile').click()" style="width: auto; margin-bottom: 15px;">Select Files</button>
+    
+    <div style="text-align: center;">
+        <input type="checkbox" id="stripImg" checked style="width: auto; vertical-align: middle;"> 
+        <label for="stripImg" style="vertical-align: middle;">Strip Images (Save Space)</label>
+    </div>
+    
+    <div id="upload-queue" style="margin-top: 15px; text-align: left;"></div>
+  </div>
+
+  <ul id="list">Loading...</ul>
+</div>
+
 <script>
 let currentSize = 1.0;
 
@@ -273,88 +283,137 @@ function readBook(id) {
         .catch(e => alert(e.message));
 }
 
-async function upload() {
-    const fileInput = document.getElementById('upfile');
-    const file = fileInput.files[0];
-    if(!file) return alert('Please select a file');
-    
-    const strip = document.getElementById('stripImg').checked;
-    const btn = document.getElementById('upbtn');
-    const status = document.getElementById('status');
-    const progress = document.getElementById('progress');
-    const bar = document.getElementById('bar');
-    
-    btn.disabled = true;
-    status.innerText = 'Processing...';
-    progress.style.display = 'block';
-    
-    let uploadFile = file;
-    
-    if (strip) {
-        try {
-            status.innerText = 'Stripping images...';
-            const zip = new JSZip();
-            const content = await zip.loadAsync(file);
-            
-            // Filter files
-            const filesToRemove = [];
-            zip.forEach((relativePath, zipEntry) => {
-                const lower = relativePath.toLowerCase();
-                // Strip images and fonts
-                if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff|ttf|otf|woff|woff2)$/i) || lower.includes('oebps/images/') || lower.includes('oebps/fonts/')) {
-                    filesToRemove.push(relativePath);
-                }
-            });
-            
-            filesToRemove.forEach(f => zip.remove(f));
-            
-            if (filesToRemove.length > 0) {
-                status.innerText = `Removed ${filesToRemove.length} files (images/fonts). Re-zipping...`;
-                const blob = await zip.generateAsync({type:"blob", compression: "DEFLATE"});
-                uploadFile = new File([blob], file.name, {type: "application/epub+zip"});
-            } else {
-                status.innerText = 'No images found to strip.';
-            }
-        } catch (e) {
-            console.error(e);
-            status.innerText = 'Error processing ZIP: ' + e.message;
-            btn.disabled = false;
-            return;
-        }
-    }
-    
-    status.innerText = 'Uploading...';
-    
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload/' + encodeURIComponent(uploadFile.name), true);
-    
-    xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-            const percent = (e.loaded / e.total) * 100;
-            bar.style.width = percent + '%';
-        }
-    };
-    
-    xhr.onload = () => {
-        btn.disabled = false;
-        progress.style.display = 'none';
-        if (xhr.status === 200) {
-            status.innerText = 'Upload complete!';
-            fileInput.value = '';
-            fetchList();
-            fetchSettings();
-        } else {
-            status.innerText = 'Upload failed: ' + xhr.statusText;
-        }
-    };
-    
-    xhr.onerror = () => {
-        btn.disabled = false;
-        status.innerText = 'Network error';
-    };
-    
-    xhr.send(uploadFile);
+// Drag & Drop Logic
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('upfile');
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+  dropZone.addEventListener(eventName, preventDefaults, false);
+});
+
+function preventDefaults(e) {
+  e.preventDefault();
+  e.stopPropagation();
 }
+
+['dragenter', 'dragover'].forEach(eventName => {
+  dropZone.addEventListener(eventName, highlight, false);
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+  dropZone.addEventListener(eventName, unhighlight, false);
+});
+
+function highlight(e) {
+  dropZone.classList.add('highlight');
+  dropZone.style.borderColor = '#007aff';
+  dropZone.style.background = '#f0f8ff';
+}
+
+function unhighlight(e) {
+  dropZone.classList.remove('highlight');
+  dropZone.style.borderColor = '#ccc';
+  dropZone.style.background = 'transparent';
+}
+
+dropZone.addEventListener('drop', handleDrop, false);
+
+function handleDrop(e) {
+  const dt = e.dataTransfer;
+  const files = dt.files;
+  handleFiles(files);
+}
+
+fileInput.addEventListener('change', function() {
+  handleFiles(this.files);
+});
+
+function handleFiles(files) {
+  const queue = document.getElementById('upload-queue');
+  queue.innerHTML = ''; // Clear previous queue
+  ([...files]).forEach(uploadFile);
+}
+
+async function uploadFile(file) {
+  const queue = document.getElementById('upload-queue');
+  const div = document.createElement('div');
+  div.style.marginBottom = '10px';
+  div.style.padding = '10px';
+  div.style.background = '#f9f9f9';
+  div.style.borderRadius = '6px';
+  div.innerHTML = `<div style="font-size:14px; margin-bottom:4px; font-weight:500;">${file.name}</div>
+                   <div class="progress" style="display:block; background:#ddd;"><div class="bar" style="width:0%"></div></div>
+                   <div class="status" style="font-size:12px; color:#666; margin-top:4px;">Waiting...</div>`;
+  queue.appendChild(div);
+  
+  const bar = div.querySelector('.bar');
+  const status = div.querySelector('.status');
+  const strip = document.getElementById('stripImg').checked;
+  
+  let fileToSend = file;
+  
+  if (strip) {
+      try {
+          status.innerText = 'Stripping images...';
+          const zip = new JSZip();
+          const content = await zip.loadAsync(file);
+          
+          const filesToRemove = [];
+          zip.forEach((relativePath, zipEntry) => {
+              const lower = relativePath.toLowerCase();
+              if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff|ttf|otf|woff|woff2)$/i) || lower.includes('oebps/images/') || lower.includes('oebps/fonts/')) {
+                  filesToRemove.push(relativePath);
+              }
+          });
+          
+          filesToRemove.forEach(f => zip.remove(f));
+          
+          if (filesToRemove.length > 0) {
+              const blob = await zip.generateAsync({type:"blob", compression: "DEFLATE"});
+              fileToSend = new File([blob], file.name, {type: "application/epub+zip"});
+              status.innerText = `Stripped ${filesToRemove.length} files. Uploading...`;
+          } else {
+              status.innerText = 'No images to strip. Uploading...';
+          }
+      } catch (e) {
+          status.innerText = 'Error processing ZIP: ' + e.message;
+          status.style.color = 'red';
+          return;
+      }
+  } else {
+      status.innerText = 'Uploading...';
+  }
+  
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload/' + encodeURIComponent(fileToSend.name), true);
+  
+  xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+          const percent = (e.loaded / e.total) * 100;
+          bar.style.width = percent + '%';
+      }
+  };
+  
+  xhr.onload = () => {
+      if (xhr.status === 200) {
+          status.innerText = 'Done';
+          status.style.color = 'green';
+          fetchList();
+          fetchSettings();
+      } else {
+          status.innerText = 'Failed: ' + xhr.statusText;
+          status.style.color = 'red';
+      }
+  };
+  
+  xhr.onerror = () => {
+      status.innerText = 'Network error';
+      status.style.color = 'red';
+  };
+  
+  xhr.send(fileToSend);
+}
+
 fetchList();
 fetchSettings();
 </script>
