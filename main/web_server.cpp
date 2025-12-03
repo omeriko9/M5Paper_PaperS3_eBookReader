@@ -11,12 +11,24 @@
 #include "wifi_manager.h"
 #include "book_index.h"
 #include "gui.h"
+#include "esp_timer.h"
 
 static const char *TAG = "WEB";
 extern WifiManager wifiManager;
 extern BookIndex bookIndex;
 extern GUI gui;
 extern void syncRtcFromNtp();
+
+// Static member initialization
+uint32_t WebServer::lastHttpActivityTime = 0;
+
+void WebServer::updateActivityTime() {
+    lastHttpActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+uint32_t WebServer::getLastActivityTime() {
+    return lastHttpActivityTime;
+}
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
@@ -111,6 +123,14 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
         <button onclick="changeSize(0.1)">+</button>
     </div>
   </div>
+  <div style="margin-bottom: 15px;">
+    <label>Line Spacing: <span id="lineSpacingVal"></span></label>
+    <div style="display: flex; gap: 10px; margin-top: 5px;">
+        <button onclick="changeLineSpacing(-0.1)">-</button>
+        <input type="number" id="customLineSpacing" step="0.1" style="width: 80px; margin:0;" onchange="setCustomLineSpacing()">
+        <button onclick="changeLineSpacing(0.1)">+</button>
+    </div>
+  </div>
   <div>
     <label>Font Family:</label>
     <select id="fontSel" onchange="changeFont()" style="width: 100%; padding: 10px; margin-top: 5px; border-radius: 8px; border: 1px solid #d1d1d6;">
@@ -163,6 +183,7 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
 
 <script>
 let currentSize = 1.0;
+let currentLineSpacing = 1.4;
 
 function fetchSettings() {
     fetch('/api/settings').then(r => r.json()).then(s => {
@@ -170,6 +191,11 @@ function fetchSettings() {
         document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
         document.getElementById('customSize').value = currentSize.toFixed(1);
         document.getElementById('fontSel').value = s.font;
+        if(s.lineSpacing) {
+            currentLineSpacing = s.lineSpacing;
+            document.getElementById('lineSpacingVal').innerText = currentLineSpacing.toFixed(1);
+            document.getElementById('customLineSpacing').value = currentLineSpacing.toFixed(1);
+        }
         if(s.freeSpace) {
             document.getElementById('freeSpace').innerText = (s.freeSpace / 1024 / 1024).toFixed(2) + ' MB';
         }
@@ -196,6 +222,23 @@ function setCustomSize() {
     }
 }
 
+function changeLineSpacing(delta) {
+    currentLineSpacing += delta;
+    if(currentLineSpacing < 1.0) currentLineSpacing = 1.0;
+    if(currentLineSpacing > 3.0) currentLineSpacing = 3.0;
+    updateSettings();
+}
+
+function setCustomLineSpacing() {
+    const val = parseFloat(document.getElementById('customLineSpacing').value);
+    if(!isNaN(val)) {
+        currentLineSpacing = val;
+        if(currentLineSpacing < 1.0) currentLineSpacing = 1.0;
+        if(currentLineSpacing > 3.0) currentLineSpacing = 3.0;
+        updateSettings();
+    }
+}
+
 function changeFont() {
     updateSettings();
 }
@@ -204,11 +247,13 @@ function updateSettings() {
     const font = document.getElementById('fontSel').value;
     document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
     document.getElementById('customSize').value = currentSize.toFixed(1);
+    document.getElementById('lineSpacingVal').innerText = currentLineSpacing.toFixed(1);
+    document.getElementById('customLineSpacing').value = currentLineSpacing.toFixed(1);
     
     fetch('/api/settings', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({fontSize: currentSize, font: font})
+        body: JSON.stringify({fontSize: currentSize, font: font, lineSpacing: currentLineSpacing})
     });
 }
 
@@ -540,6 +585,9 @@ static esp_err_t jump_handler(httpd_req_t *req) {
 /* Handler for upload */
 static esp_err_t upload_post_handler(httpd_req_t *req)
 {
+    // Update activity time at start of upload to prevent sleep
+    WebServer::updateActivityTime();
+    
     char filename[256];
     const char* uri = req->uri;
     const char* filename_start = strstr(uri, "/upload/");
@@ -581,6 +629,9 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     int remaining = req->content_len;
 
     while (remaining > 0) {
+        // Update activity time during upload to prevent sleep on large files
+        WebServer::updateActivityTime();
+        
         if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
             if (received == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
@@ -699,9 +750,9 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
             nvs_close(my_handle);
         }
 
-        char buf[256];
-        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\", \"freeSpace\":%u, \"timezone\":\"%s\"}", 
-            gui.getFontSize(), gui.getFont().c_str(), (unsigned int)getFreeSpace(), tz);
+        char buf[320];
+        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"timezone\":\"%s\"}", 
+            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), (unsigned int)getFreeSpace(), tz);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, strlen(buf));
         return ESP_OK;
@@ -733,6 +784,12 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
                 std::string fontName(fontStart, fontEnd - fontStart);
                 gui.setFont(fontName);
             }
+        }
+        
+        char* pLineSpacing = strstr(buf, "\"lineSpacing\":");
+        if (pLineSpacing) {
+            float spacing = atof(pLineSpacing + 14);
+            gui.setLineSpacing(spacing);
         }
         
         httpd_resp_send(req, "OK", 2);

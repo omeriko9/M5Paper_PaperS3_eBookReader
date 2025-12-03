@@ -329,9 +329,9 @@ extern "C" void app_main(void)
 
     gui.init(is_wake_from_sleep);
     
-    // Skip WiFi on wake from sleep - saves ~3 seconds
+    // Initialize WiFi - either on cold boot or on wake from deep sleep if WiFi is enabled
     if (!is_wake_from_sleep) {
-        // Always init wifi manager so we can enable it later if needed
+        // Cold boot: Always init wifi manager so we can enable it later if needed
         wifiManager.init();
 
         if (gui.isWifiEnabled()) {
@@ -350,7 +350,18 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "WiFi disabled by settings");
         }
     } else {
-        ESP_LOGI(TAG, "Skipping WiFi init on wake - user can enable in settings");
+        // Wake from deep sleep: Init WiFi if it was enabled in settings
+        if (gui.isWifiEnabled()) {
+            ESP_LOGI(TAG, "Wake from deep sleep with WiFi enabled - connecting");
+            wifiManager.init();
+            bool wifiOk = wifiManager.connect();
+            if (!wifiOk) {
+                wifiManager.startAP();
+            }
+            webServer.init("/spiffs");
+        } else {
+            ESP_LOGI(TAG, "Wake from deep sleep - WiFi disabled in settings");
+        }
     }
 
     while (1)

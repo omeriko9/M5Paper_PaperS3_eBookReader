@@ -169,10 +169,23 @@ static bool isHebrew(const std::string &word)
     return false;
 }
 
+// Helper to check if a character is an ASCII digit
+static bool isAsciiDigit(unsigned char c)
+{
+    return c >= '0' && c <= '9';
+}
+
 static std::string reverseHebrewWord(const std::string &text)
 {
+    // When reversing Hebrew text for RTL display, we need to keep digit sequences
+    // in their original order (LTR). For example, "123" in Hebrew text should 
+    // remain "123", not become "321".
+    
     std::string reversed;
     reversed.reserve(text.length());
+    
+    std::string currentDigitSequence;
+    
     for (size_t i = 0; i < text.length();)
     {
         unsigned char c = (unsigned char)text[i];
@@ -188,9 +201,33 @@ static std::string reverseHebrewWord(const std::string &text)
 
         if (i + charLen > text.length())
             break;
-        reversed.insert(0, text.substr(i, charLen));
+        
+        // Check if this is an ASCII digit (single byte)
+        if (charLen == 1 && isAsciiDigit(c))
+        {
+            // Accumulate digits
+            currentDigitSequence += text[i];
+        }
+        else
+        {
+            // If we have accumulated digits, insert them as a group first
+            if (!currentDigitSequence.empty())
+            {
+                reversed.insert(0, currentDigitSequence);
+                currentDigitSequence.clear();
+            }
+            // Insert the current character at the beginning (reversing)
+            reversed.insert(0, text.substr(i, charLen));
+        }
         i += charLen;
     }
+    
+    // Don't forget any trailing digits
+    if (!currentDigitSequence.empty())
+    {
+        reversed.insert(0, currentDigitSequence);
+    }
+    
     return reversed;
 }
 
@@ -778,12 +815,16 @@ void GUI::update()
     handleTouch();
 
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    
+    // Check web server activity - if there's been recent HTTP activity, don't sleep
+    uint32_t lastHttpActivity = webServer.getLastActivityTime();
+    bool recentHttpActivity = (lastHttpActivity > 0) && (now - lastHttpActivity < 30 * 1000); // 30 second grace period
 
     // Library Mode Logic
     if (currentState == AppState::LIBRARY)
     {
-        // WebServer active for 5 minutes
-        if (now - lastActivityTime > 5 * 60 * 1000)
+        // WebServer active for 5 minutes, but don't sleep if there's recent HTTP activity
+        if (now - lastActivityTime > 5 * 60 * 1000 && !recentHttpActivity)
         {
             if (webServerEnabled)
             {
@@ -1147,7 +1188,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     int height = gfx->height();
     int maxWidth = width - rightMargin - x; // Width available for text
     int maxY = height - bottomMargin;
-    int lineHeight = gfx->fontHeight() * 1.4; // More breathing room
+    int lineHeight = gfx->fontHeight() * lineSpacing; // Configurable line spacing
 
     // Fetch a large chunk
     std::string text;
@@ -2160,7 +2201,14 @@ void GUI::handleTouch()
                 }
 
                 // Middle area - Page Turn / Chapter Skip
-                if (clickPending)
+                // When waking up from sleep, process the touch immediately as a page turn
+                // to avoid re-rendering the current page first
+                if (justWokeUp)
+                {
+                    clickPending = false;
+                    processReaderTap(t.x, t.y, false); // Single tap = page turn
+                }
+                else if (clickPending)
                 {
                     // Check if second click
                     bool sameSide = (t.x < M5.Display.width() / 2) == (lastClickX < M5.Display.width() / 2);
@@ -2460,6 +2508,8 @@ void GUI::saveSettings()
         nvs_set_i32(my_handle, "font_size", sizeInt);
         nvs_set_str(my_handle, "font_name", currentFont.c_str());
         nvs_set_i32(my_handle, "wifi_enabled", wifiEnabled ? 1 : 0);
+        int32_t spacingInt = (int32_t)(lineSpacing * 10);
+        nvs_set_i32(my_handle, "line_spacing", spacingInt);
         nvs_commit(my_handle);
         nvs_close(my_handle);
     }
@@ -2472,6 +2522,18 @@ void GUI::setFontSize(float size)
     if (size > 5.0f)
         size = 5.0f;
     fontSize = size;
+    saveSettings();
+    resetPageInfoCache();
+    needsRedraw = true;
+}
+
+void GUI::setLineSpacing(float spacing)
+{
+    if (spacing < 1.0f)
+        spacing = 1.0f;
+    if (spacing > 3.0f)
+        spacing = 3.0f;
+    lineSpacing = spacing;
     saveSettings();
     resetPageInfoCache();
     needsRedraw = true;
@@ -2511,6 +2573,12 @@ void GUI::loadSettings()
         if (nvs_get_i32(my_handle, "wifi_enabled", &wifiEn) == ESP_OK)
         {
             wifiEnabled = (wifiEn != 0);
+        }
+
+        int32_t spacingInt = 11; // Default 1.1
+        if (nvs_get_i32(my_handle, "line_spacing", &spacingInt) == ESP_OK)
+        {
+            lineSpacing = spacingInt / 10.0f;
         }
 
         nvs_close(my_handle);

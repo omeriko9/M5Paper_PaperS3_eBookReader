@@ -30,8 +30,10 @@ public:
 
     void setFontSize(float size);
     void setFont(const std::string& fontName);
+    void setLineSpacing(float spacing);
     float getFontSize() const { return fontSize; }
     std::string getFont() const { return currentFont; }
+    float getLineSpacing() const { return lineSpacing; }
     
     void jumpTo(float percent);
     void jumpToChapter(int chapter);
@@ -87,6 +89,7 @@ private:
 
     // Settings
     float fontSize = 1.0f; // Scale factor
+    float lineSpacing = 1.1f; // Line height multiplier (1.0 = tight, 2.0 = double spaced)
     std::string currentFont = "Default";
     std::string previousFont = "Default";
     bool fontChanged = false;
