@@ -47,6 +47,8 @@ public:
     void setWebServerEnabled(bool enabled);
     bool isWifiEnabled() const { return wifiEnabled; }
 
+    static void enterDeepSleepShutdown();
+
     // Public for the task to access
     void renderTaskLoop();
     void metricsTaskLoop();

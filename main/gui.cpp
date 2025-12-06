@@ -389,6 +389,16 @@ static void enterDeepSleepWithTouchWake()
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext0_wakeup(TOUCH_INT_PIN, 0); // 0 = LOW
 
+    // 2.1 Configure wakeup on Wheel Button (GPIO 38 - Press)
+    // Use ext1 for the button since ext0 is used for touch.
+    // GPIO 38 is RTC GPIO.
+    const uint64_t BUTTON_MASK = (1ULL << 38);
+    esp_sleep_enable_ext1_wakeup(BUTTON_MASK, ESP_EXT1_WAKEUP_ALL_LOW);
+
+    // 2.2 Configure Timer Wakeup (30 minutes)
+    // 30 mins * 60 sec * 1000000 us
+    esp_sleep_enable_timer_wakeup(30ULL * 60ULL * 1000000ULL);
+
     // 3. Keep main power rail ON during deep sleep
     // This is critical for M5Paper touch controller to stay alive
     gpio_reset_pin(MAIN_PWR_PIN);
@@ -397,12 +407,89 @@ static void enterDeepSleepWithTouchWake()
     gpio_hold_en(MAIN_PWR_PIN);
     gpio_deep_sleep_hold_en();
 
+    // 3.1 Ensure SD card pins are in a safe state to prevent leakage
+    // M5Paper SD card pins: MOSI=12, MISO=13, CLK=14, CS=4
+    // Even if not used, floating pins on the powered rail can drain battery.
+    gpio_reset_pin(GPIO_NUM_4);
+    gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_4, 1); // CS High (Inactive)
+    gpio_hold_en(GPIO_NUM_4);
+
+    gpio_reset_pin(GPIO_NUM_12);
+    gpio_set_direction(GPIO_NUM_12, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_12, 0); // MOSI Low
+    gpio_hold_en(GPIO_NUM_12);
+
+    gpio_reset_pin(GPIO_NUM_14);
+    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_14, 0); // CLK Low
+    gpio_hold_en(GPIO_NUM_14);
+
+    gpio_reset_pin(GPIO_NUM_13);
+    gpio_set_direction(GPIO_NUM_13, GPIO_MODE_INPUT);
+    gpio_pullup_en(GPIO_NUM_13); // Pull up MISO
+    gpio_hold_en(GPIO_NUM_13);
+
     // 4. Put display to sleep cleanly
     M5.Display.sleep();
     M5.Display.waitDisplay();
+    vTaskDelay(100 / portTICK_PERIOD_MS); // Give it a moment to settle
 
     // 5. Enter deep sleep
     ESP_LOGI(TAG, "Entering deep sleep now");
+    esp_deep_sleep_start();
+}
+
+void GUI::enterDeepSleepShutdown()
+{
+    ESP_LOGI(TAG, "Entering Deep Sleep Shutdown (Stage 2)...");
+
+    // Only needed on M5Paper
+    if (M5.getBoard() != m5::board_t::board_M5Paper)
+    {
+        esp_deep_sleep_start();
+        return;
+    }
+
+    const gpio_num_t MAIN_PWR_PIN = GPIO_NUM_2;
+
+    // 1. Turn OFF Main Power Rail
+    // This kills power to Touch, EPD, SD, etc.
+    // We must release the hold first if it was held.
+    gpio_hold_dis(MAIN_PWR_PIN);
+    gpio_reset_pin(MAIN_PWR_PIN);
+    gpio_set_direction(MAIN_PWR_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(MAIN_PWR_PIN, 0); // OFF
+    gpio_hold_en(MAIN_PWR_PIN);
+    gpio_deep_sleep_hold_en();
+
+    // 2. Configure Wakeup on Wheel Button ONLY (GPIO 38)
+    // Since power is off, Touch (GPIO 36) won't work reliably or at all if it needs power.
+    // Wheel button pulls to ground, so it should work if pulled up internally or externally (if external pullup is on VCC_BAT or similar).
+    // M5Paper schematic shows buttons have external pullups? Or internal?
+    // If they are on the switched rail, they won't work.
+    // Checking schematic: M5Paper buttons (37,38,39) are connected to ESP32 pins.
+    // They are pulled up to 3.3V. If 3.3V is OFF (MAIN_PWR_PIN=0), then they might be floating or Low.
+    // Wait, if MAIN_PWR_PIN controls the 3.3V rail that pulls up the buttons, then turning it off means buttons will read LOW (or floating).
+    // If they read LOW, we will wake up immediately if we set wake on LOW.
+    //
+    // Let's check M5Paper Power Architecture.
+    // GPIO 2 controls "PERI_PWR".
+    // ESP32 itself is powered by "VCC_3V3" which comes from SY7088 (DCDC1 of AXP192? No, separate).
+    // AXP192 powers the ESP32.
+    // GPIO 2 controls peripheral power (Screen, Touch, etc).
+    // Are buttons on Peripheral Power?
+    // Usually buttons are on Always-On power or pulled up to VCC_3V3 (ESP power).
+    // If buttons are pulled up to VCC_3V3 (ESP power), then they will work even if GPIO 2 is Off.
+    // I will assume they are on VCC_3V3.
+
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    
+    // Use ext1 for button (GPIO 38)
+    const uint64_t BUTTON_MASK = (1ULL << 38);
+    esp_sleep_enable_ext1_wakeup(BUTTON_MASK, ESP_EXT1_WAKEUP_ALL_LOW);
+
+    // 3. Enter Deep Sleep
     esp_deep_sleep_start();
 }
 

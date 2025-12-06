@@ -527,6 +527,7 @@ static size_t getFreeSpace() {
 }
 
 static esp_err_t jump_handler(httpd_req_t *req) {
+    WebServer::updateActivityTime();
     char buf[128];
     ESP_LOGI(TAG, "jump_handler called: uri=%s", req->uri);
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
@@ -664,6 +665,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 /* API to list files as JSON */
 static esp_err_t api_list_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     // Reload index to ensure we have latest
     bookIndex.init(); 
     auto books = bookIndex.getBooks();
@@ -689,6 +691,7 @@ static esp_err_t api_list_handler(httpd_req_t *req)
 /* API to delete file */
 static esp_err_t api_delete_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     char buf[100];
     size_t buf_len = sizeof(buf);
     
@@ -719,6 +722,7 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
 /* API to open a book on the device */
 static esp_err_t api_open_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     char buf[100];
     size_t buf_len = sizeof(buf);
 
@@ -739,6 +743,7 @@ static esp_err_t api_open_handler(httpd_req_t *req)
 /* API to get/set settings */
 static esp_err_t api_settings_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     if (req->method == HTTP_GET) {
         char tz[64] = {0};
         // Load TZ from NVS
@@ -801,6 +806,7 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
 /* Main page handler */
 static esp_err_t index_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     if (wifiManager.isConnected()) {
         httpd_resp_send(req, MANAGER_HTML, HTTPD_RESP_USE_STRLEN);
     } else {
@@ -812,6 +818,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 /* Handler for WiFi config */
 static esp_err_t wifi_post_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     char buf[128];
     int ret, remaining = req->content_len;
     if (remaining >= sizeof(buf)) {
@@ -858,6 +865,7 @@ static esp_err_t wifi_post_handler(httpd_req_t *req)
 /* Handler for redirecting captive portal requests */
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
     httpd_resp_send(req, NULL, 0);
@@ -866,6 +874,7 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
 
 static esp_err_t set_time_handler(httpd_req_t *req)
 {
+    WebServer::updateActivityTime();
     char buf[100];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
         char tz_encoded[64] = {0};
