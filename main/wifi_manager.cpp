@@ -87,6 +87,9 @@ bool WifiManager::connect() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    
+    // Disable power save to ensure reliable connection/throughput
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     // Wait a bit for connection (simplified)
     for(int i=0; i<20; i++) {

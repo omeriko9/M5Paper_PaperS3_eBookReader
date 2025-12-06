@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 struct BookEntry {
     int id;
@@ -14,6 +16,7 @@ struct BookEntry {
 
 class BookIndex {
 public:
+    BookIndex();
     bool init(bool fastMode = false);
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);
@@ -29,6 +32,7 @@ public:
 
 private:
     std::vector<BookEntry> books;
+    SemaphoreHandle_t mutex = NULL;
     void load();
     void save();
     int getNextId();

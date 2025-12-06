@@ -585,6 +585,9 @@ void GUI::init(bool isWakeFromSleep)
     prevCanvasValid = false;
 
     lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+    
+    // Disable WiFi power save to prevent packet loss during uploads
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     // Always check for state restoration, regardless of wake reason.
     // This handles cases where the device was reset or power-cycled manually.
@@ -906,6 +909,10 @@ void GUI::update()
     // Check web server activity - if there's been recent HTTP activity, don't sleep
     uint32_t lastHttpActivity = webServer.getLastActivityTime();
     bool recentHttpActivity = (lastHttpActivity > 0) && (now - lastHttpActivity < 30 * 1000); // 30 second grace period
+
+    if (recentHttpActivity) {
+        lastActivityTime = now; // Reset idle timer if web is active
+    }
 
     // Library Mode Logic
     if (currentState == AppState::LIBRARY)

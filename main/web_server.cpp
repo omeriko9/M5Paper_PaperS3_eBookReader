@@ -917,6 +917,8 @@ void WebServer::init(const char* basePath) {
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 12; // Increased for safety
     config.stack_size = 8192; // Increase stack for file ops
+    config.recv_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
+    config.send_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
 
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_uri_t index_uri = {

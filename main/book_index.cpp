@@ -11,8 +11,15 @@
 static const char *TAG = "INDEX";
 static const char *INDEX_FILE = "/spiffs/index.txt";
 
+BookIndex::BookIndex() {
+    mutex = xSemaphoreCreateRecursiveMutex();
+}
+
 bool BookIndex::init(bool fastMode)
 {
+    if (!mutex) mutex = xSemaphoreCreateRecursiveMutex();
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    
     bool foundNewBooks = false;
     load();
     if (!fastMode)
@@ -24,10 +31,12 @@ bool BookIndex::init(bool fastMode)
     
     // checkMetricsExistence(); // Removed to avoid WDT timeout on wake
 
+    xSemaphoreGiveRecursive(mutex);
     return foundNewBooks;
 }
 
 void BookIndex::checkMetricsExistence() {
+    // Private method, assumes mutex held
     for (auto& book : books) {
         char path[64];
         snprintf(path, sizeof(path), "/spiffs/m_%d.bin", book.id);
@@ -37,12 +46,14 @@ void BookIndex::checkMetricsExistence() {
 }
 
 bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets) {
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     char path[64];
     snprintf(path, sizeof(path), "/spiffs/m_%d.bin", id);
     
     FILE* f = fopen(path, "wb");
     if (!f) {
         ESP_LOGE(TAG, "Failed to open metrics file for writing: %s", path);
+        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
@@ -71,30 +82,42 @@ bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<siz
     save();
     
     ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters", id, totalChars, count);
+    xSemaphoreGiveRecursive(mutex);
     return true;
 }
 
 bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>& chapterOffsets) {
+    // File access doesn't strictly need mutex if it doesn't touch 'books', 
+    // but good practice if we change implementation later.
+    // However, this method doesn't touch 'books' vector, only reads a file.
+    // But let's lock to be safe if we add caching later.
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     char path[64];
     snprintf(path, sizeof(path), "/spiffs/m_%d.bin", id);
     
     FILE* f = fopen(path, "rb");
-    if (!f) return false;
+    if (!f) {
+        xSemaphoreGiveRecursive(mutex);
+        return false;
+    }
     
     uint8_t version = 0;
     if (fread(&version, 1, 1, f) != 1 || version != 1) {
         fclose(f);
+        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
     if (fread(&totalChars, sizeof(size_t), 1, f) != 1) {
         fclose(f);
+        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
     uint32_t count = 0;
     if (fread(&count, sizeof(uint32_t), 1, f) != 1) {
         fclose(f);
+        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
@@ -102,21 +125,27 @@ bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>&
     if (count > 0) {
         if (fread(chapterOffsets.data(), sizeof(size_t), count, f) != count) {
             fclose(f);
+            xSemaphoreGiveRecursive(mutex);
             return false;
         }
     }
     
     fclose(f);
+    xSemaphoreGiveRecursive(mutex);
     return true;
 }
 
 bool BookIndex::scanDirectory(const char *basePath)
 {
+    // Private helper or public? Public. Needs lock.
+    // But init calls it. Recursive mutex handles this.
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     bool foundNewBooks = false;
     DIR *dir = opendir(basePath);
     if (!dir)
     {
         ESP_LOGW(TAG, "Failed to open directory: %s", basePath);
+        xSemaphoreGiveRecursive(mutex);
         return false;
     }
 
@@ -196,22 +225,21 @@ bool BookIndex::scanDirectory(const char *basePath)
     }
     closedir(dir);
 
+    xSemaphoreGiveRecursive(mutex);
     return foundNewBooks;
 }
 
 void BookIndex::load()
 {
+    // Private helper, assumes mutex held
     books.clear();
     FILE *f = fopen(INDEX_FILE, "r");
     if (!f)
     {
         ESP_LOGW(TAG, "Index file not found, creating new");
-        M5.Display.fillScreen(WHITE);
-        M5.Display.setTextColor(BLACK);
-        M5.Display.setTextSize(1.5);
-        M5.Display.setTextDatum(textdatum_t::middle_center);
-        M5.Display.drawString("Indexing Books...", M5.Display.width() / 2, M5.Display.height() / 2);
-
+        // Don't draw here, it's not thread safe if called from background task
+        // M5.Display.fillScreen(WHITE);
+        // ...
         return;
     }
 
@@ -278,6 +306,7 @@ void BookIndex::load()
 
 void BookIndex::save()
 {
+    // Private helper, assumes mutex held
     FILE *f = fopen(INDEX_FILE, "w");
     if (!f)
     {
@@ -294,6 +323,7 @@ void BookIndex::save()
 
 void BookIndex::updateProgress(int id, int chapter, size_t offset)
 {
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     for (auto &book : books)
     {
         if (book.id == id)
@@ -301,23 +331,31 @@ void BookIndex::updateProgress(int id, int chapter, size_t offset)
             book.currentChapter = chapter;
             book.currentOffset = offset;
             save();
+            xSemaphoreGiveRecursive(mutex);
             return;
         }
     }
+    xSemaphoreGiveRecursive(mutex);
 }
 
 BookEntry BookIndex::getBook(int id)
 {
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     for (const auto &book : books)
     {
-        if (book.id == id)
-            return book;
+        if (book.id == id) {
+            BookEntry b = book;
+            xSemaphoreGiveRecursive(mutex);
+            return b;
+        }
     }
+    xSemaphoreGiveRecursive(mutex);
     return {0, "", "", 0, 0, 0};
 }
 
 int BookIndex::getNextId()
 {
+    // Private helper, assumes mutex held
     int maxId = 0;
     for (const auto &book : books)
     {
@@ -329,11 +367,7 @@ int BookIndex::getNextId()
 
 std::string BookIndex::addBook(const std::string &title)
 {
-    // Check if already exists, if so, delete old entry first to avoid duplicates
-    // Or just allow duplicates? Let's allow duplicates but with different IDs for simplicity,
-    // or we could update the existing one.
-    // For this POC, let's just add new.
-
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     int id = getNextId();
     char path[32];
     snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
@@ -341,11 +375,13 @@ std::string BookIndex::addBook(const std::string &title)
     books.push_back({id, title, std::string(path), 0, 0, 0, false});
     save();
 
+    xSemaphoreGiveRecursive(mutex);
     return std::string(path);
 }
 
 void BookIndex::removeBook(int id)
 {
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     auto it = std::remove_if(books.begin(), books.end(), [id](const BookEntry &b)
                              { return b.id == id; });
 
@@ -354,9 +390,13 @@ void BookIndex::removeBook(int id)
         books.erase(it, books.end());
         save();
     }
+    xSemaphoreGiveRecursive(mutex);
 }
 
 std::vector<BookEntry> BookIndex::getBooks()
 {
-    return books;
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    std::vector<BookEntry> copy = books;
+    xSemaphoreGiveRecursive(mutex);
+    return copy;
 }
