@@ -389,16 +389,6 @@ static void enterDeepSleepWithTouchWake()
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext0_wakeup(TOUCH_INT_PIN, 0); // 0 = LOW
 
-    // 2.1 Configure wakeup on Wheel Button (GPIO 38 - Press)
-    // Use ext1 for the button since ext0 is used for touch.
-    // GPIO 38 is RTC GPIO.
-    const uint64_t BUTTON_MASK = (1ULL << 38);
-    esp_sleep_enable_ext1_wakeup(BUTTON_MASK, ESP_EXT1_WAKEUP_ALL_LOW);
-
-    // 2.2 Configure Timer Wakeup (30 minutes)
-    // 30 mins * 60 sec * 1000000 us
-    esp_sleep_enable_timer_wakeup(30ULL * 60ULL * 1000000ULL);
-
     // 3. Keep main power rail ON during deep sleep
     // This is critical for M5Paper touch controller to stay alive
     gpio_reset_pin(MAIN_PWR_PIN);
@@ -407,33 +397,9 @@ static void enterDeepSleepWithTouchWake()
     gpio_hold_en(MAIN_PWR_PIN);
     gpio_deep_sleep_hold_en();
 
-    // 3.1 Ensure SD card pins are in a safe state to prevent leakage
-    // M5Paper SD card pins: MOSI=12, MISO=13, CLK=14, CS=4
-    // Even if not used, floating pins on the powered rail can drain battery.
-    gpio_reset_pin(GPIO_NUM_4);
-    gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_4, 1); // CS High (Inactive)
-    gpio_hold_en(GPIO_NUM_4);
-
-    gpio_reset_pin(GPIO_NUM_12);
-    gpio_set_direction(GPIO_NUM_12, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_12, 0); // MOSI Low
-    gpio_hold_en(GPIO_NUM_12);
-
-    gpio_reset_pin(GPIO_NUM_14);
-    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_14, 0); // CLK Low
-    gpio_hold_en(GPIO_NUM_14);
-
-    gpio_reset_pin(GPIO_NUM_13);
-    gpio_set_direction(GPIO_NUM_13, GPIO_MODE_INPUT);
-    gpio_pullup_en(GPIO_NUM_13); // Pull up MISO
-    gpio_hold_en(GPIO_NUM_13);
-
     // 4. Put display to sleep cleanly
     M5.Display.sleep();
     M5.Display.waitDisplay();
-    vTaskDelay(100 / portTICK_PERIOD_MS); // Give it a moment to settle
 
     // 5. Enter deep sleep
     ESP_LOGI(TAG, "Entering deep sleep now");
@@ -844,6 +810,19 @@ void GUI::backgroundIndexerTaskLoop() {
                 for (int i = 0; i < chapters; ++i) {
                     // Yield frequently to keep UI responsive
                     vTaskDelay(1);
+
+                    // Check for web activity and pause if needed to avoid starving the upload handler
+                    uint32_t lastHttp = WebServer::getLastActivityTime();
+                    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+                    if (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000)) {
+                        ESP_LOGI(TAG, "BgIndexer: Pausing for web activity...");
+                        while (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000)) {
+                            vTaskDelay(pdMS_TO_TICKS(1000));
+                            lastHttp = WebServer::getLastActivityTime();
+                            now = (uint32_t)(esp_timer_get_time() / 1000);
+                        }
+                        ESP_LOGI(TAG, "BgIndexer: Resuming...");
+                    }
                     
                     // If user started reading this specific book, abort
                     if (currentState == AppState::READER && currentBook.id == book.id) {
@@ -1775,6 +1754,7 @@ void GUI::drawSleepSymbol(const char *symbol)
 
 void GUI::goToSleep()
 {
+    ESP_LOGI(TAG, "Entering goToSleep()...");
     // Save progress
     int chIdx = 0;
     if (xSemaphoreTake(epubMutex, portMAX_DELAY))

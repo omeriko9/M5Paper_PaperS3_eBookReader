@@ -132,19 +132,19 @@ extern "C" void app_main(void)
     // Check wake reason FIRST
     auto wakeup_reason = esp_sleep_get_wakeup_cause();
 
-    // Handle Timer Wakeup (Stage 1 -> Stage 2 transition)
-    if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER)
-    {
-        ESP_LOGI(TAG, "Woke from Stage 1 Deep Sleep (Timer) - Entering Stage 2 Shutdown");
-        // We need to initialize M5 to access board info inside enterDeepSleepShutdown, 
-        // but we can skip display init to save time/power.
-        // Actually, enterDeepSleepShutdown checks M5.getBoard().
-        // M5.begin() is needed? M5.getBoard() might work if we just call M5.begin() minimally.
-        // But to be safe and simple:
-        M5.begin(); 
-        GUI::enterDeepSleepShutdown();
-        return; // Should not reach here
-    }
+    // // Handle Timer Wakeup (Stage 1 -> Stage 2 transition)
+    // if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER)
+    // {
+    //     ESP_LOGI(TAG, "Woke from Stage 1 Deep Sleep (Timer) - Entering Stage 2 Shutdown");
+    //     // We need to initialize M5 to access board info inside enterDeepSleepShutdown, 
+    //     // but we can skip display init to save time/power.
+    //     // Actually, enterDeepSleepShutdown checks M5.getBoard().
+    //     // M5.begin() is needed? M5.getBoard() might work if we just call M5.begin() minimally.
+    //     // But to be safe and simple:
+    //     M5.begin(); 
+    //     GUI::enterDeepSleepShutdown();
+    //     return; // Should not reach here
+    // }
 
     bool is_wake_from_sleep = (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || wakeup_reason == ESP_SLEEP_WAKEUP_EXT1);
     

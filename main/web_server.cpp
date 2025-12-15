@@ -373,10 +373,12 @@ fileInput.addEventListener('change', function() {
   handleFiles(this.files);
 });
 
-function handleFiles(files) {
+async function handleFiles(files) {
   const queue = document.getElementById('upload-queue');
   queue.innerHTML = ''; // Clear previous queue
-  ([...files]).forEach(uploadFile);
+  for (const file of files) {
+      await uploadFile(file);
+  }
 }
 
 async function uploadFile(file) {
@@ -429,34 +431,38 @@ async function uploadFile(file) {
       status.innerText = 'Uploading...';
   }
   
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/upload/' + encodeURIComponent(fileToSend.name), true);
-  
-  xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-          const percent = (e.loaded / e.total) * 100;
-          bar.style.width = percent + '%';
-      }
-  };
-  
-  xhr.onload = () => {
-      if (xhr.status === 200) {
-          status.innerText = 'Done';
-          status.style.color = 'green';
-          fetchList();
-          fetchSettings();
-      } else {
-          status.innerText = 'Failed: ' + xhr.statusText;
+  await new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload/' + encodeURIComponent(fileToSend.name), true);
+      
+      xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+              const percent = (e.loaded / e.total) * 100;
+              bar.style.width = percent + '%';
+          }
+      };
+      
+      xhr.onload = () => {
+          if (xhr.status === 200) {
+              status.innerText = 'Done';
+              status.style.color = 'green';
+              fetchList();
+              fetchSettings();
+          } else {
+              status.innerText = 'Failed: ' + xhr.statusText;
+              status.style.color = 'red';
+          }
+          resolve();
+      };
+      
+      xhr.onerror = () => {
+          status.innerText = 'Network error';
           status.style.color = 'red';
-      }
-  };
-  
-  xhr.onerror = () => {
-      status.innerText = 'Network error';
-      status.style.color = 'red';
-  };
-  
-  xhr.send(fileToSend);
+          resolve();
+      };
+      
+      xhr.send(fileToSend);
+  });
 }
 
 fetchList();
@@ -628,15 +634,23 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 
     int received;
     int remaining = req->content_len;
+    int64_t lastLogTime = 0;
 
     while (remaining > 0) {
         // Update activity time during upload to prevent sleep on large files
         WebServer::updateActivityTime();
+
+        int64_t now = esp_timer_get_time();
+        if (now - lastLogTime > 2000000) { // Log every 2 seconds
+            lastLogTime = now;
+            ESP_LOGI(TAG, "Upload progress: %d bytes remaining. Activity time updated.", remaining);
+        }
         
         if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
             if (received == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
+            ESP_LOGE(TAG, "httpd_req_recv failed with %d", received);
             free(buf);
             fclose(f);
             unlink(safePath.c_str());
