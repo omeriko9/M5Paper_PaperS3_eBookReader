@@ -2,7 +2,7 @@
 build/
 build
 build/*
-managed-componponents/
+managed_components/
 *.epub
 bootloader-prefix/
 old-books/
@@ -46,3 +46,10 @@ spiffs_image/
 
 # Tools output
 tools/*.vlw
+
+# Python
+__pycache__/
+*.pyc
+
+# Local logs
+build_log.txt
