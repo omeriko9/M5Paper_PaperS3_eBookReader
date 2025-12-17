@@ -313,18 +313,14 @@ bool DeviceHAL::mountSDCard() {
         return true;
     }
 
-    ESP_LOGI(TAG, "Mounting SD card...");
+    ESP_LOGI(TAG, "Mounting SD card on pins CS=%d, CLK=%d, MOSI=%d, MISO=%d",
+             M5PAPERS3_SD_CS_PIN, M5PAPERS3_SD_CLK_PIN, 
+             M5PAPERS3_SD_MOSI_PIN, M5PAPERS3_SD_MISO_PIN);
 
-    // Ensure pins are pulled up
-    gpio_set_pull_mode(M5PAPERS3_SD_MISO_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_MOSI_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_CLK_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_CS_PIN, GPIO_PULLUP_ONLY);
-
+    // Use SPI3_HOST to avoid conflict with M5Unified/M5GFX which may use SPI2
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;
-    host.max_freq_khz = 25000; // 25 MHz as requested
-    host.command_timeout_ms = 5000; // Increase timeout for stability
+    host.slot = SPI3_HOST;
+    host.max_freq_khz = 20000;  // 20MHz - stable speed
 
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
@@ -338,15 +334,16 @@ bool DeviceHAL::mountSDCard() {
         .intr_flags = 0
     };
 
-    esp_err_t ret = spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+    esp_err_t ret = spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initialize SPI3 bus: %s", esp_err_to_name(ret));
         return false;
     }
+    ESP_LOGI(TAG, "SPI3 bus initialized");
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = M5PAPERS3_SD_CS_PIN;
-    slot_config.host_id = (spi_host_device_t)host.slot;
+    slot_config.host_id = SPI3_HOST;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
@@ -355,6 +352,7 @@ bool DeviceHAL::mountSDCard() {
         .disk_status_check_enable = false
     };
 
+    ESP_LOGI(TAG, "Attempting SD card mount...");
     ret = esp_vfs_fat_sdspi_mount(
         CONFIG_EBOOK_S3_SD_MOUNT_POINT,
         &host,
@@ -440,22 +438,14 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
 
     if (progressCallback) progressCallback(10);
 
-    // Mount with format_if_mount_failed = true to trigger format
-    
-    // Ensure pins are pulled up
-    gpio_set_pull_mode(M5PAPERS3_SD_MISO_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_MOSI_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_CLK_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_CS_PIN, GPIO_PULLUP_ONLY);
-
+    // Use SPI3_HOST to match mountSDCard
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;
-    host.max_freq_khz = 25000;
-    host.command_timeout_ms = 5000;
+    host.slot = SPI3_HOST;
+    host.max_freq_khz = 20000;
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = M5PAPERS3_SD_CS_PIN;
-    slot_config.host_id = (spi_host_device_t)host.slot;
+    slot_config.host_id = SPI3_HOST;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = true,  // This will format!
@@ -466,18 +456,9 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
 
     if (progressCallback) progressCallback(30);
 
-    // First, we need to try to force-unmount and reinitialize
-    // Use a temporary card pointer
     sdmmc_card_t* tempCard = nullptr;
 
     // Re-initialize SPI bus (it might already be initialized)
-    
-    // Ensure pins are pulled up
-    gpio_set_pull_mode(M5PAPERS3_SD_MISO_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_MOSI_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_CLK_PIN, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(M5PAPERS3_SD_CS_PIN, GPIO_PULLUP_ONLY);
-
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
         .miso_io_num = M5PAPERS3_SD_MISO_PIN,
@@ -489,7 +470,7 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
         .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
         .intr_flags = 0
     };
-    spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+    spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
 
     if (progressCallback) progressCallback(50);
 

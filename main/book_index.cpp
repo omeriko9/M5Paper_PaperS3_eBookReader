@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <M5Unified.hpp>
+#include "device_hal.h"
 
 static const char *TAG = "INDEX";
 static const char *INDEX_FILE = "/spiffs/index.txt";
@@ -24,8 +25,15 @@ bool BookIndex::init(bool fastMode)
     load();
     if (!fastMode)
     {
-        foundNewBooks = scanDirectory("/spiffs");
-        // scanDirectory("/sd");
+        foundNewBooks |= scanDirectory("/spiffs");
+        
+        DeviceHAL& hal = DeviceHAL::getInstance();
+        if (hal.isSDCardMounted()) {
+            const char* sdPath = hal.getSDCardMountPoint();
+            if (sdPath) {
+                foundNewBooks |= scanDirectory(sdPath);
+            }
+        }
         save();
     }
     
@@ -45,14 +53,47 @@ void BookIndex::checkMetricsExistence() {
     }
 }
 
+static std::string getMetricsPath(const std::string& bookPath) {
+    if (bookPath.empty()) return "";
+    
+    std::string metricsPath = bookPath;
+    size_t lastSlash = metricsPath.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+        metricsPath.insert(lastSlash + 1, "m_");
+    } else {
+        metricsPath = "m_" + metricsPath;
+    }
+    
+    size_t dot = metricsPath.find_last_of('.');
+    if (dot != std::string::npos) {
+        metricsPath = metricsPath.substr(0, dot) + ".bin";
+    } else {
+        metricsPath += ".bin";
+    }
+    return metricsPath;
+}
+
 bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets) {
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    char path[64];
-    snprintf(path, sizeof(path), "/spiffs/m_%d.bin", id);
     
-    FILE* f = fopen(path, "wb");
+    std::string bookPath;
+    for (const auto& book : books) {
+        if (book.id == id) {
+            bookPath = book.path;
+            break;
+        }
+    }
+    
+    if (bookPath.empty()) {
+        xSemaphoreGiveRecursive(mutex);
+        return false;
+    }
+    
+    std::string path = getMetricsPath(bookPath);
+    
+    FILE* f = fopen(path.c_str(), "wb");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open metrics file for writing: %s", path);
+        ESP_LOGE(TAG, "Failed to open metrics file for writing: %s", path.c_str());
         xSemaphoreGiveRecursive(mutex);
         return false;
     }
@@ -81,24 +122,40 @@ bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<siz
     // Persist the flag to index
     save();
     
-    ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters", id, totalChars, count);
+    ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters at %s", id, totalChars, count, path.c_str());
     xSemaphoreGiveRecursive(mutex);
     return true;
 }
 
 bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>& chapterOffsets) {
-    // File access doesn't strictly need mutex if it doesn't touch 'books', 
-    // but good practice if we change implementation later.
-    // However, this method doesn't touch 'books' vector, only reads a file.
-    // But let's lock to be safe if we add caching later.
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    char path[64];
-    snprintf(path, sizeof(path), "/spiffs/m_%d.bin", id);
     
-    FILE* f = fopen(path, "rb");
-    if (!f) {
+    std::string bookPath;
+    for (const auto& book : books) {
+        if (book.id == id) {
+            bookPath = book.path;
+            break;
+        }
+    }
+    
+    if (bookPath.empty()) {
         xSemaphoreGiveRecursive(mutex);
         return false;
+    }
+    
+    std::string path = getMetricsPath(bookPath);
+    
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) {
+        // Fallback to legacy path if not found
+        char legacyPath[64];
+        snprintf(legacyPath, sizeof(legacyPath), "/spiffs/m_%d.bin", id);
+        f = fopen(legacyPath, "rb");
+        if (!f) {
+            xSemaphoreGiveRecursive(mutex);
+            return false;
+        }
+        ESP_LOGI(TAG, "Loaded metrics from legacy path for book %d", id);
     }
     
     uint8_t version = 0;
@@ -369,8 +426,14 @@ std::string BookIndex::addBook(const std::string &title)
 {
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     int id = getNextId();
-    char path[32];
-    snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
+    char path[128];
+    
+    DeviceHAL& hal = DeviceHAL::getInstance();
+    if (hal.isSDCardMounted() && hal.getSDCardMountPoint()) {
+        snprintf(path, sizeof(path), "%s/%d.epub", hal.getSDCardMountPoint(), id);
+    } else {
+        snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
+    }
 
     books.push_back({id, title, std::string(path), 0, 0, 0, false});
     save();
@@ -382,11 +445,30 @@ std::string BookIndex::addBook(const std::string &title)
 void BookIndex::removeBook(int id)
 {
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    
+    std::string bookPath;
+    for (const auto& book : books) {
+        if (book.id == id) {
+            bookPath = book.path;
+            break;
+        }
+    }
+
     auto it = std::remove_if(books.begin(), books.end(), [id](const BookEntry &b)
                              { return b.id == id; });
 
     if (it != books.end())
     {
+        // Delete metrics file if it exists
+        if (!bookPath.empty()) {
+            std::string mPath = getMetricsPath(bookPath);
+            unlink(mPath.c_str());
+            // Also try legacy path
+            char legacyPath[64];
+            snprintf(legacyPath, sizeof(legacyPath), "/spiffs/m_%d.bin", id);
+            unlink(legacyPath);
+        }
+        
         books.erase(it, books.end());
         save();
     }
