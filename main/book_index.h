@@ -7,11 +7,13 @@
 struct BookEntry {
     int id;
     std::string title; // The original filename/title
+    std::string author; // Book author from EPUB metadata
     std::string path;  // The filesystem path (e.g., /spiffs/1.epub)
     int currentChapter = 0;
     size_t currentOffset = 0;
     size_t fileSize = 0; // For cache validation
     bool hasMetrics = false;
+    bool isFavorite = false; // User-marked favorite
 };
 
 class BookIndex {
@@ -23,8 +25,13 @@ public:
     void removeBook(int id);
     void updateProgress(int id, int chapter, size_t offset);
     std::vector<BookEntry> getBooks();
+    std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);
     BookEntry getBook(int id);
     bool scanDirectory(const char* basePath);
+    
+    // Favorites management
+    void setFavorite(int id, bool favorite);
+    bool isFavorite(int id);
 
     // Metrics persistence
     bool saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets);

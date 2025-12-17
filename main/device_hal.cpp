@@ -27,8 +27,8 @@ static constexpr gpio_num_t M5PAPER_SD_CLK_PIN = GPIO_NUM_14;
 
 // Pin definitions for M5PaperS3
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-static constexpr gpio_num_t M5PAPERS3_TOUCH_INT_PIN = GPIO_NUM_36; // Placeholder, verify if needed
-static constexpr gpio_num_t M5PAPERS3_MAIN_PWR_PIN = GPIO_NUM_2;
+static constexpr gpio_num_t M5PAPERS3_TOUCH_INT_PIN = GPIO_NUM_48; // GT911 touch interrupt
+static constexpr gpio_num_t M5PAPERS3_MAIN_PWR_PIN = GPIO_NUM_44;  // PWROFF_PULSE_PIN
 static constexpr gpio_num_t M5PAPERS3_BUZZER_PIN = GPIO_NUM_21;
 static constexpr gpio_num_t M5PAPERS3_SD_CS_PIN = GPIO_NUM_47;
 static constexpr gpio_num_t M5PAPERS3_SD_MOSI_PIN = GPIO_NUM_38;

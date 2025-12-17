@@ -107,6 +107,7 @@ button { background: #007aff; color: white; border: none; padding: 10px 20px; bo
 button:disabled { opacity: 0.5; }
 button.del { background: #ff3b30; padding: 6px 12px; font-size: 14px; }
 button.read { background: #34c759; padding: 6px 12px; font-size: 14px; margin-right: 8px; }
+button.fav { background: transparent; padding: 6px 12px; font-size: 20px; margin-right: 8px; border: none; cursor: pointer; }
 input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100%; box-sizing: border-box; margin-bottom: 15px; font-size: 16px; }
 .progress { height: 4px; background: #eee; margin-top: 10px; border-radius: 2px; overflow: hidden; display: none; }
 .bar { height: 100%; background: #34c759; width: 0%; transition: width 0.2s; }
@@ -413,10 +414,20 @@ function fetchList() {
         if(files.length === 0) list.innerHTML = '<li>No books found</li>';
         files.forEach(f => {
             const li = document.createElement('li');
-            li.innerHTML = `<span>${f.name}</span><div><button class="read" onclick="readBook(${f.id})">Read</button><button class="del" onclick="del(${f.id})">Delete</button></div>`;
+            const favStar = f.favorite ? '★' : '☆';
+            li.innerHTML = `<span>${f.name}</span><div><button class="fav" onclick="toggleFav(${f.id}, this)" title="Toggle Favorite">${favStar}</button><button class="read" onclick="readBook(${f.id})">Read</button><button class="del" onclick="del(${f.id})">Delete</button></div>`;
             list.appendChild(li);
         });
     });
+}
+
+function toggleFav(id, btn) {
+    fetch('/api/favorite?id=' + id, {method: 'POST'})
+        .then(r => r.json())
+        .then(result => {
+            btn.innerText = result.favorite ? '★' : '☆';
+        })
+        .catch(e => alert('Error toggling favorite'));
 }
 
 function del(id) {
@@ -786,6 +797,32 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// Helper to escape JSON strings
+static std::string escapeJsonString(const std::string& input) {
+    std::string output;
+    output.reserve(input.length() * 2);
+    for (char c : input) {
+        switch (c) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\b': output += "\\b"; break;
+            case '\f': output += "\\f"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default:
+                if (c >= 0 && c < 32) {
+                    char hex[8];
+                    snprintf(hex, sizeof(hex), "\\u%04x", (unsigned char)c);
+                    output += hex;
+                } else {
+                    output += c;
+                }
+        }
+    }
+    return output;
+}
+
 /* API to list files as JSON */
 static esp_err_t api_list_handler(httpd_req_t *req)
 {
@@ -800,9 +837,17 @@ static esp_err_t api_list_handler(httpd_req_t *req)
     bool first = true;
     for (const auto& book : books) {
         if (!first) httpd_resp_send_chunk(req, ",", 1);
-        char buf[512];
-        // Escape quotes in title if needed (simplified here)
-        snprintf(buf, sizeof(buf), "{\"name\":\"%s\", \"id\":%d}", book.title.c_str(), book.id);
+        
+        std::string escapedTitle = escapeJsonString(book.title);
+        std::string escapedAuthor = escapeJsonString(book.author);
+        
+        char buf[1024];
+        snprintf(buf, sizeof(buf), 
+            "{\"name\":\"%s\",\"author\":\"%s\",\"id\":%d,\"favorite\":%s}", 
+            escapedTitle.c_str(), 
+            escapedAuthor.c_str(),
+            book.id,
+            book.isFavorite ? "true" : "false");
         httpd_resp_send_chunk(req, buf, strlen(buf));
         first = false;
     }
@@ -856,6 +901,32 @@ static esp_err_t api_open_handler(httpd_req_t *req)
                 httpd_resp_send(req, "OK", 2);
                 return ESP_OK;
             }
+        }
+    }
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid book id");
+    return ESP_FAIL;
+}
+
+/* API to toggle book favorite status */
+static esp_err_t api_favorite_handler(httpd_req_t *req)
+{
+    WebServer::updateActivityTime();
+    char buf[100];
+    size_t buf_len = sizeof(buf);
+
+    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
+        char param[32];
+        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
+            int id = atoi(param);
+            BookIndex bookIndex;// = BookIndex:: getInstance();
+            bool currentFav = bookIndex.isFavorite(id);
+            bookIndex.setFavorite(id, !currentFav);
+            // Return new state
+            char response[32];
+            snprintf(response, sizeof(response), "{\"favorite\":%s}", !currentFav ? "true" : "false");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, response, strlen(response));
+            return ESP_OK;
         }
     }
     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid book id");
@@ -1182,6 +1253,14 @@ void WebServer::init(const char* basePath) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &open_api_uri);
+
+        httpd_uri_t favorite_api_uri = {
+            .uri       = "/api/favorite",
+            .method    = HTTP_POST,
+            .handler   = api_favorite_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &favorite_api_uri);
 
         httpd_uri_t settings_api_uri = {
             .uri       = "/api/settings",

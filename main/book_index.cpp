@@ -238,7 +238,7 @@ bool BookIndex::scanDirectory(const char *basePath)
                         if (book.fileSize != currentSize || book.fileSize == 0)
                         {
                             ESP_LOGI(TAG, "Book changed or no size cached: %s", fname.c_str());
-                            // Reload title (metadata only, avoids chapter parsing)
+                            // Reload title and author (metadata only, avoids chapter parsing)
                             EpubLoader loader;
                             if (loader.loadMetadataOnly(fullPath.c_str()))
                             {
@@ -247,6 +247,8 @@ bool BookIndex::scanDirectory(const char *basePath)
                                 {
                                     book.title = metaTitle;
                                 }
+                                std::string metaAuthor = loader.getAuthor();
+                                book.author = metaAuthor;
                                 loader.close();
                             }
                             book.fileSize = currentSize;
@@ -261,8 +263,9 @@ bool BookIndex::scanDirectory(const char *basePath)
                     int id = getNextId();
                     // Use filename as title initially
                     std::string title = fname.substr(0, fname.length() - 5);
+                    std::string bookAuthor;
 
-                    // Try to load title from metadata
+                    // Try to load title and author from metadata
                     EpubLoader loader;
                     if (loader.loadMetadataOnly(fullPath.c_str()))
                     {
@@ -271,11 +274,13 @@ bool BookIndex::scanDirectory(const char *basePath)
                         {
                             title = metaTitle;
                         }
+                        bookAuthor = loader.getAuthor();
                         loader.close();
                     }
 
-                    books.push_back({id, title, fullPath, 0, 0, currentSize, false});
-                    ESP_LOGI(TAG, "Found new book: %s", title.c_str());
+                    books.push_back({id, title, bookAuthor, fullPath, 0, 0, currentSize, false, false});
+                    ESP_LOGI(TAG, "Found new book: %s by %s", title.c_str(), bookAuthor.c_str());
+                    foundNewBooks = true;
                 }
             }
         }
@@ -347,12 +352,20 @@ void BookIndex::load()
             bool hasMetrics = false;
             if (parts.size() >= 7)
                 hasMetrics = (atoi(parts[6].c_str()) == 1);
+            
+            std::string author;
+            if (parts.size() >= 8)
+                author = parts[7];
+            
+            bool isFavorite = false;
+            if (parts.size() >= 9)
+                isFavorite = (atoi(parts[8].c_str()) == 1);
 
             // Verify file exists
             struct stat st;
             if (stat(path.c_str(), &st) == 0)
             {
-                books.push_back({id, title, path, chapter, offset, fsize, hasMetrics});
+                books.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite});
             }
         }
     }
@@ -373,7 +386,7 @@ void BookIndex::save()
 
     for (const auto &book : books)
     {
-        fprintf(f, "%d|%s|%d|%u|%s|%u|%d\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str(), (unsigned int)book.fileSize, book.hasMetrics ? 1 : 0);
+        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str(), (unsigned int)book.fileSize, book.hasMetrics ? 1 : 0, book.author.c_str(), book.isFavorite ? 1 : 0);
     }
     fclose(f);
 }
@@ -407,7 +420,7 @@ BookEntry BookIndex::getBook(int id)
         }
     }
     xSemaphoreGiveRecursive(mutex);
-    return {0, "", "", 0, 0, 0};
+    return {0, "", "", "", 0, 0, 0, false, false};
 }
 
 int BookIndex::getNextId()
@@ -435,7 +448,7 @@ std::string BookIndex::addBook(const std::string &title)
         snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
     }
 
-    books.push_back({id, title, std::string(path), 0, 0, 0, false});
+    books.push_back({id, title, "", std::string(path), 0, 0, 0, false, false});
     save();
 
     xSemaphoreGiveRecursive(mutex);
@@ -481,4 +494,78 @@ std::vector<BookEntry> BookIndex::getBooks()
     std::vector<BookEntry> copy = books;
     xSemaphoreGiveRecursive(mutex);
     return copy;
+}
+
+// Helper to convert string to lowercase for case-insensitive search
+static std::string toLowerStr(const std::string& s) {
+    std::string result;
+    result.reserve(s.size());
+    for (char c : s) {
+        if (c >= 'A' && c <= 'Z') {
+            result += (c + 32);
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
+
+std::vector<BookEntry> BookIndex::getFilteredBooks(const std::string& searchQuery, bool favoritesOnly)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    std::vector<BookEntry> result;
+    
+    std::string queryLower = toLowerStr(searchQuery);
+    
+    for (const auto& book : books) {
+        // Filter by favorites if enabled
+        if (favoritesOnly && !book.isFavorite) {
+            continue;
+        }
+        
+        // If no search query, include all (that passed favorites filter)
+        if (searchQuery.empty()) {
+            result.push_back(book);
+            continue;
+        }
+        
+        // Search in title and author (case-insensitive)
+        std::string titleLower = toLowerStr(book.title);
+        std::string authorLower = toLowerStr(book.author);
+        
+        if (titleLower.find(queryLower) != std::string::npos ||
+            authorLower.find(queryLower) != std::string::npos) {
+            result.push_back(book);
+        }
+    }
+    
+    xSemaphoreGiveRecursive(mutex);
+    return result;
+}
+
+void BookIndex::setFavorite(int id, bool favorite)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (auto& book : books) {
+        if (book.id == id) {
+            book.isFavorite = favorite;
+            save();
+            break;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
+}
+
+bool BookIndex::isFavorite(int id)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (const auto& book : books) {
+        if (book.id == id) {
+            bool fav = book.isFavorite;
+            xSemaphoreGiveRecursive(mutex);
+            return fav;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
+    return false;
 }

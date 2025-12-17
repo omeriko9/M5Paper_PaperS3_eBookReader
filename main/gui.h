@@ -70,6 +70,13 @@ private:
     struct PageInfo { int current = 1; int total = 1; };
     bool isRTLDocument = false;
     
+    // Search and Filter State
+    std::string searchQuery;           // Current search text
+    bool showKeyboard = false;         // Keyboard visible
+    bool showFavoritesOnly = false;    // Filter to favorites only
+    int keyboardCursorPos = 0;         // Cursor position in search text
+    bool keyboardHebrew = false;       // Hebrew keyboard mode
+    
     // Reader State
     size_t currentTextOffset = 0;
     std::vector<size_t> pageHistory;
@@ -132,6 +139,9 @@ private:
     void drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage);
     void drawSleepSymbol(const char* symbol);
     void drawLibrary();
+    void drawSearchBar(LovyanGFX* target);
+    void drawKeyboard(LovyanGFX* target);
+    void drawBookSettings();  // Half-page settings for book in reader
     void drawReader(bool flush = true);
     void drawWifiConfig();
     void drawSettings();
@@ -142,10 +152,12 @@ private:
     void processReaderTap(int x, int y, bool isDouble);
     void onWifiScanClick(int x, int y);
     void onWifiPasswordClick(int x, int y);
+    void onLibraryClick(int x, int y);
+    void onKeyboardClick(int x, int y);
     
     void loadFonts();
     void ensureHebrewFontLoaded();
-    void drawStringMixed(const std::string& text, int x, int y, M5Canvas* target = nullptr, float size = -1.0f);
+    void drawStringMixed(const std::string &text, int x, int y, M5Canvas *target = nullptr, float size = -1.0f, bool isProcessed = false);
     
     void saveSettings();
     void loadSettings();

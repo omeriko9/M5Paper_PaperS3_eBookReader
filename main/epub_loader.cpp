@@ -152,6 +152,11 @@ std::string EpubLoader::getTitle() {
     return title;
 }
 
+std::string EpubLoader::getAuthor() {
+    if (author.empty()) return "";
+    return author;
+}
+
 std::string EpubLoader::readFileFromZip(const std::string& path) {
     return zip.extractFile(path);
 }
@@ -199,6 +204,19 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
         }
     }
     if (title.empty()) title = "Unknown Title";
+
+    // Parse Author (dc:creator)
+    author = "";
+    size_t authorPos = xml.find("<dc:creator");
+    if (authorPos != std::string::npos) {
+        size_t close = xml.find(">", authorPos);
+        if (close != std::string::npos) {
+            size_t end = xml.find("</dc:creator>", close);
+            if (end != std::string::npos) {
+                author = xml.substr(close + 1, end - (close + 1));
+            }
+        }
+    }
 
     // Parse Language
     language = "en"; // Default

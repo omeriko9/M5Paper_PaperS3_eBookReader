@@ -37,7 +37,9 @@ extern WifiManager wifiManager;
 extern WebServer webServer;
 
 static constexpr int STATUS_BAR_HEIGHT = 44;
-static constexpr int LIBRARY_LIST_START_Y = 120;
+static constexpr int SEARCH_BAR_HEIGHT = 50;
+static constexpr int SEARCH_BAR_Y = STATUS_BAR_HEIGHT + 10;
+static constexpr int LIBRARY_LIST_START_Y = STATUS_BAR_HEIGHT + SEARCH_BAR_HEIGHT + 25;
 static constexpr int LIBRARY_LINE_HEIGHT = 48;
 
 struct SettingsLayout
@@ -52,6 +54,7 @@ struct SettingsLayout
     int row2Y;
     int row3Y;
     int row4Y;
+    int row5Y;  // For favorite toggle
     int closeY;
     int buttonGap;
     int fontButtonW;
@@ -73,16 +76,17 @@ static SettingsLayout computeSettingsLayout()
     l.panelHeight = M5.Display.height() / 2;
     l.panelTop = M5.Display.height() - l.panelHeight;
     l.padding = 30;
-    l.rowHeight = 60;
-    l.titleY = l.panelTop + 20;
-    l.row1Y = l.panelTop + 60;
+    l.rowHeight = 50;  // Reduced to fit more rows
+    l.titleY = l.panelTop + 15;
+    l.row1Y = l.panelTop + 50;
     l.row2Y = l.row1Y + l.rowHeight;
     l.row3Y = l.row2Y + l.rowHeight;
     l.row4Y = l.row3Y + l.rowHeight;
-    l.closeY = l.panelTop + l.panelHeight - 70;
+    l.row5Y = l.row4Y + l.rowHeight;  // Favorite row
+    l.closeY = l.panelTop + l.panelHeight - 60;
     l.buttonGap = 20;
     l.fontButtonW = 80;
-    l.fontButtonH = 45;
+    l.fontButtonH = 40;  // Slightly smaller
     l.fontPlusX = l.panelWidth - l.padding - l.fontButtonW;
     l.fontMinusX = l.fontPlusX - l.buttonGap - l.fontButtonW;
     l.changeButtonW = 180;
@@ -302,6 +306,12 @@ static std::string processTextForDisplay(const std::string &text)
             while ((pos = processedWord.find("&apos;", pos)) != std::string::npos)
             {
                 processedWord.replace(pos, 6, "'");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedWord.find("&#160;", pos)) != std::string::npos)
+            {
+                processedWord.replace(pos, 6, " ");
                 pos += 1;
             }
             result += reverseHebrewWord(processedWord);
@@ -901,9 +911,10 @@ void GUI::drawStatusBar(LovyanGFX *target)
     // Time
     gfx->setTextDatum(textdatum_t::middle_left);
     auto dt = M5.Rtc.getDateTime();
-    char buf[32];
+    char buf[64];
     snprintf(buf, sizeof(buf), "%02d:%02d", dt.time.hours, dt.time.minutes);
     gfx->drawString(buf, 10, centerY);
+    int timeWidth = gfx->textWidth(buf) + 15;
 
     // Battery (Right aligned)
     gfx->setTextDatum(textdatum_t::middle_right);
@@ -922,9 +933,55 @@ void GUI::drawStatusBar(LovyanGFX *target)
     {
         snprintf(buf, sizeof(buf), "No WiFi");
     }
-    // Give enough space for battery reading
     int wifiX = batteryX - batteryTextWidth - 12;
+    int wifiTextWidth = gfx->textWidth(buf);
     gfx->drawString(buf, wifiX, centerY);
+    
+    // Book title (center, if in reader mode)
+    if (currentState == AppState::READER && !currentBook.title.empty()) {
+        gfx->setTextDatum(textdatum_t::middle_center);
+        int availableWidth = wifiX - wifiTextWidth - timeWidth - 20;
+        int bookTitleX = timeWidth + availableWidth / 2;
+        
+        // Truncate title to fit
+        std::string title = currentBook.title;
+        gfx->setTextSize(1.2f);  // Slightly smaller for title
+        
+        bool isHeb = isHebrew(title);
+        bool swapped = false;
+        if (isHeb) {
+            ensureHebrewFontLoaded();
+            if (!fontDataHebrew.empty()) {
+                gfx->loadFont(fontDataHebrew.data());
+                swapped = true;
+            }
+            title = processTextForDisplay(title);
+        }
+
+        while (!title.empty() && gfx->textWidth(title.c_str()) > availableWidth - 10) {
+            size_t pos = title.length();
+            if (pos > 0) {
+                do {
+                    pos--;
+                } while (pos > 0 && (title[pos] & 0xC0) == 0x80);
+                title = title.substr(0, pos);
+            }
+        }
+        
+        gfx->setTextColor(TFT_DARKGREY, TFT_WHITE);
+        gfx->drawString(title.c_str(), bookTitleX, centerY);
+        
+        if (swapped) {
+            if (currentFont != "Default" && !fontData.empty()) {
+                gfx->loadFont(fontData.data());
+            } else {
+                gfx->unloadFont();
+            }
+        }
+        
+        gfx->setTextSize(1.6f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+    }
 
     // Restore font
     if (currentFont == "Default")
@@ -1030,6 +1087,250 @@ void GUI::drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage)
     gfx->setTextColor(TFT_BLACK, TFT_WHITE);
 }
 
+void GUI::drawSearchBar(LovyanGFX* target)
+{
+    int screenW = target->width();
+    int padding = 16;
+    int starBtnSize = 44;
+    int searchBtnW = 80;
+    int clearBtnSize = 28;  // Small clear button
+    int searchBoxX = padding;
+    int searchBoxW = screenW - padding * 3 - starBtnSize - searchBtnW - 10;
+    int searchBoxH = SEARCH_BAR_HEIGHT - 6;
+    int searchBtnX = searchBoxX + searchBoxW + 8;
+    int starBtnX = searchBtnX + searchBtnW + 8;
+    
+    // Use system font for search bar (independent of reader font)
+    target->setFont(&lgfx::v1::fonts::Font2);
+    
+    // Draw search textbox
+    target->drawRect(searchBoxX, SEARCH_BAR_Y, searchBoxW, searchBoxH, TFT_BLACK);
+    target->fillRect(searchBoxX + 1, SEARCH_BAR_Y + 1, searchBoxW - 2, searchBoxH - 2, TFT_WHITE);
+    
+    // Draw search text or placeholder - use fixed font size
+    target->setTextSize(1.4f);
+    target->setTextDatum(textdatum_t::middle_left);
+    int textY = SEARCH_BAR_Y + searchBoxH / 2;
+    
+    // Calculate clear button position (inside text box, right side)
+    int clearBtnX = searchBoxX + searchBoxW - clearBtnSize - 4;
+    int clearBtnY = SEARCH_BAR_Y + (searchBoxH - clearBtnSize) / 2;
+    int maxTextW = searchBoxW - 20 - (searchQuery.empty() ? 0 : clearBtnSize + 4);
+    
+    if (searchQuery.empty() && !showKeyboard) {
+        target->setTextColor(TFT_DARKGREY, TFT_WHITE);
+        drawStringMixed("Search books...", searchBoxX + 10, textY, (M5Canvas*)target, 1.4f);
+    } else {
+        target->setTextColor(TFT_BLACK, TFT_WHITE);
+        // Truncate if too long
+        std::string displayText = searchQuery;
+        
+        bool isHeb = isHebrew(displayText);
+        bool swapped = false;
+        if (isHeb) {
+            ensureHebrewFontLoaded();
+            if (!fontDataHebrew.empty()) {
+                target->loadFont(fontDataHebrew.data());
+                swapped = true;
+            }
+            displayText = processTextForDisplay(displayText);
+        }
+
+        while (!displayText.empty() && target->textWidth(displayText.c_str()) > maxTextW) {
+            size_t charLen = 1;
+            unsigned char c = (unsigned char)displayText[0];
+            if ((c & 0x80) == 0) charLen = 1;
+            else if ((c & 0xE0) == 0xC0) charLen = 2;
+            else if ((c & 0xF0) == 0xE0) charLen = 3;
+            else charLen = 4;
+            displayText = displayText.substr(charLen);
+        }
+        target->drawString(displayText.c_str(), searchBoxX + 10, textY);
+        
+        // Draw cursor if keyboard is showing
+        if (showKeyboard) {
+            int cursorX = searchBoxX + 10 + target->textWidth(displayText.c_str());
+            target->drawLine(cursorX, SEARCH_BAR_Y + 8, cursorX, SEARCH_BAR_Y + searchBoxH - 8, TFT_BLACK);
+        }
+
+        if (swapped) {
+            target->unloadFont();
+            target->setFont(&lgfx::v1::fonts::Font2);
+            target->setTextSize(1.4f);
+        }
+    }
+        
+        // Draw clear (x) button if there's text
+        if (!searchQuery.empty()) {
+            target->fillRect(clearBtnX, clearBtnY, clearBtnSize, clearBtnSize, TFT_LIGHTGREY);
+            target->drawRect(clearBtnX, clearBtnY, clearBtnSize, clearBtnSize, TFT_DARKGREY);
+            target->setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+            target->setTextDatum(textdatum_t::middle_center);
+            target->setTextSize(1.2f);
+            target->drawString("x", clearBtnX + clearBtnSize / 2, clearBtnY + clearBtnSize / 2);
+            target->setTextSize(1.4f);
+        }
+    }
+    
+    // Draw Search button
+    target->fillRect(searchBtnX, SEARCH_BAR_Y, searchBtnW, searchBoxH, TFT_LIGHTGREY);
+    target->drawRect(searchBtnX, SEARCH_BAR_Y, searchBtnW, searchBoxH, TFT_BLACK);
+    target->setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->drawString("Search", searchBtnX + searchBtnW / 2, textY);
+    
+    // Draw star (favorites) toggle button
+    uint16_t starFill = showFavoritesOnly ? TFT_YELLOW : TFT_WHITE;
+    uint16_t starBorder = TFT_BLACK;
+    target->fillRect(starBtnX, SEARCH_BAR_Y, starBtnSize, searchBoxH, starFill);
+    target->drawRect(starBtnX, SEARCH_BAR_Y, starBtnSize, searchBoxH, starBorder);
+    
+    // Draw star symbol (★)
+    target->setTextColor(showFavoritesOnly ? TFT_BLACK : TFT_DARKGREY, starFill);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->setTextSize(1.8f);
+    target->drawString("*", starBtnX + starBtnSize / 2, textY);
+    
+    target->setTextDatum(textdatum_t::top_left);
+}
+
+void GUI::drawKeyboard(LovyanGFX* target)
+{
+    int screenW = target->width();
+    int screenH = target->height();
+    
+    // Hebrew keyboard layout (standard Hebrew QWERTY mapping)
+    const char* hebrewRows[] = {
+        "1234567890",
+        // Hebrew letters mapped to QWERTY positions
+        "/'קראטוןםפ",  // QWERTYUIOP -> / ' ק ר א ט ו ן ם פ
+        "שדגכעיחלך",  // ASDFGHJKL -> ש ד ג כ ע י ח ל ך
+        "זסבהנמצ",    // ZXCVBNM -> ז ס ב ה נ מ צ
+    };
+    
+    // English keyboard layout
+    const char* englishRows[] = {
+        "1234567890",
+        "QWERTYUIOP",
+        "ASDFGHJKL",
+        "ZXCVBNM",
+    };
+    
+    const char** rows = keyboardHebrew ? hebrewRows : englishRows;
+    int numRows = 4;
+    
+    // Reduced sizes to fit on screen
+    int keyboardH = 200;
+    int keyboardY = screenH - keyboardH;
+    int keyW = screenW / 12;
+    int keyH = 36;
+    int padding = 3;
+    
+    // Draw keyboard background
+    target->fillRect(0, keyboardY, screenW, keyboardH, TFT_LIGHTGREY);
+    target->drawLine(0, keyboardY, screenW, keyboardY, TFT_DARKGREY);
+    
+    // Use system font for keyboard
+    target->setFont(&lgfx::v1::fonts::Font2);
+    target->setTextSize(1.3f);
+    target->setTextDatum(textdatum_t::middle_center);
+    
+    int y = keyboardY + 6;
+    for (int r = 0; r < numRows; r++) {
+        const char* row = rows[r];
+        
+        // Count UTF-8 characters properly for Hebrew
+        int len = 0;
+        for (const char* p = row; *p; ) {
+            unsigned char c = *p;
+            if ((c & 0x80) == 0) { p++; len++; }
+            else if ((c & 0xE0) == 0xC0) { p += 2; len++; }
+            else if ((c & 0xF0) == 0xE0) { p += 3; len++; }
+            else { p += 4; len++; }
+        }
+        
+        int rowW = len * keyW + (len - 1) * padding;
+        int startX = (screenW - rowW) / 2;
+        
+        // Iterate UTF-8 characters
+        const char* p = row;
+        int c = 0;
+        while (*p) {
+            unsigned char ch = *p;
+            int charLen = 1;
+            if ((ch & 0x80) == 0) charLen = 1;
+            else if ((ch & 0xE0) == 0xC0) charLen = 2;
+            else if ((ch & 0xF0) == 0xE0) charLen = 3;
+            else charLen = 4;
+            
+            int x = startX + c * (keyW + padding);
+            target->fillRect(x, y, keyW, keyH, TFT_WHITE);
+            target->drawRect(x, y, keyW, keyH, TFT_BLACK);
+            
+            char chStr[5] = {0};
+            strncpy(chStr, p, charLen);
+            target->setTextColor(TFT_BLACK, TFT_WHITE);
+            
+            if (isHebrew(chStr)) {
+                ensureHebrewFontLoaded();
+                if (!fontDataHebrew.empty()) {
+                    target->loadFont(fontDataHebrew.data());
+                    target->setTextSize(1.3f);
+                    target->drawString(chStr, x + keyW / 2, y + keyH / 2);
+                    target->unloadFont();
+                    target->setFont(&lgfx::v1::fonts::Font2);
+                    target->setTextSize(1.3f);
+                } else {
+                    target->drawString(chStr, x + keyW / 2, y + keyH / 2);
+                }
+            } else {
+                target->drawString(chStr, x + keyW / 2, y + keyH / 2);
+            }
+            
+            p += charLen;
+            c++;
+        }
+        y += keyH + padding;
+    }
+    
+    // Bottom row: Lang, Backspace, Space, Done
+    y = keyboardY + 6 + 4 * (keyH + padding);
+    int langW = 55;
+    int bsW = 55;
+    int doneW = 60;
+    int spaceW = screenW - langW - bsW - doneW - padding * 5;
+    
+    // Language toggle (Hebrew/English)
+    int langX = padding;
+    uint16_t langFill = keyboardHebrew ? TFT_YELLOW : TFT_WHITE;
+    target->fillRect(langX, y, langW, keyH, langFill);
+    target->drawRect(langX, y, langW, keyH, TFT_BLACK);
+    target->setTextColor(TFT_BLACK, langFill);
+    drawStringMixed(keyboardHebrew ? "EN" : "עב", langX + langW / 2, y + keyH / 2, (M5Canvas*)target, 1.3f);
+    
+    // Backspace
+    int bsX = langX + langW + padding;
+    target->fillRect(bsX, y, bsW, keyH, TFT_WHITE);
+    target->drawRect(bsX, y, bsW, keyH, TFT_BLACK);
+    target->setTextColor(TFT_BLACK, TFT_WHITE);
+    target->drawString("<-", bsX + bsW / 2, y + keyH / 2);
+    
+    // Space
+    int spaceX = bsX + bsW + padding;
+    target->fillRect(spaceX, y, spaceW, keyH, TFT_WHITE);
+    target->drawRect(spaceX, y, spaceW, keyH, TFT_BLACK);
+    target->drawString("Space", spaceX + spaceW / 2, y + keyH / 2);
+    
+    // Done
+    int doneX = spaceX + spaceW + padding;
+    target->fillRect(doneX, y, doneW, keyH, TFT_DARKGREY);
+    target->drawRect(doneX, y, doneW, keyH, TFT_BLACK);
+    target->setTextColor(TFT_WHITE, TFT_DARKGREY);
+    target->drawString("Done", doneX + doneW / 2, y + keyH / 2);
+    
+    target->setTextDatum(textdatum_t::top_left);
+}
+
 void GUI::drawLibrary()
 {
     abortRender = true; // Stop any background rendering
@@ -1039,15 +1340,18 @@ void GUI::drawLibrary()
 
     target->fillScreen(TFT_WHITE);
     drawStatusBar(target);
+    
+    // Draw search bar
+    drawSearchBar(target);
 
+    // Use system font for library (consistent size, independent of reader settings)
+    target->setFont(&lgfx::v1::fonts::Font2);
     target->setTextColor(TFT_BLACK);
-    const float headingSize = 2.4f;
-    const float itemSize = 1.6f; // Reduced size
-    target->setTextSize(headingSize);
-    target->setCursor(16, 58);
-    target->println("Library");
+    const float itemSize = 1.6f;
+    target->setTextSize(itemSize);
 
-    auto books = bookIndex.getBooks();
+    // Get filtered books based on search and favorites
+    auto books = bookIndex.getFilteredBooks(searchQuery, showFavoritesOnly);
 
     // Paging logic
     int availableHeight = target->height() - LIBRARY_LIST_START_Y - 60; // 60 for footer
@@ -1077,8 +1381,6 @@ void GUI::drawLibrary()
         std::string displayTitle = book.title;
         if (displayTitle.length() > 45)
             displayTitle = displayTitle.substr(0, 42) + "...";
-
-        displayTitle = processTextForDisplay(displayTitle);
 
         // Draw bullet
         target->setCursor(20, y);
@@ -1125,18 +1427,33 @@ void GUI::drawLibrary()
     if (books.empty())
     {
         target->setCursor(20, LIBRARY_LIST_START_Y);
-        target->println("No books found.");
-        target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
-        target->println("Upload via WiFi:");
-        target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT * 2);
-        if (wifiConnected)
-        {
-            target->printf("http://%s/", wifiManager.getIpAddress().c_str());
+        if (!searchQuery.empty() || showFavoritesOnly) {
+            // Show "no results" message when filtering
+            target->println("No matching books found.");
+            if (showFavoritesOnly) {
+                target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
+                target->println("No favorites yet.");
+            }
+        } else {
+            target->println("No books found.");
+            target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
+            target->println("Upload via WiFi:");
+            target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT * 2);
+            if (wifiConnected)
+            {
+                target->printf("http://%s/", wifiManager.getIpAddress().c_str());
+            }
+            else
+            {
+                target->println("Connect to AP 'M5Paper_Reader'");
+            }
         }
-        else
-        {
-            target->println("Connect to AP 'M5Paper_Reader'");
-        }
+    }
+    
+    // Draw keyboard overlay if visible
+    if (showKeyboard)
+    {
+        drawKeyboard(target);
     }
 
     if (sprite)
@@ -1297,12 +1614,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
             if (isRTL)
             {
-                drawStringMixed(displayWord, startX - w, currentY, (M5Canvas *)target, fontSize);
+                drawStringMixed(displayWord, startX - w, currentY, (M5Canvas *)target, fontSize, true);
                 startX -= (w + spaceWLocal);
             }
             else
             {
-                drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target, fontSize);
+                drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target, fontSize, true);
                 startX += (w + spaceWLocal);
             }
         }
@@ -1670,6 +1987,9 @@ void GUI::drawSleepSymbol(const char *symbol)
     M5.Display.setTextDatum(textdatum_t::top_center);
     // Draw in the middle of status bar or top center
     M5.Display.drawString(symbol, M5.Display.width() / 2, 5);
+    // Flush to e-ink display
+    M5.Display.display();
+    M5.Display.waitDisplay();
 }
 
 void GUI::goToSleep()
@@ -1899,13 +2219,26 @@ void GUI::drawSettings()
     if (wifiEnabled && wifiManager.isConnected())
     {
         std::string ip = wifiManager.getIpAddress();
-        status = "URL: http://" + ip + "/";
+        status = "http://" + ip + "/";
     }
     target->setTextSize(bodyTextSize);
     target->setTextDatum(textdatum_t::middle_left);
     // Increased offset to avoid overlap
-    target->drawString(status.c_str(), layout.padding + 180, row4CenterY + yOffset);
+    target->drawString(status.c_str(), layout.padding + 160, row4CenterY + yOffset);
     target->setTextSize(bodyTextSize);
+
+    // --- Favorite Row ---
+    int row5CenterY = layout.row5Y + layout.rowHeight / 2;
+    target->drawString("Favorite", layout.padding, row5CenterY + yOffset);
+    
+    // Favorite toggle button with star
+    int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    bool isFav = bookIndex.isFavorite(currentBook.id);
+    uint16_t favFill = isFav ? TFT_YELLOW : TFT_WHITE;
+    uint16_t favText = TFT_BLACK;
+    const char* favLabel = isFav ? "* Remove" : "* Add";
+    drawButton(layout.toggleButtonX, favButtonY, layout.toggleButtonW, layout.fontButtonH,
+               favLabel, favFill, favText);
 
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
@@ -2135,57 +2468,8 @@ void GUI::handleTouch()
 
             if (currentState == AppState::LIBRARY)
             {
-                // Check for status bar tap
-                if (t.y < STATUS_BAR_HEIGHT)
-                {
-                    currentState = AppState::WIFI_SCAN;
-                    wifiList.clear();
-                    needsRedraw = true;
-                    justWokeUp = false;
-                    return;
-                }
-
-                auto books = bookIndex.getBooks();
-                int availableHeight = M5.Display.height() - LIBRARY_LIST_START_Y - 60;
-                int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
-                if (itemsPerPage < 1)
-                    itemsPerPage = 1;
-
-                int totalPages = (books.size() + itemsPerPage - 1) / itemsPerPage;
-
-                // Check paging buttons
-                if (totalPages > 1 && t.y > M5.Display.height() - 60)
-                {
-                    if (t.x < 150 && libraryPage > 0)
-                    {
-                        libraryPage--;
-                        needsRedraw = true;
-                        justWokeUp = false;
-                        return;
-                    }
-                    if (t.x > M5.Display.width() - 150 && libraryPage < totalPages - 1)
-                    {
-                        libraryPage++;
-                        needsRedraw = true;
-                        justWokeUp = false;
-                        return;
-                    }
-                }
-
-                int startIdx = libraryPage * itemsPerPage;
-                int endIdx = std::min((int)books.size(), startIdx + itemsPerPage);
-
-                int y = LIBRARY_LIST_START_Y;
-                for (int i = startIdx; i < endIdx; ++i)
-                {
-                    if (t.y >= y && t.y < y + LIBRARY_LINE_HEIGHT)
-                    {
-                        ESP_LOGI(TAG, "Touched book at index %d, ID %d", i, books[i].id);
-                        openBookById(books[i].id);
-                        break;
-                    }
-                    y += LIBRARY_LINE_HEIGHT;
-                }
+                onLibraryClick(t.x, t.y);
+                justWokeUp = false;
             }
             else if (currentState == AppState::READER)
             {
@@ -2322,15 +2606,25 @@ void GUI::handleTouch()
                     }
                     needsRedraw = true;
                 }
-                // Close
-                else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
-                {
-                    currentState = previousState;
-                    needsRedraw = true;
-                    if (settingsCanvasCreated)
+                // Favorite Toggle
+                else {
+                    int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
+                    if (t.y >= favButtonY && t.y <= favButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
                     {
-                        settingsCanvas.deleteSprite();
-                        settingsCanvasCreated = false;
+                        bool currentFav = bookIndex.isFavorite(currentBook.id);
+                        bookIndex.setFavorite(currentBook.id, !currentFav);
+                        needsRedraw = true;
+                    }
+                    // Close
+                    else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
+                    {
+                        currentState = previousState;
+                        needsRedraw = true;
+                        if (settingsCanvasCreated)
+                        {
+                            settingsCanvas.deleteSprite();
+                            settingsCanvasCreated = false;
+                        }
                     }
                 }
             }
@@ -2783,7 +3077,7 @@ void GUI::ensureHebrewFontLoaded()
     }
 }
 
-void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size)
+void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size, bool isProcessed)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
     float effectiveSize = (size > 0.0f) ? size : fontSize;
@@ -2801,8 +3095,7 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
                 swapped = true;
             }
 
-            std::string processedText = text;
-            // HTML entity replacements are done before reversing in the calling functions
+            std::string processedText = isProcessed ? text : processTextForDisplay(text);
 
             gfx->setTextSize(effectiveSize);
             gfx->drawString(processedText.c_str(), x, y);
@@ -2833,43 +3126,46 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
         // Non-Hebrew text - use current font
         // ESP_LOGI(TAG, "Drawing non-Hebrew text: %s, font size: %.2f", text.c_str(), effectiveSize);
         std::string processedText = text;
-        // Replace HTML entities
-        size_t pos = 0;
-        while ((pos = processedText.find("&quot;", pos)) != std::string::npos)
-        {
-            processedText.replace(pos, 6, "\"");
-            pos += 1;
+        if (!isProcessed) {
+            // Replace HTML entities
+            size_t pos = 0;
+            while ((pos = processedText.find("&quot;", pos)) != std::string::npos)
+            {
+                processedText.replace(pos, 6, "\"");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedText.find("&amp;", pos)) != std::string::npos)
+            {
+                processedText.replace(pos, 5, "&");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedText.find("&lt;", pos)) != std::string::npos)
+            {
+                processedText.replace(pos, 4, "<");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedText.find("&gt;", pos)) != std::string::npos)
+            {
+                processedText.replace(pos, 4, ">");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedText.find("&apos;", pos)) != std::string::npos)
+            {
+                processedText.replace(pos, 6, "'");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = processedText.find("&#160;", pos)) != std::string::npos)
+            {
+                processedText.replace(pos, 6, " ");
+                pos += 1;
+            }
         }
-        pos = 0;
-        while ((pos = processedText.find("&amp;", pos)) != std::string::npos)
-        {
-            processedText.replace(pos, 5, "&");
-            pos += 1;
-        }
-        pos = 0;
-        while ((pos = processedText.find("&lt;", pos)) != std::string::npos)
-        {
-            processedText.replace(pos, 4, "<");
-            pos += 1;
-        }
-        pos = 0;
-        while ((pos = processedText.find("&gt;", pos)) != std::string::npos)
-        {
-            processedText.replace(pos, 4, ">");
-            pos += 1;
-        }
-        pos = 0;
-        while ((pos = processedText.find("&apos;", pos)) != std::string::npos)
-        {
-            processedText.replace(pos, 6, "'");
-            pos += 1;
-        }
-        pos = 0;
-        while ((pos = processedText.find("&#160;", pos)) != std::string::npos)
-        {
-            processedText.replace(pos, 6, " ");
-            pos += 1;
-        }
+
         gfx->setTextSize(effectiveSize);
         gfx->drawString(processedText.c_str(), x, y);
     }
@@ -3051,7 +3347,14 @@ void GUI::drawWifiScan()
 
 void GUI::onWifiScanClick(int x, int y)
 {
-    // Check Cancel
+    // Check status bar tap - go back to library
+    if (y < STATUS_BAR_HEIGHT) {
+        currentState = AppState::LIBRARY;
+        needsRedraw = true;
+        return;
+    }
+    
+    // Check Cancel button
     int footerY = M5.Display.height() - 60;
     if (y >= footerY && y <= footerY + 40 && x >= 20 && x <= 170)
     {
@@ -3143,6 +3446,251 @@ void GUI::drawWifiPassword()
 
     M5.Display.setTextDatum(textdatum_t::top_left);
     M5.Display.display();
+}
+
+void GUI::onKeyboardClick(int x, int y)
+{
+    int screenW = M5.Display.width();
+    int screenH = M5.Display.height();
+    
+    // Match keyboard dimensions from drawKeyboard
+    int keyboardH = 200;
+    int keyboardY = screenH - keyboardH;
+    int keyW = screenW / 12;
+    int keyH = 36;
+    int padding = 3;
+    
+    // Check if click is above keyboard - dismiss keyboard
+    if (y < keyboardY) {
+        showKeyboard = false;
+        needsRedraw = true;
+        return;
+    }
+    
+    // Hebrew keyboard layout
+    const char* hebrewRows[] = {
+        "1234567890",
+        "/'קראטוןםפ",
+        "שדגכעיחלך",
+        "זסבהנמצ",
+    };
+    
+    // English keyboard layout
+    const char* englishRows[] = {
+        "1234567890",
+        "QWERTYUIOP",
+        "ASDFGHJKL",
+        "ZXCVBNM",
+    };
+    
+    const char** rows = keyboardHebrew ? hebrewRows : englishRows;
+    int numRows = 4;
+    
+    int rowY = keyboardY + 6;
+    for (int r = 0; r < numRows; r++) {
+        if (y >= rowY && y < rowY + keyH) {
+            const char* row = rows[r];
+            
+            // Count UTF-8 characters
+            int len = 0;
+            for (const char* p = row; *p; ) {
+                unsigned char c = *p;
+                if ((c & 0x80) == 0) { p++; len++; }
+                else if ((c & 0xE0) == 0xC0) { p += 2; len++; }
+                else if ((c & 0xF0) == 0xE0) { p += 3; len++; }
+                else { p += 4; len++; }
+            }
+            
+            int rowW = len * keyW + (len - 1) * padding;
+            int startX = (screenW - rowW) / 2;
+            
+            // Find which key was pressed
+            const char* p = row;
+            int c = 0;
+            while (*p) {
+                unsigned char ch = *p;
+                int charLen = 1;
+                if ((ch & 0x80) == 0) charLen = 1;
+                else if ((ch & 0xE0) == 0xC0) charLen = 2;
+                else if ((ch & 0xF0) == 0xE0) charLen = 3;
+                else charLen = 4;
+                
+                int kx = startX + c * (keyW + padding);
+                if (x >= kx && x < kx + keyW) {
+                    // Key pressed - add character to search
+                    char chStr[5] = {0};
+                    strncpy(chStr, p, charLen);
+                    
+                    // Convert English uppercase to lowercase
+                    if (charLen == 1 && chStr[0] >= 'A' && chStr[0] <= 'Z') {
+                        chStr[0] = chStr[0] + 32;
+                    }
+                    
+                    searchQuery += chStr;
+                    needsRedraw = true;
+                    return;
+                }
+                
+                p += charLen;
+                c++;
+            }
+        }
+        rowY += keyH + padding;
+    }
+    
+    // Bottom row: Lang, Backspace, Space, Done
+    rowY = keyboardY + 6 + 4 * (keyH + padding);
+    if (y >= rowY && y < rowY + keyH) {
+        int langW = 55;
+        int bsW = 55;
+        int doneW = 60;
+        int spaceW = screenW - langW - bsW - doneW - padding * 5;
+        
+        int langX = padding;
+        int bsX = langX + langW + padding;
+        int spaceX = bsX + bsW + padding;
+        int doneX = spaceX + spaceW + padding;
+        
+        if (x >= langX && x < langX + langW) {
+            // Language toggle
+            keyboardHebrew = !keyboardHebrew;
+            needsRedraw = true;
+        } else if (x >= bsX && x < bsX + bsW) {
+            // Backspace - handle UTF-8 properly
+            if (!searchQuery.empty()) {
+                // Find start of last UTF-8 character
+                size_t pos = searchQuery.length();
+                while (pos > 0 && (searchQuery[pos-1] & 0xC0) == 0x80) {
+                    pos--;
+                }
+                if (pos > 0) pos--;
+                searchQuery = searchQuery.substr(0, pos);
+                needsRedraw = true;
+            }
+        } else if (x >= spaceX && x < spaceX + spaceW) {
+            // Space
+            searchQuery += ' ';
+            needsRedraw = true;
+        } else if (x >= doneX && x < doneX + doneW) {
+            // Done - close keyboard
+            showKeyboard = false;
+            libraryPage = 0;
+            needsRedraw = true;
+        }
+    }
+}
+
+void GUI::onLibraryClick(int x, int y)
+{
+    int screenW = M5.Display.width();
+    int screenH = M5.Display.height();
+    
+    // If keyboard is showing, handle keyboard clicks
+    if (showKeyboard) {
+        onKeyboardClick(x, y);
+        return;
+    }
+    
+    // Check for status bar tap - reset search and show all books
+    if (y < STATUS_BAR_HEIGHT) {
+        if (!searchQuery.empty() || showFavoritesOnly) {
+            searchQuery.clear();
+            showFavoritesOnly = false;
+            libraryPage = 0;
+            needsRedraw = true;
+        } else {
+            currentState = AppState::WIFI_SCAN;
+            wifiList.clear();
+            needsRedraw = true;
+        }
+        return;
+    }
+    
+    // Check search bar area
+    int searchBoxH = SEARCH_BAR_HEIGHT - 6;
+    if (y >= SEARCH_BAR_Y && y < SEARCH_BAR_Y + searchBoxH) {
+        int padding = 16;
+        int starBtnSize = 44;
+        int searchBtnW = 80;
+        int clearBtnSize = 28;
+        int searchBoxX = padding;
+        int searchBoxW = screenW - padding * 3 - starBtnSize - searchBtnW - 10;
+        int searchBtnX = searchBoxX + searchBoxW + 8;
+        int starBtnX = searchBtnX + searchBtnW + 8;
+        
+        // Check clear button first (if there's text)
+        if (!searchQuery.empty()) {
+            int clearBtnX = searchBoxX + searchBoxW - clearBtnSize - 4;
+            int clearBtnY = SEARCH_BAR_Y + (searchBoxH - clearBtnSize) / 2;
+            if (x >= clearBtnX && x < clearBtnX + clearBtnSize &&
+                y >= clearBtnY && y < clearBtnY + clearBtnSize) {
+                // Clear button pressed
+                searchQuery.clear();
+                libraryPage = 0;
+                needsRedraw = true;
+                return;
+            }
+        }
+        
+        if (x >= searchBoxX && x < searchBoxX + searchBoxW) {
+            // Search textbox tapped - show keyboard
+            showKeyboard = true;
+            needsRedraw = true;
+            return;
+        }
+        
+        if (x >= searchBtnX && x < searchBtnX + searchBtnW) {
+            // Search button tapped - perform search (already filtering, just hide keyboard)
+            showKeyboard = false;
+            libraryPage = 0;
+            needsRedraw = true;
+            return;
+        }
+        
+        if (x >= starBtnX && x < starBtnX + starBtnSize) {
+            // Star (favorites) toggle button
+            showFavoritesOnly = !showFavoritesOnly;
+            libraryPage = 0;
+            needsRedraw = true;
+            return;
+        }
+    }
+    
+    // Get filtered books for position calculation
+    auto books = bookIndex.getFilteredBooks(searchQuery, showFavoritesOnly);
+    int availableHeight = screenH - LIBRARY_LIST_START_Y - 60;
+    int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
+    if (itemsPerPage < 1) itemsPerPage = 1;
+    
+    int totalPages = (books.size() + itemsPerPage - 1) / itemsPerPage;
+    
+    // Check paging buttons
+    if (totalPages > 1 && y > screenH - 60) {
+        if (x < 150 && libraryPage > 0) {
+            libraryPage--;
+            needsRedraw = true;
+            return;
+        }
+        if (x > screenW - 150 && libraryPage < totalPages - 1) {
+            libraryPage++;
+            needsRedraw = true;
+            return;
+        }
+    }
+    
+    // Check book list items
+    int startIdx = libraryPage * itemsPerPage;
+    int endIdx = std::min((int)books.size(), startIdx + itemsPerPage);
+    
+    int bookY = LIBRARY_LIST_START_Y;
+    for (int i = startIdx; i < endIdx; ++i) {
+        if (y >= bookY && y < bookY + LIBRARY_LINE_HEIGHT) {
+            ESP_LOGI(TAG, "Touched book at index %d, ID %d", i, books[i].id);
+            openBookById(books[i].id);
+            return;
+        }
+        bookY += LIBRARY_LINE_HEIGHT;
+    }
 }
 
 void GUI::onWifiPasswordClick(int x, int y)

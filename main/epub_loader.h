@@ -9,6 +9,7 @@ public:
     // Lightweight metadata-only load (title/lang), no chapter parsing or heuristics.
     bool loadMetadataOnly(const char* path);
     std::string getTitle();
+    std::string getAuthor();
     
     // Navigation
     std::string getText(size_t offset, size_t length);
@@ -31,6 +32,7 @@ private:
     std::string currentPath;
     std::string language;
     std::string title; // Added title
+    std::string author; // Book author
     ZipReader zip;
     bool isOpen = false;
     
