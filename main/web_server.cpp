@@ -12,6 +12,8 @@
 #include "book_index.h"
 #include "gui.h"
 #include "esp_timer.h"
+#include "device_hal.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "WEB";
 extern WifiManager wifiManager;
@@ -161,6 +163,35 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
   </div>
 </div>
 
+<!-- M5PaperS3 Features Section (hidden on M5Paper) -->
+<div class="card" id="s3-features" style="display: none;">
+  <h2>M5PaperS3 Features</h2>
+  <div class="stat">Device: <span id="deviceName">Loading...</span></div>
+  
+  <div style="margin-bottom: 15px;">
+    <label style="display: flex; align-items: center; gap: 10px;">
+      <input type="checkbox" id="buzzerEnabled" onchange="toggleBuzzer()" style="width: auto;">
+      <span>Enable Touch Sound (Buzzer)</span>
+    </label>
+  </div>
+  
+  <div style="margin-bottom: 15px;">
+    <label style="display: flex; align-items: center; gap: 10px;">
+      <input type="checkbox" id="autoRotate" onchange="toggleAutoRotate()" style="width: auto;">
+      <span>Auto-Rotate (Gyroscope)</span>
+    </label>
+  </div>
+  
+  <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+    <h3 style="margin-top: 0; font-size: 16px;">SD Card</h3>
+    <div class="stat">SD Card Status: <span id="sdStatus">Checking...</span></div>
+    <div class="stat" id="sdSizeInfo" style="display: none;">SD Card Size: <span id="sdSize">-</span></div>
+    <div class="stat" id="sdFreeInfo" style="display: none;">SD Free Space: <span id="sdFree">-</span></div>
+    <button onclick="formatSD()" class="del" style="margin-top: 10px;">Format SD Card</button>
+    <p style="font-size: 12px; color: #666; margin-top: 5px;">Warning: This will erase all data on the SD card!</p>
+  </div>
+</div>
+
 <div class="card">
   <h2>Library</h2>
   
@@ -184,6 +215,7 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
 <script>
 let currentSize = 1.0;
 let currentLineSpacing = 1.4;
+let isM5PaperS3 = false;
 
 function fetchSettings() {
     fetch('/api/settings').then(r => r.json()).then(s => {
@@ -202,7 +234,77 @@ function fetchSettings() {
         if(s.timezone) {
             document.getElementById('tzStr').value = s.timezone;
         }
+        
+        // M5PaperS3 specific settings
+        if(s.deviceName) {
+            document.getElementById('deviceName').innerText = s.deviceName;
+            isM5PaperS3 = s.deviceName === 'M5PaperS3';
+            if(isM5PaperS3) {
+                document.getElementById('s3-features').style.display = 'block';
+                if(typeof s.buzzerEnabled !== 'undefined') {
+                    document.getElementById('buzzerEnabled').checked = s.buzzerEnabled;
+                }
+                if(typeof s.autoRotate !== 'undefined') {
+                    document.getElementById('autoRotate').checked = s.autoRotate;
+                }
+                fetchSDStatus();
+            }
+        }
     });
+}
+
+function fetchSDStatus() {
+    fetch('/api/sd_status').then(r => r.json()).then(s => {
+        if(s.mounted) {
+            document.getElementById('sdStatus').innerText = 'Mounted';
+            document.getElementById('sdSizeInfo').style.display = 'block';
+            document.getElementById('sdFreeInfo').style.display = 'block';
+            document.getElementById('sdSize').innerText = (s.totalSize / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+            document.getElementById('sdFree').innerText = (s.freeSize / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+        } else {
+            document.getElementById('sdStatus').innerText = s.available ? 'Not Mounted' : 'Not Available';
+            document.getElementById('sdSizeInfo').style.display = 'none';
+            document.getElementById('sdFreeInfo').style.display = 'none';
+        }
+    }).catch(e => {
+        document.getElementById('sdStatus').innerText = 'Error';
+    });
+}
+
+function toggleBuzzer() {
+    const enabled = document.getElementById('buzzerEnabled').checked;
+    fetch('/api/s3_settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({buzzerEnabled: enabled})
+    });
+}
+
+function toggleAutoRotate() {
+    const enabled = document.getElementById('autoRotate').checked;
+    fetch('/api/s3_settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({autoRotate: enabled})
+    });
+}
+
+function formatSD() {
+    if(!confirm('WARNING: This will ERASE ALL DATA on the SD card. Are you sure?')) return;
+    if(!confirm('This cannot be undone. Confirm to proceed with formatting.')) return;
+    
+    document.getElementById('sdStatus').innerText = 'Formatting...';
+    fetch('/api/format_sd', {method: 'POST'})
+        .then(r => r.json())
+        .then(result => {
+            if(result.success) {
+                alert('SD card formatted successfully!');
+                fetchSDStatus();
+            } else {
+                alert('Format failed: ' + (result.error || 'Unknown error'));
+            }
+        })
+        .catch(e => alert('Format error: ' + e.message));
 }
 
 function changeSize(delta) {
@@ -769,9 +871,23 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
             nvs_close(my_handle);
         }
 
-        char buf[320];
-        snprintf(buf, sizeof(buf), "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"timezone\":\"%s\"}", 
-            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), (unsigned int)getFreeSpace(), tz);
+        char buf[512];
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+        snprintf(buf, sizeof(buf), 
+            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"timezone\":\"%s\", "
+            "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s}", 
+            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), 
+            (unsigned int)getFreeSpace(), tz,
+            deviceHAL.getDeviceName(),
+            gui.isBuzzerEnabled() ? "true" : "false",
+            gui.isAutoRotateEnabled() ? "true" : "false");
+#else
+        snprintf(buf, sizeof(buf), 
+            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\"}", 
+            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), 
+            (unsigned int)getFreeSpace(), tz,
+            deviceHAL.getDeviceName());
+#endif
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, strlen(buf));
         return ESP_OK;
@@ -815,6 +931,100 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
         return ESP_OK;
     }
     return ESP_FAIL;
+}
+
+/* API for M5PaperS3 specific settings */
+static esp_err_t api_s3_settings_handler(httpd_req_t *req)
+{
+    WebServer::updateActivityTime();
+    
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    if (req->method == HTTP_POST) {
+        char buf[256];
+        int ret, remaining = req->content_len;
+        if (remaining >= sizeof(buf)) {
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        
+        if ((ret = httpd_req_recv(req, buf, remaining)) <= 0) {
+            return ESP_FAIL;
+        }
+        buf[ret] = '\0';
+        
+        // Parse buzzerEnabled
+        char* pBuzzer = strstr(buf, "\"buzzerEnabled\":");
+        if (pBuzzer) {
+            bool enabled = (strstr(pBuzzer + 16, "true") != nullptr);
+            gui.setBuzzerEnabled(enabled);
+        }
+        
+        // Parse autoRotate
+        char* pRotate = strstr(buf, "\"autoRotate\":");
+        if (pRotate) {
+            bool enabled = (strstr(pRotate + 13, "true") != nullptr);
+            gui.setAutoRotateEnabled(enabled);
+        }
+        
+        httpd_resp_send(req, "OK", 2);
+        return ESP_OK;
+    }
+#endif
+    
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Not supported");
+    return ESP_FAIL;
+}
+
+/* API to get SD card status */
+static esp_err_t api_sd_status_handler(httpd_req_t *req)
+{
+    WebServer::updateActivityTime();
+    httpd_resp_set_type(req, "application/json");
+    
+#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+    char buf[256];
+    bool mounted = deviceHAL.isSDCardMounted();
+    bool available = deviceHAL.hasSDCardSlot();
+    uint64_t totalSize = deviceHAL.getSDCardTotalSize();
+    uint64_t freeSize = deviceHAL.getSDCardFreeSize();
+    
+    snprintf(buf, sizeof(buf), 
+        "{\"available\":%s, \"mounted\":%s, \"totalSize\":%llu, \"freeSize\":%llu}",
+        available ? "true" : "false",
+        mounted ? "true" : "false",
+        (unsigned long long)totalSize,
+        (unsigned long long)freeSize);
+    httpd_resp_send(req, buf, strlen(buf));
+#else
+    httpd_resp_send(req, "{\"available\":false, \"mounted\":false}", HTTPD_RESP_USE_STRLEN);
+#endif
+    
+    return ESP_OK;
+}
+
+/* API to format SD card */
+static esp_err_t api_format_sd_handler(httpd_req_t *req)
+{
+    WebServer::updateActivityTime();
+    httpd_resp_set_type(req, "application/json");
+    
+#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+    ESP_LOGW(TAG, "Formatting SD card via web request");
+    
+    bool success = deviceHAL.formatSDCard([](int progress) {
+        ESP_LOGI(TAG, "Format progress: %d%%", progress);
+    });
+    
+    if (success) {
+        httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
+    } else {
+        httpd_resp_send(req, "{\"success\":false, \"error\":\"Format failed\"}", HTTPD_RESP_USE_STRLEN);
+    }
+#else
+    httpd_resp_send(req, "{\"success\":false, \"error\":\"SD card not supported\"}", HTTPD_RESP_USE_STRLEN);
+#endif
+    
+    return ESP_OK;
 }
 
 /* Main page handler */
@@ -929,7 +1139,7 @@ void WebServer::init(const char* basePath) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 12; // Increased for safety
+    config.max_uri_handlers = 16; // Increased for M5PaperS3 endpoints
     config.stack_size = 8192; // Increase stack for file ops
     config.recv_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
     config.send_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
@@ -1022,6 +1232,31 @@ void WebServer::init(const char* basePath) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &jump_uri);
+        
+        // M5PaperS3 specific endpoints
+        httpd_uri_t s3_settings_uri = {
+            .uri       = "/api/s3_settings",
+            .method    = HTTP_POST,
+            .handler   = api_s3_settings_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &s3_settings_uri);
+        
+        httpd_uri_t sd_status_uri = {
+            .uri       = "/api/sd_status",
+            .method    = HTTP_GET,
+            .handler   = api_sd_status_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &sd_status_uri);
+        
+        httpd_uri_t format_sd_uri = {
+            .uri       = "/api/format_sd",
+            .method    = HTTP_POST,
+            .handler   = api_format_sd_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &format_sd_uri);
         
         httpd_uri_t catch_all_uri = {
             .uri       = "/*",

@@ -1,0 +1,207 @@
+menu "M5Paper E-Book Reader Configuration"
+
+    choice EBOOK_DEVICE_TYPE
+        prompt "Target Device"
+        default EBOOK_DEVICE_M5PAPER
+        help
+            Select the target M5Paper device variant.
+
+        config EBOOK_DEVICE_M5PAPER
+            bool "M5Paper (Original)"
+            help
+                Original M5Paper with ESP32, 4.7" 960x540 e-ink display.
+                Uses IT8951 controller.
+
+        config EBOOK_DEVICE_M5PAPERS3
+            bool "M5PaperS3"
+            depends on IDF_TARGET_ESP32S3
+            help
+                M5PaperS3 with ESP32-S3, 4.7" 960x540 e-ink display (16 grayscale).
+                Features buzzer, gyroscope, and SD card slot.
+    endchoice
+
+    config EBOOK_DEVICE_NAME
+        string
+        default "M5Paper" if EBOOK_DEVICE_M5PAPER
+        default "M5PaperS3" if EBOOK_DEVICE_M5PAPERS3
+
+    menu "M5PaperS3 Features"
+        depends on EBOOK_DEVICE_M5PAPERS3
+
+        config EBOOK_S3_ENABLE_SD_CARD
+            bool "Enable SD Card Support"
+            default y
+            help
+                Enable SD card support for additional book storage.
+
+        config EBOOK_S3_SD_MOUNT_POINT
+            string "SD Card Mount Point"
+            default "/sdcard"
+            depends on EBOOK_S3_ENABLE_SD_CARD
+            help
+                Mount point for the SD card filesystem.
+
+        config EBOOK_S3_ENABLE_BUZZER
+            bool "Enable Buzzer Support"
+            default y
+            help
+                Enable buzzer for touch feedback sounds.
+
+        config EBOOK_S3_BUZZER_DEFAULT_ENABLED
+            bool "Buzzer Enabled by Default"
+            default y
+            depends on EBOOK_S3_ENABLE_BUZZER
+            help
+                Whether buzzer click sounds are enabled by default.
+                User can toggle this in settings.
+
+        config EBOOK_S3_BUZZER_FREQUENCY
+            int "Buzzer Click Frequency (Hz)"
+            default 4000
+            range 1000 8000
+            depends on EBOOK_S3_ENABLE_BUZZER
+            help
+                Frequency of the buzzer click sound in Hz.
+
+        config EBOOK_S3_BUZZER_DURATION_MS
+            int "Buzzer Click Duration (ms)"
+            default 5
+            range 1 50
+            depends on EBOOK_S3_ENABLE_BUZZER
+            help
+                Duration of the buzzer click sound in milliseconds.
+
+        config EBOOK_S3_ENABLE_GYROSCOPE
+            bool "Enable Gyroscope/IMU Support"
+            default y
+            help
+                Enable gyroscope for automatic screen rotation (landscape mode).
+
+        config EBOOK_S3_AUTO_ROTATE
+            bool "Auto-Rotate Screen Based on Orientation"
+            default y
+            depends on EBOOK_S3_ENABLE_GYROSCOPE
+            help
+                Automatically rotate the display based on device orientation.
+
+        config EBOOK_S3_DUAL_CORE_OPTIMIZATION
+            bool "Enable Dual-Core Optimizations"
+            default y
+            help
+                Use both cores of ESP32-S3 for parallel processing.
+                Improves rendering and book loading performance.
+
+        config EBOOK_S3_RENDER_TASK_CORE
+            int "Render Task CPU Core"
+            default 0
+            range 0 1
+            depends on EBOOK_S3_DUAL_CORE_OPTIMIZATION
+            help
+                CPU core to pin the background render task to.
+
+        config EBOOK_S3_MAIN_TASK_CORE
+            int "Main Task CPU Core"
+            default 1
+            range 0 1
+            depends on EBOOK_S3_DUAL_CORE_OPTIMIZATION
+            help
+                CPU core to pin the main application task to.
+
+        config EBOOK_S3_16_GRAYSCALE
+            bool "Enable 16 Grayscale Mode"
+            default y
+            help
+                Use 16 grayscale shades for better image quality on the e-ink display.
+                This uses 4bpp color depth for canvases.
+
+    endmenu
+
+    menu "Display Settings"
+
+        config EBOOK_DISPLAY_WIDTH
+            int
+            default 540
+            help
+                Display width in pixels.
+
+        config EBOOK_DISPLAY_HEIGHT
+            int
+            default 960
+            help
+                Display height in pixels (portrait mode).
+
+        config EBOOK_STATUS_BAR_HEIGHT
+            int "Status Bar Height"
+            default 44
+            range 30 60
+            help
+                Height of the top status bar in pixels.
+
+        config EBOOK_FOOTER_HEIGHT
+            int "Footer Height"
+            default 50
+            range 30 70
+            help
+                Height of the bottom footer area in pixels.
+
+    endmenu
+
+    menu "Performance Settings"
+
+        config EBOOK_CANVAS_COLOR_DEPTH
+            int "Canvas Color Depth (bpp)"
+            default 4 if EBOOK_DEVICE_M5PAPERS3 && EBOOK_S3_16_GRAYSCALE
+            default 2
+            range 1 8
+            help
+                Color depth for off-screen rendering canvases.
+                2bpp = 4 shades (smaller memory footprint)
+                4bpp = 16 shades (better quality on M5PaperS3)
+
+        config EBOOK_RENDER_TASK_STACK_SIZE
+            int "Render Task Stack Size"
+            default 12288 if EBOOK_DEVICE_M5PAPERS3
+            default 8192
+            range 4096 32768
+            help
+                Stack size for the background rendering task.
+
+        config EBOOK_METRICS_TASK_STACK_SIZE
+            int "Metrics Task Stack Size"
+            default 8192 if EBOOK_DEVICE_M5PAPERS3
+            default 4096
+            range 4096 16384
+            help
+                Stack size for the book metrics calculation task.
+
+        config EBOOK_INDEXER_TASK_STACK_SIZE
+            int "Background Indexer Task Stack Size"
+            default 8192 if EBOOK_DEVICE_M5PAPERS3
+            default 4096
+            range 4096 16384
+            help
+                Stack size for the background book indexer task.
+
+    endmenu
+
+    menu "Power Management"
+
+        config EBOOK_LIBRARY_IDLE_TIMEOUT_MS
+            int "Library Mode Idle Timeout (ms)"
+            default 300000
+            range 60000 600000
+            help
+                Time in milliseconds before going to sleep in library mode.
+                Default is 5 minutes (300000 ms).
+
+        config EBOOK_READER_IDLE_TIMEOUT_MS
+            int "Reader Mode Idle Timeout (ms)"
+            default 60000
+            range 30000 300000
+            help
+                Time in milliseconds before going to sleep in reader mode.
+                Default is 1 minute (60000 ms).
+
+    endmenu
+
+endmenu

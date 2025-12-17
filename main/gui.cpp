@@ -4,6 +4,7 @@
 #include "esp_timer.h"
 #include "wifi_manager.h"
 #include "book_index.h"
+#include "device_hal.h"
 #include <vector>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -19,6 +20,7 @@
 #include <string.h>
 #include <esp_heap_caps.h>
 #include <new>
+#include "sdkconfig.h"
 
 static const char *TAG = "GUI";
 bool GUI::canJump() const
@@ -355,108 +357,15 @@ static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
 
 static void enterDeepSleepWithTouchWake()
 {
-    // Only needed on M5Paper: touch INT is GPIO36 (RTC pin) and needs the rail + pull-ups alive.
-    if (M5.getBoard() != m5::board_t::board_M5Paper)
-    {
-        esp_deep_sleep_start();
-        return;
-    }
-
-    const gpio_num_t TOUCH_INT_PIN = GPIO_NUM_36;
-    const gpio_num_t MAIN_PWR_PIN = GPIO_NUM_2;
-
-    ESP_LOGI(TAG, "Preparing for deep sleep...");
-
-    // 1. Clear any pending touch interrupt:
-    // Ensure the pin is configured as input
-    gpio_reset_pin(TOUCH_INT_PIN);
-    gpio_set_direction(TOUCH_INT_PIN, GPIO_MODE_INPUT);
-
-    // Wait for line to go HIGH (inactive) - it is active LOW
-    int retries = 0;
-    while (gpio_get_level(TOUCH_INT_PIN) == 0 && retries < 50)
-    {
-        M5.update();
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-        retries++;
-    }
-    if (gpio_get_level(TOUCH_INT_PIN) == 0)
-    {
-        ESP_LOGW(TAG, "Touch interrupt pin still LOW after flushing");
-    }
-
-    // 2. Configure wakeup on touch interrupt (active LOW)
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    esp_sleep_enable_ext0_wakeup(TOUCH_INT_PIN, 0); // 0 = LOW
-
-    // 3. Keep main power rail ON during deep sleep
-    // This is critical for M5Paper touch controller to stay alive
-    gpio_reset_pin(MAIN_PWR_PIN);
-    gpio_set_direction(MAIN_PWR_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(MAIN_PWR_PIN, 1);
-    gpio_hold_en(MAIN_PWR_PIN);
-    gpio_deep_sleep_hold_en();
-
-    // 4. Put display to sleep cleanly
-    M5.Display.sleep();
-    M5.Display.waitDisplay();
-
-    // 5. Enter deep sleep
-    ESP_LOGI(TAG, "Entering deep sleep now");
-    esp_deep_sleep_start();
+    // Use HAL for device-agnostic deep sleep
+    deviceHAL.enterDeepSleepWithTouchWake();
 }
 
 void GUI::enterDeepSleepShutdown()
 {
     ESP_LOGI(TAG, "Entering Deep Sleep Shutdown (Stage 2)...");
-
-    // Only needed on M5Paper
-    if (M5.getBoard() != m5::board_t::board_M5Paper)
-    {
-        esp_deep_sleep_start();
-        return;
-    }
-
-    const gpio_num_t MAIN_PWR_PIN = GPIO_NUM_2;
-
-    // 1. Turn OFF Main Power Rail
-    // This kills power to Touch, EPD, SD, etc.
-    // We must release the hold first if it was held.
-    gpio_hold_dis(MAIN_PWR_PIN);
-    gpio_reset_pin(MAIN_PWR_PIN);
-    gpio_set_direction(MAIN_PWR_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(MAIN_PWR_PIN, 0); // OFF
-    gpio_hold_en(MAIN_PWR_PIN);
-    gpio_deep_sleep_hold_en();
-
-    // 2. Configure Wakeup on Wheel Button ONLY (GPIO 38)
-    // Since power is off, Touch (GPIO 36) won't work reliably or at all if it needs power.
-    // Wheel button pulls to ground, so it should work if pulled up internally or externally (if external pullup is on VCC_BAT or similar).
-    // M5Paper schematic shows buttons have external pullups? Or internal?
-    // If they are on the switched rail, they won't work.
-    // Checking schematic: M5Paper buttons (37,38,39) are connected to ESP32 pins.
-    // They are pulled up to 3.3V. If 3.3V is OFF (MAIN_PWR_PIN=0), then they might be floating or Low.
-    // Wait, if MAIN_PWR_PIN controls the 3.3V rail that pulls up the buttons, then turning it off means buttons will read LOW (or floating).
-    // If they read LOW, we will wake up immediately if we set wake on LOW.
-    //
-    // Let's check M5Paper Power Architecture.
-    // GPIO 2 controls "PERI_PWR".
-    // ESP32 itself is powered by "VCC_3V3" which comes from SY7088 (DCDC1 of AXP192? No, separate).
-    // AXP192 powers the ESP32.
-    // GPIO 2 controls peripheral power (Screen, Touch, etc).
-    // Are buttons on Peripheral Power?
-    // Usually buttons are on Always-On power or pulled up to VCC_3V3 (ESP power).
-    // If buttons are pulled up to VCC_3V3 (ESP power), then they will work even if GPIO 2 is Off.
-    // I will assume they are on VCC_3V3.
-
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    
-    // Use ext1 for button (GPIO 38)
-    const uint64_t BUTTON_MASK = (1ULL << 38);
-    esp_sleep_enable_ext1_wakeup(BUTTON_MASK, ESP_EXT1_WAKEUP_ALL_LOW);
-
-    // 3. Enter Deep Sleep
-    esp_deep_sleep_start();
+    deviceHAL.enterDeepSleepShutdown();
+    // HAL handles everything and does not return
 }
 
 void GUI::init(bool isWakeFromSleep)
@@ -466,8 +375,17 @@ void GUI::init(bool isWakeFromSleep)
     // Initialize background rendering
     epubMutex = xSemaphoreCreateMutex();
     renderQueue = xQueueCreate(5, sizeof(RenderRequest));
+    
+    // Use HAL for task core pinning
+#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
     xTaskCreatePinnedToCore([](void *arg)
-                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 8192, this, 1, &renderTaskHandle, 0); // Core 0
+                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 
+                            CONFIG_EBOOK_RENDER_TASK_STACK_SIZE, this, 1, &renderTaskHandle, 
+                            deviceHAL.getRenderTaskCore());
+#else
+    xTaskCreatePinnedToCore([](void *arg)
+                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 8192, this, 1, &renderTaskHandle, 0);
+#endif
 
     // Initialize NVS
     // Already done in main, but safe to call again or skip
@@ -490,9 +408,10 @@ void GUI::init(bool isWakeFromSleep)
     M5.Display.setTextColor(TFT_BLACK);
 
     // Create sprites for buffering
-    // Use 2bpp (4 levels; effectively black/white) to save RAM.
-    // M5Paper is 960x540 -> ~129KB per sprite.
-    const int bufferColorDepth = 2;
+    // Use HAL to get optimal color depth:
+    // - M5Paper: 2bpp (4 levels) to save RAM
+    // - M5PaperS3: 4bpp (16 levels) for better grayscale quality
+    const int bufferColorDepth = deviceHAL.getCanvasColorDepth();
     const int bufW = M5.Display.width();
     const int bufH = M5.Display.height();
     const size_t bytesPerSprite = ((size_t)bufW * bufH * bufferColorDepth + 7) / 8;
@@ -506,8 +425,8 @@ void GUI::init(bool isWakeFromSleep)
     canvasNext.setPsram(true);
     canvasPrev.setPsram(true);
 
-    ESP_LOGI(TAG, "Attempting to create buffer sprites (w=%d h=%d depth=%dbpp ~%u bytes each, PSRAM preferred). Free heap: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
-             bufW, bufH, bufferColorDepth, (unsigned)bytesPerSprite,
+    ESP_LOGI(TAG, "Device: %s - Creating buffer sprites (w=%d h=%d depth=%dbpp ~%u bytes each, PSRAM preferred). Free heap: default=%u SPIRAM=%u largest: default=%u SPIRAM=%u",
+             deviceHAL.getDeviceName(), bufW, bufH, bufferColorDepth, (unsigned)bytesPerSprite,
              (unsigned)freeBeforeDefault, (unsigned)freeBeforeSPIRAM,
              (unsigned)largestDefault, (unsigned)largestSPIRAM);
 
@@ -2182,12 +2101,32 @@ void GUI::handleTouch()
         processReaderTap(lastClickX, lastClickY, false); // false = single
     }
 
+    // Check orientation periodically for auto-rotate (M5PaperS3)
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    if (deviceHAL.isAutoRotateEnabled() && 
+        (now - lastOrientationCheck > ORIENTATION_CHECK_INTERVAL_MS)) {
+        lastOrientationCheck = now;
+        if (deviceHAL.updateOrientation()) {
+            // Rotation changed - need to redraw
+            needsRedraw = true;
+            // Invalidate pre-rendered canvases
+            nextCanvasValid = false;
+            prevCanvasValid = false;
+        }
+    }
+#endif
+
     if (M5.Touch.getCount() > 0)
     {
         lastActivityTime = now;
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
+            // Play click sound on M5PaperS3
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+            deviceHAL.playClickSound();
+#endif
+
             if (justWokeUp)
             {
                 ESP_LOGI(TAG, "Processing wake-up touch at %d, %d", t.x, t.y);
@@ -2584,9 +2523,69 @@ void GUI::saveSettings()
         nvs_set_i32(my_handle, "wifi_enabled", wifiEnabled ? 1 : 0);
         int32_t spacingInt = (int32_t)(lineSpacing * 10);
         nvs_set_i32(my_handle, "line_spacing", spacingInt);
+        
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+        // Save M5PaperS3-specific settings
+        nvs_set_i32(my_handle, "buzzer_en", buzzerEnabled ? 1 : 0);
+        nvs_set_i32(my_handle, "auto_rotate", autoRotateEnabled ? 1 : 0);
+#endif
+        
         nvs_commit(my_handle);
         nvs_close(my_handle);
     }
+}
+
+// M5PaperS3 buzzer and auto-rotate methods
+void GUI::setBuzzerEnabled(bool enabled)
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    buzzerEnabled = enabled;
+    deviceHAL.setBuzzerEnabled(enabled);
+    saveSettings();
+#else
+    (void)enabled;
+#endif
+}
+
+bool GUI::isBuzzerEnabled() const
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    return buzzerEnabled;
+#else
+    return false;
+#endif
+}
+
+void GUI::setAutoRotateEnabled(bool enabled)
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    autoRotateEnabled = enabled;
+    deviceHAL.setAutoRotateEnabled(enabled);
+    saveSettings();
+#else
+    (void)enabled;
+#endif
+}
+
+bool GUI::isAutoRotateEnabled() const
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    return autoRotateEnabled;
+#else
+    return false;
+#endif
+}
+
+void GUI::checkOrientation()
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    if (deviceHAL.updateOrientation()) {
+        // Rotation changed
+        needsRedraw = true;
+        nextCanvasValid = false;
+        prevCanvasValid = false;
+    }
+#endif
 }
 
 void GUI::setFontSize(float size)
@@ -2654,6 +2653,23 @@ void GUI::loadSettings()
         {
             lineSpacing = spacingInt / 10.0f;
         }
+
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+        // Load M5PaperS3-specific settings
+        int32_t buzzerEn = 1;
+        if (nvs_get_i32(my_handle, "buzzer_en", &buzzerEn) == ESP_OK)
+        {
+            buzzerEnabled = (buzzerEn != 0);
+            deviceHAL.setBuzzerEnabled(buzzerEnabled);
+        }
+
+        int32_t autoRotate = 1;
+        if (nvs_get_i32(my_handle, "auto_rotate", &autoRotate) == ESP_OK)
+        {
+            autoRotateEnabled = (autoRotate != 0);
+            deviceHAL.setAutoRotateEnabled(autoRotateEnabled);
+        }
+#endif
 
         nvs_close(my_handle);
     }

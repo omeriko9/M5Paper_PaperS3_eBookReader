@@ -4,6 +4,7 @@
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include "book_index.h"
+#include "sdkconfig.h"
 
 enum class AppState {
     LIBRARY,
@@ -46,6 +47,13 @@ public:
     
     void setWebServerEnabled(bool enabled);
     bool isWifiEnabled() const { return wifiEnabled; }
+
+    // M5PaperS3 specific features
+    void setBuzzerEnabled(bool enabled);
+    bool isBuzzerEnabled() const;
+    void setAutoRotateEnabled(bool enabled);
+    bool isAutoRotateEnabled() const;
+    void checkOrientation(); // Check and update rotation from gyroscope
 
     static void enterDeepSleepShutdown();
 
@@ -155,4 +163,12 @@ private:
     bool webServerEnabled = true;
     bool settingsNeedsUnderlayRefresh = false;
     bool justWokeUp = false;
+
+    // M5PaperS3 features
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    bool buzzerEnabled = true;
+    bool autoRotateEnabled = true;
+    uint32_t lastOrientationCheck = 0;
+    static constexpr uint32_t ORIENTATION_CHECK_INTERVAL_MS = 500;
+#endif
 };

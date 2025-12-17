@@ -8,6 +8,7 @@
 #include "web_server.h"
 #include "gui.h"
 #include "book_index.h"
+#include "device_hal.h"
 #include "esp_vfs_fat.h"
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
@@ -16,6 +17,7 @@
 #include "driver/gpio.h"
 #include <time.h>
 #include "esp_sleep.h"
+#include "sdkconfig.h"
 
 #if __has_include(<esp_sntp.h>)
 #include "esp_sntp.h"
@@ -284,16 +286,43 @@ extern "C" void app_main(void)
     
     // Use cached board type to skip autodetect (saves ~1 second)
     if (is_wake_from_sleep) {
-        // We know it's M5Paper, set directly
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+        // M5PaperS3 has IMU enabled by default
+        cfg.internal_imu = true;
+        cfg.internal_rtc = true;
+        cfg.internal_spk = false;
+        cfg.internal_mic = false;
+#else
+        // Original M5Paper - no IMU
         cfg.internal_imu = false;
         cfg.internal_rtc = true;
         cfg.internal_spk = false;
         cfg.internal_mic = false;
+#endif
     }
+
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    // Enable IMU for M5PaperS3 for gyroscope-based rotation
+    cfg.internal_imu = true;
+#endif
     
     M5.begin(cfg);
     M5.Display.setRotation(0); // Portrait
     M5.Display.setTextSize(3);
+
+    // Initialize HAL
+    deviceHAL.init(is_wake_from_sleep);
+
+#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+    // Try to mount SD card on M5PaperS3
+    if (!is_wake_from_sleep) {
+        if (deviceHAL.mountSDCard()) {
+            ESP_LOGI(TAG, "SD card mounted successfully");
+        } else {
+            ESP_LOGW(TAG, "SD card not available");
+        }
+    }
+#endif
     
     // Skip "Initializing..." message on wake - saves ~100ms and we want fast restore
     if (!is_wake_from_sleep) {
