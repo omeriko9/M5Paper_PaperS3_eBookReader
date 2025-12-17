@@ -1,9 +1,9 @@
-# ESP32-S3 boards like M5PaperS3 typically use Octal (OPI) PSRAM.
+# ESP32-S3 (M5PaperS3)
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
 
-# Default to the ESP32-S3 M5Paper variant when building for esp32s3.
+# Device Type
 CONFIG_EBOOK_DEVICE_M5PAPERS3=y
 # CONFIG_EBOOK_DEVICE_M5PAPER is not set
