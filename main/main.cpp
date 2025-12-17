@@ -316,12 +316,10 @@ extern "C" void app_main(void)
 
 #ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
     // Try to mount SD card on M5PaperS3
-    if (!is_wake_from_sleep) {
-        if (deviceHAL.mountSDCard()) {
-            ESP_LOGI(TAG, "SD card mounted successfully");
-        } else {
-            ESP_LOGW(TAG, "SD card not available");
-        }
+    if (deviceHAL.mountSDCard()) {
+        ESP_LOGI(TAG, "SD card mounted successfully");
+    } else {
+        ESP_LOGW(TAG, "SD card not available");
     }
 #endif
     

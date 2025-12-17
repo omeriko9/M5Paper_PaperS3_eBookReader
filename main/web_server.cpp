@@ -117,7 +117,8 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
 <body>
 <div class="card">
   <h2>Settings</h2>
-  <div class="stat">Free Space: <span id="freeSpace">Loading...</span></div>
+  <div class="stat">Internal Free Space: <span id="freeSpace">Loading...</span></div>
+  <div class="stat" id="sdFreeMain" style="display: none;">SD Free Space: <span id="sdFreeVal">Loading...</span></div>
   <div style="margin-bottom: 15px;">
     <label>Font Size: <span id="sizeVal"></span></label>
     <div style="display: flex; gap: 10px; margin-top: 5px;">
@@ -231,6 +232,12 @@ function fetchSettings() {
         }
         if(s.freeSpace) {
             document.getElementById('freeSpace').innerText = (s.freeSpace / 1024 / 1024).toFixed(2) + ' MB';
+        }
+        if(s.sdFreeSpace) {
+            document.getElementById('sdFreeMain').style.display = 'block';
+            document.getElementById('sdFreeVal').innerText = (s.sdFreeSpace / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+        } else {
+            document.getElementById('sdFreeMain').style.display = 'none';
         }
         if(s.timezone) {
             document.getElementById('tzStr').value = s.timezone;
@@ -817,19 +824,17 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
         if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
             int id = atoi(param);
             
-            // Get path before removing from index
-            char filepath[32];
-            snprintf(filepath, sizeof(filepath), "/spiffs/%d.epub", id);
-            
-            ESP_LOGI(TAG, "Deleting ID %d (%s)", id, filepath);
-            
-            unlink(filepath); // Delete actual file
-            bookIndex.removeBook(id); // Update index
-            
-            gui.refreshLibrary();
-            
-            httpd_resp_send(req, "OK", 2);
-            return ESP_OK;
+            BookEntry book = bookIndex.getBook(id);
+            if (book.id != 0) {
+                ESP_LOGI(TAG, "Deleting ID %d (%s)", id, book.path.c_str());
+                unlink(book.path.c_str()); // Delete actual file
+                bookIndex.removeBook(id); // Update index (also deletes metrics)
+                
+                gui.refreshLibrary();
+                
+                httpd_resp_send(req, "OK", 2);
+                return ESP_OK;
+            }
         }
     }
     httpd_resp_send_500(req);
@@ -875,10 +880,10 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
         char buf[512];
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         snprintf(buf, sizeof(buf), 
-            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"timezone\":\"%s\", "
+            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"sdFreeSpace\":%llu, \"timezone\":\"%s\", "
             "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s}", 
             gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), 
-            (unsigned int)getFreeSpace(), tz,
+            (unsigned int)getFreeSpace(), deviceHAL.getSDCardFreeSize(), tz,
             deviceHAL.getDeviceName(),
             gui.isBuzzerEnabled() ? "true" : "false",
             gui.isAutoRotateEnabled() ? "true" : "false");

@@ -400,8 +400,14 @@ const char* DeviceHAL::getSDCardMountPoint() const {
 
 uint64_t DeviceHAL::getSDCardTotalSize() const {
 #ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
-    if (!m_sdCardMounted || !s_card) return 0;
-    return (uint64_t)s_card->csd.capacity * s_card->csd.sector_size;
+    if (!m_sdCardMounted) return 0;
+
+    uint64_t totalBytes = 0;
+    uint64_t freeBytes = 0;
+    if (esp_vfs_fat_info(CONFIG_EBOOK_S3_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
+        return totalBytes;
+    }
+    return 0;
 #else
     return 0;
 #endif
@@ -411,15 +417,12 @@ uint64_t DeviceHAL::getSDCardFreeSize() const {
 #ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
     if (!m_sdCardMounted) return 0;
 
-    FATFS* fs;
-    DWORD fre_clust;
-    
-    if (f_getfree(CONFIG_EBOOK_S3_SD_MOUNT_POINT, &fre_clust, &fs) != FR_OK) {
-        return 0;
+    uint64_t totalBytes = 0;
+    uint64_t freeBytes = 0;
+    if (esp_vfs_fat_info(CONFIG_EBOOK_S3_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
+        return freeBytes;
     }
-    
-    uint64_t freeBytes = (uint64_t)fre_clust * fs->csize * fs->ssize;
-    return freeBytes;
+    return 0;
 #else
     return 0;
 #endif
