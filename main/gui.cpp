@@ -30,6 +30,7 @@ bool GUI::canJump() const
 
 EpubLoader epubLoader;
 extern BookIndex bookIndex;
+extern DeviceHAL& deviceHAL;
 bool wifiConnected = false;
 int wifiRssi = 0;
 extern WifiManager wifiManager;

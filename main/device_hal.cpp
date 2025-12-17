@@ -27,13 +27,13 @@ static constexpr gpio_num_t M5PAPER_SD_CLK_PIN = GPIO_NUM_14;
 
 // Pin definitions for M5PaperS3
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-static constexpr gpio_num_t M5PAPERS3_TOUCH_INT_PIN = GPIO_NUM_21;
+static constexpr gpio_num_t M5PAPERS3_TOUCH_INT_PIN = GPIO_NUM_36; // Placeholder, verify if needed
 static constexpr gpio_num_t M5PAPERS3_MAIN_PWR_PIN = GPIO_NUM_2;
-static constexpr gpio_num_t M5PAPERS3_BUZZER_PIN = GPIO_NUM_2;  // May need verification
-static constexpr gpio_num_t M5PAPERS3_SD_CS_PIN = GPIO_NUM_4;
-static constexpr gpio_num_t M5PAPERS3_SD_MOSI_PIN = GPIO_NUM_6;
-static constexpr gpio_num_t M5PAPERS3_SD_MISO_PIN = GPIO_NUM_5;
-static constexpr gpio_num_t M5PAPERS3_SD_CLK_PIN = GPIO_NUM_7;
+static constexpr gpio_num_t M5PAPERS3_BUZZER_PIN = GPIO_NUM_21;
+static constexpr gpio_num_t M5PAPERS3_SD_CS_PIN = GPIO_NUM_47;
+static constexpr gpio_num_t M5PAPERS3_SD_MOSI_PIN = GPIO_NUM_38;
+static constexpr gpio_num_t M5PAPERS3_SD_MISO_PIN = GPIO_NUM_40;
+static constexpr gpio_num_t M5PAPERS3_SD_CLK_PIN = GPIO_NUM_39;
 
 // LEDC configuration for buzzer
 static constexpr ledc_timer_t BUZZER_TIMER = LEDC_TIMER_0;

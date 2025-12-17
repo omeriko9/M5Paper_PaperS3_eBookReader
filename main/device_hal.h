@@ -234,4 +234,4 @@ private:
 };
 
 // Convenience macro
-#define deviceHAL DeviceHAL::getInstance()
+//#define deviceHAL DeviceHAL::getInstance()

@@ -19,6 +19,7 @@ static const char *TAG = "WEB";
 extern WifiManager wifiManager;
 extern BookIndex bookIndex;
 extern GUI gui;
+extern DeviceHAL& deviceHAL;
 extern void syncRtcFromNtp();
 
 // Static member initialization

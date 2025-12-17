@@ -41,6 +41,7 @@ WifiManager wifiManager;
 WebServer webServer;
 GUI gui;
 BookIndex bookIndex; // Global instance
+DeviceHAL& deviceHAL = DeviceHAL::getInstance();
 
 static inline void stopSntpClient()
 {

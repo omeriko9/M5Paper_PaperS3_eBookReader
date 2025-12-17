@@ -1,0 +1,9 @@
+# ESP32-S3 boards like M5PaperS3 typically use Octal (OPI) PSRAM.
+# If PSRAM init fails with "PSRAM ID read error ... wrong PSRAM line mode",
+# this setting is usually the fix.
+CONFIG_SPIRAM_MODE_OCT=y
+# CONFIG_SPIRAM_MODE_QUAD is not set
+
+# Default to the ESP32-S3 M5Paper variant when building for esp32s3.
+CONFIG_EBOOK_DEVICE_M5PAPERS3=y
+# CONFIG_EBOOK_DEVICE_M5PAPER is not set
