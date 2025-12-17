@@ -42,6 +42,20 @@ FONT_JOBS = [
             range(0x2000, 0x2070)
         ])
     ]),
+    ("spiffs_image/fonts/Arabic-Merged.vlw", 24, [
+        ("Ramis Arabic.otf", [
+            range(0x0600, 0x0700),  # Arabic
+            range(0x0750, 0x0780),  # Arabic Supplement
+            range(0x08A0, 0x08FF),  # Arabic Extended-A
+            range(0xFB50, 0xFDFF),  # Arabic Presentation Forms-A
+            range(0xFE70, 0xFEFF),  # Arabic Presentation Forms-B
+        ]),
+        ("regular-fonts/Roboto-Regular.ttf", [
+            range(32, 127),         # ASCII
+            range(160, 256),        # Latin-1
+            range(0x2000, 0x2070),  # Punctuation
+        ])
+    ]),
 ]
 
 def build_vlw(out_path: Path, size: int, sources: List[Tuple[str, List[Iterable[int]]]]) -> None:

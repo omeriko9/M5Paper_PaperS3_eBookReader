@@ -112,6 +112,7 @@ private:
     bool fontChanged = false;
     std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
     std::vector<uint8_t> fontDataHebrew; // Cache for Hebrew font
+    std::vector<uint8_t> fontDataArabic; // Cache for Arabic font
     bool wifiEnabled = true;
     
     size_t lastPageChars = 0;
@@ -157,6 +158,7 @@ private:
     
     void loadFonts();
     void ensureHebrewFontLoaded();
+    void ensureArabicFontLoaded();
     void drawStringMixed(const std::string &text, int x, int y, M5Canvas *target = nullptr, float size = -1.0f, bool isProcessed = false);
     
     void saveSettings();

@@ -30,7 +30,7 @@ bool GUI::canJump() const
 
 EpubLoader epubLoader;
 extern BookIndex bookIndex;
-extern DeviceHAL& deviceHAL;
+extern DeviceHAL &deviceHAL;
 bool wifiConnected = false;
 int wifiRssi = 0;
 extern WifiManager wifiManager;
@@ -54,7 +54,7 @@ struct SettingsLayout
     int row2Y;
     int row3Y;
     int row4Y;
-    int row5Y;  // For favorite toggle
+    int row5Y; // For favorite toggle
     int closeY;
     int buttonGap;
     int fontButtonW;
@@ -76,17 +76,17 @@ static SettingsLayout computeSettingsLayout()
     l.panelHeight = M5.Display.height() / 2;
     l.panelTop = M5.Display.height() - l.panelHeight;
     l.padding = 30;
-    l.rowHeight = 50;  // Reduced to fit more rows
+    l.rowHeight = 50; // Reduced to fit more rows
     l.titleY = l.panelTop + 15;
     l.row1Y = l.panelTop + 50;
     l.row2Y = l.row1Y + l.rowHeight;
     l.row3Y = l.row2Y + l.rowHeight;
     l.row4Y = l.row3Y + l.rowHeight;
-    l.row5Y = l.row4Y + l.rowHeight;  // Favorite row
+    l.row5Y = l.row4Y + l.rowHeight; // Favorite row
     l.closeY = l.panelTop + l.panelHeight - 60;
     l.buttonGap = 20;
     l.fontButtonW = 80;
-    l.fontButtonH = 40;  // Slightly smaller
+    l.fontButtonH = 40; // Slightly smaller
     l.fontPlusX = l.panelWidth - l.padding - l.fontButtonW;
     l.fontMinusX = l.fontPlusX - l.buttonGap - l.fontButtonW;
     l.changeButtonW = 180;
@@ -176,6 +176,139 @@ static bool isHebrew(const std::string &word)
     return false;
 }
 
+static bool isArabic(const std::string &word)
+{
+    for (size_t i = 0; i < word.length(); ++i)
+    {
+        unsigned char c = (unsigned char)word[i];
+        // Arabic block (0600-06FF) starts with 0xD8-0xDB in UTF-8
+        // Presentation forms (FB50-FEFF) start with 0xEF 0xAC-0xEF 0xBB
+        if (c >= 0xD8 && c <= 0xDB)
+            return true;
+        if (c == 0xEF) {
+            if (i + 1 < word.length()) {
+                unsigned char c2 = (unsigned char)word[i+1];
+                if (c2 >= 0xAC && c2 <= 0xBB) return true;
+            }
+        }
+    }
+    return false;
+}
+
+struct ArabicForm {
+    uint16_t code;
+    uint16_t isolated;
+    uint16_t initial;
+    uint16_t medial;
+    uint16_t final;
+};
+
+static const ArabicForm arabicForms[] = {
+    {0x0621, 0xFE80, 0xFE80, 0xFE80, 0xFE80}, // Hamza
+    {0x0622, 0xFE81, 0xFE81, 0xFE82, 0xFE82}, // Alef with Madda
+    {0x0623, 0xFE83, 0xFE83, 0xFE84, 0xFE84}, // Alef with Hamza Above
+    {0x0624, 0xFE85, 0xFE85, 0xFE86, 0xFE86}, // Waw with Hamza Above
+    {0x0625, 0xFE87, 0xFE87, 0xFE88, 0xFE88}, // Alef with Hamza Below
+    {0x0626, 0xFE89, 0xFE8B, 0xFE8C, 0xFE8A}, // Yeh with Hamza Above
+    {0x0627, 0xFE8D, 0xFE8D, 0xFE8E, 0xFE8E}, // Alef
+    {0x0628, 0xFE8F, 0xFE91, 0xFE92, 0xFE90}, // Beh
+    {0x0629, 0xFE93, 0xFE93, 0xFE94, 0xFE94}, // Teh Marbuta
+    {0x062A, 0xFE95, 0xFE97, 0xFE98, 0xFE96}, // Teh
+    {0x062B, 0xFE99, 0xFE9B, 0xFE9C, 0xFE9A}, // Theh
+    {0x062C, 0xFE9D, 0xFE9F, 0xFEA0, 0xFE9E}, // Jeem
+    {0x062D, 0xFEA1, 0xFEA3, 0xFEA4, 0xFEA2}, // Hah
+    {0x062E, 0xFEA5, 0xFEA7, 0xFEA8, 0xFEA6}, // Khah
+    {0x062F, 0xFEA9, 0xFEA9, 0xFEAA, 0xFEAA}, // Dal
+    {0x0630, 0xFEAB, 0xFEAB, 0xFEAC, 0xFEAC}, // Thal
+    {0x0631, 0xFEAD, 0xFEAD, 0xFEAE, 0xFEAE}, // Reh
+    {0x0632, 0xFEAF, 0xFEAF, 0xFEB0, 0xFEB0}, // Zain
+    {0x0633, 0xFEB1, 0xFEB3, 0xFEB4, 0xFEB2}, // Seen
+    {0x0634, 0xFEB5, 0xFEB7, 0xFEB8, 0xFEB6}, // Sheen
+    {0x0635, 0xFEB9, 0xFEBB, 0xFEBC, 0xFEBA}, // Sad
+    {0x0636, 0xFEBD, 0xFEBF, 0xFEC0, 0xFEBE}, // Dad
+    {0x0637, 0xFEC1, 0xFEC3, 0xFEC4, 0xFEC2}, // Tah
+    {0x0638, 0xFEC5, 0xFEC7, 0xFEC8, 0xFEC6}, // Zah
+    {0x0639, 0xFEC9, 0xFECB, 0xFECC, 0xFECA}, // Ain
+    {0x063A, 0xFECD, 0xFECF, 0xFED0, 0xFECE}, // Ghain
+    {0x0641, 0xFED1, 0xFED3, 0xFED4, 0xFED2}, // Feh
+    {0x0642, 0xFED5, 0xFED7, 0xFED8, 0xFED6}, // Qaf
+    {0x0643, 0xFED9, 0xFEDB, 0xFEDC, 0xFEDA}, // Kaf
+    {0x0644, 0xFEDD, 0xFEDF, 0xFEE0, 0xFEDE}, // Lam
+    {0x0645, 0xFEE1, 0xFEE3, 0xFEE4, 0xFEE2}, // Meem
+    {0x0646, 0xFEE5, 0xFEE7, 0xFEE8, 0xFEE6}, // Noon
+    {0x0647, 0xFEE9, 0xFEEB, 0xFEEC, 0xFEEA}, // Heh
+    {0x0648, 0xFEED, 0xFEED, 0xFEEE, 0xFEEE}, // Waw
+    {0x0649, 0xFEEF, 0xFEEF, 0xFEF0, 0xFEF0}, // Alef Maksura
+    {0x064A, 0xFEF1, 0xFEF3, 0xFEF4, 0xFEF2}, // Yeh
+};
+
+static bool canConnectLeft(uint16_t code) {
+    for (const auto& f : arabicForms) {
+        if (f.code == code) {
+            return f.initial != f.isolated;
+        }
+    }
+    return false;
+}
+
+static bool canConnectRight(uint16_t code) {
+    for (const auto& f : arabicForms) {
+        if (f.code == code) {
+            return f.final != f.isolated;
+        }
+    }
+    return false;
+}
+
+static std::string reshapeArabic(const std::string &text) {
+    std::vector<uint16_t> codes;
+    for (size_t i = 0; i < text.length(); ) {
+        unsigned char c = (unsigned char)text[i];
+        uint16_t code = 0;
+        if ((c & 0x80) == 0) { code = c; i++; }
+        else if ((c & 0xE0) == 0xC0) { code = ((c & 0x1F) << 6) | (text[i+1] & 0x3F); i += 2; }
+        else if ((c & 0xF0) == 0xE0) { code = ((c & 0x0F) << 12) | ((text[i+1] & 0x3F) << 6) | (text[i+2] & 0x3F); i += 3; }
+        else i++; // Skip 4-byte for now
+        codes.push_back(code);
+    }
+
+    std::vector<uint16_t> reshaped;
+    for (size_t i = 0; i < codes.size(); i++) {
+        uint16_t code = codes[i];
+        const ArabicForm* form = nullptr;
+        for (const auto& f : arabicForms) {
+            if (f.code == code) { form = &f; break; }
+        }
+
+        if (!form) {
+            reshaped.push_back(code);
+            continue;
+        }
+
+        bool prevConnects = (i > 0 && canConnectLeft(codes[i-1]));
+        bool nextConnects = (i < codes.size() - 1 && canConnectRight(codes[i+1]));
+
+        if (prevConnects && nextConnects) reshaped.push_back(form->medial);
+        else if (prevConnects) reshaped.push_back(form->final);
+        else if (nextConnects) reshaped.push_back(form->initial);
+        else reshaped.push_back(form->isolated);
+    }
+
+    std::string result;
+    for (uint16_t code : reshaped) {
+        if (code < 0x80) result += (char)code;
+        else if (code < 0x800) {
+            result += (char)(0xC0 | (code >> 6));
+            result += (char)(0x80 | (code & 0x3F));
+        } else {
+            result += (char)(0xE0 | (code >> 12));
+            result += (char)(0x80 | ((code >> 6) & 0x3F));
+            result += (char)(0x80 | (code & 0x3F));
+        }
+    }
+    return result;
+}
+
 // Helper to check if a character is an ASCII digit
 static bool isAsciiDigit(unsigned char c)
 {
@@ -185,14 +318,14 @@ static bool isAsciiDigit(unsigned char c)
 static std::string reverseHebrewWord(const std::string &text)
 {
     // When reversing Hebrew text for RTL display, we need to keep digit sequences
-    // in their original order (LTR). For example, "123" in Hebrew text should 
+    // in their original order (LTR). For example, "123" in Hebrew text should
     // remain "123", not become "321".
-    
+
     std::string reversed;
     reversed.reserve(text.length());
-    
+
     std::string currentDigitSequence;
-    
+
     for (size_t i = 0; i < text.length();)
     {
         unsigned char c = (unsigned char)text[i];
@@ -208,7 +341,7 @@ static std::string reverseHebrewWord(const std::string &text)
 
         if (i + charLen > text.length())
             break;
-        
+
         // Check if this is an ASCII digit (single byte)
         if (charLen == 1 && isAsciiDigit(c))
         {
@@ -228,24 +361,24 @@ static std::string reverseHebrewWord(const std::string &text)
         }
         i += charLen;
     }
-    
+
     // Don't forget any trailing digits
     if (!currentDigitSequence.empty())
     {
         reversed.insert(0, currentDigitSequence);
     }
-    
+
     return reversed;
 }
 
 static std::string processTextForDisplay(const std::string &text)
 {
-    if (!isHebrew(text))
+    if (!isHebrew(text) && !isArabic(text))
         return text;
 
     // Split into words (space separated)
     // We want to reverse the order of words for RTL.
-    // And for each word, if it is Hebrew, reverse the letters.
+    // And for each word, if it is Hebrew/Arabic, reverse the letters.
     // If it is English/Number, keep letters as is.
 
     std::vector<std::string> words;
@@ -274,7 +407,9 @@ static std::string processTextForDisplay(const std::string &text)
     std::string result;
     for (const auto &word : words)
     {
-        if (isHebrew(word))
+        bool isHeb = isHebrew(word);
+        bool isAra = isArabic(word);
+        if (isHeb || isAra)
         {
             // Replace HTML entities before reversing
             std::string processedWord = word;
@@ -314,6 +449,12 @@ static std::string processTextForDisplay(const std::string &text)
                 processedWord.replace(pos, 6, " ");
                 pos += 1;
             }
+
+            if (isAra) {
+                // Arabic needs shaping before reversing
+                processedWord = reshapeArabic(processedWord);
+            }
+            
             result += reverseHebrewWord(processedWord);
         }
         else
@@ -327,15 +468,16 @@ static std::string processTextForDisplay(const std::string &text)
 static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
 {
     std::string lang = loader.getLanguage();
-    if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos)
+    if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos ||
+        lang.find("ar") != std::string::npos || lang.find("AR") != std::string::npos)
     {
         return true;
     }
 
-    // Check first 5 chapters to decide if the book is Hebrew
+    // Check first 5 chapters to decide if the book is Hebrew or Arabic
     int originalChapter = loader.getCurrentChapterIndex();
     int chaptersToCheck = std::min(5, loader.getTotalChapters());
-    bool foundHebrew = false;
+    bool foundRTL = false;
 
     for (int i = 0; i < chaptersToCheck; i++)
     {
@@ -343,17 +485,13 @@ static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
         {
             // Check first 1000 chars of the chapter
             std::string sample = loader.getText(0, 1000);
-            for (char c : sample)
+            if (isHebrew(sample) || isArabic(sample))
             {
-                std::string s(1, c);
-                if (isHebrew(s))
-                {
-                    foundHebrew = true;
-                    break;
-                }
+                foundRTL = true;
+                break;
             }
         }
-        if (foundHebrew)
+        if (foundRTL)
             break;
     }
 
@@ -363,7 +501,7 @@ static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
         loader.jumpToChapter(originalChapter);
     }
 
-    return foundHebrew;
+    return foundRTL;
 }
 
 static void enterDeepSleepWithTouchWake()
@@ -386,12 +524,12 @@ void GUI::init(bool isWakeFromSleep)
     // Initialize background rendering
     epubMutex = xSemaphoreCreateMutex();
     renderQueue = xQueueCreate(5, sizeof(RenderRequest));
-    
+
     // Use HAL for task core pinning
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
     xTaskCreatePinnedToCore([](void *arg)
-                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 
-                            CONFIG_EBOOK_RENDER_TASK_STACK_SIZE, this, 1, &renderTaskHandle, 
+                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask",
+                            CONFIG_EBOOK_RENDER_TASK_STACK_SIZE, this, 1, &renderTaskHandle,
                             deviceHAL.getRenderTaskCore());
 #else
     xTaskCreatePinnedToCore([](void *arg)
@@ -481,7 +619,7 @@ void GUI::init(bool isWakeFromSleep)
     prevCanvasValid = false;
 
     lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
-    
+
     // Disable WiFi power save to prevent packet loss during uploads
     esp_wifi_set_ps(WIFI_PS_NONE);
 
@@ -532,14 +670,18 @@ void GUI::init(bool isWakeFromSleep)
                     // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
                     isRTLDocument = isHebrew;
 
-                    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums)) {
+                    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
+                    {
                         bookMetricsComputed = true;
                         ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
-                    } else {
-                        if (metricsTaskHandle != nullptr) vTaskDelete(metricsTaskHandle);
+                    }
+                    else
+                    {
+                        if (metricsTaskHandle != nullptr)
+                            vTaskDelete(metricsTaskHandle);
                         metricsTaskTargetBookId = currentBook.id;
                         xTaskCreate([](void *arg)
-                                { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+                                    { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
                     }
                 }
                 xSemaphoreGive(epubMutex);
@@ -549,11 +691,12 @@ void GUI::init(bool isWakeFromSleep)
             {
                 pageHistory.clear();
                 needsRedraw = true; // Force redraw to clear sleep symbol
-                
+
                 // Spawn background indexer
-                if (backgroundIndexerTaskHandle == nullptr) {
-                     xTaskCreate([](void *arg)
-                        { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+                if (backgroundIndexerTaskHandle == nullptr)
+                {
+                    xTaskCreate([](void *arg)
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
                 }
                 return;
             }
@@ -563,9 +706,10 @@ void GUI::init(bool isWakeFromSleep)
     M5.Display.fillScreen(TFT_WHITE);
     needsRedraw = true;
 
-    if (backgroundIndexerTaskHandle == nullptr) {
-         xTaskCreate([](void *arg)
-            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+    if (backgroundIndexerTaskHandle == nullptr)
+    {
+        xTaskCreate([](void *arg)
+                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
     }
 }
 
@@ -626,12 +770,14 @@ void GUI::metricsTaskLoop()
 {
     ESP_LOGI(TAG, "MetricsTask started for book %d", metricsTaskTargetBookId);
     int targetId = metricsTaskTargetBookId;
-    
+
     // Initial check and setup
     int chapters = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         // Verify we are still on the same book
-        if (currentBook.id != targetId) {
+        if (currentBook.id != targetId)
+        {
             xSemaphoreGive(epubMutex);
             ESP_LOGW(TAG, "MetricsTask: Book changed at start, aborting");
             metricsTaskHandle = nullptr;
@@ -642,7 +788,8 @@ void GUI::metricsTaskLoop()
         xSemaphoreGive(epubMutex);
     }
 
-    if (chapters <= 0) {
+    if (chapters <= 0)
+    {
         ESP_LOGI(TAG, "MetricsTask: No chapters or empty book");
         metricsTaskHandle = nullptr;
         vTaskDelete(NULL);
@@ -656,7 +803,8 @@ void GUI::metricsTaskLoop()
     for (int i = 0; i < chapters; ++i)
     {
         // Check if book changed
-        if (currentBook.id != targetId) {
+        if (currentBook.id != targetId)
+        {
             ESP_LOGW(TAG, "MetricsTask: Book changed during scan, aborting");
             metricsTaskHandle = nullptr;
             vTaskDelete(NULL);
@@ -664,53 +812,61 @@ void GUI::metricsTaskLoop()
         }
 
         size_t len = 0;
-        if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+        {
             len = epubLoader.getChapterTextLength(i);
             xSemaphoreGive(epubMutex);
         }
-        
+
         cumulative += len;
         sums[i + 1] = cumulative;
-        
+
         // Yield to let other tasks run
         vTaskDelay(1);
     }
 
     // Update shared state
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
-        if (currentBook.id == targetId) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
+        if (currentBook.id == targetId)
+        {
             chapterPrefixSums = sums;
             totalBookChars = cumulative;
             bookMetricsComputed = cumulative > 0;
         }
         xSemaphoreGive(epubMutex);
     }
-    
+
     // Save to disk for future use
-    if (bookMetricsComputed && currentBook.id == targetId) {
+    if (bookMetricsComputed && currentBook.id == targetId)
+    {
         bookIndex.saveBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums);
     }
-    
+
     ESP_LOGI(TAG, "MetricsTask finished. Total chars: %zu", totalBookChars);
-    
+
     // Force redraw to show updated footer
     needsRedraw = true;
-    
+
     metricsTaskHandle = nullptr;
     vTaskDelete(NULL);
 }
 
-void GUI::backgroundIndexerTaskLoop() {
+void GUI::backgroundIndexerTaskLoop()
+{
     ESP_LOGI(TAG, "BgIndexer started");
     // Wait a bit for system to settle and user to potentially start reading
     vTaskDelay(pdMS_TO_TICKS(3000));
 
     auto books = bookIndex.getBooks();
-    for (const auto& book : books) {
-        if (!book.hasMetrics) {
+    for (const auto &book : books)
+    {
+        if (!book.hasMetrics)
+        {
             // Check if this book is currently being read (to avoid double calculation)
-            if (currentState == AppState::READER && currentBook.id == book.id) {
-                continue; 
+            if (currentState == AppState::READER && currentBook.id == book.id)
+            {
+                continue;
             }
 
             // Optimization: Check if metrics file already exists on disk (e.g. from previous firmware version or crash)
@@ -718,64 +874,72 @@ void GUI::backgroundIndexerTaskLoop() {
             // We do this check here in the background task, not on main thread.
             size_t dummyTotal;
             std::vector<size_t> dummyOffsets;
-            if (bookIndex.loadBookMetrics(book.id, dummyTotal, dummyOffsets)) {
-                 ESP_LOGI(TAG, "BgIndexer: Found existing metrics for book %d, updating index", book.id);
-                 // This will update the in-memory flag and save to index.txt
-                 bookIndex.saveBookMetrics(book.id, dummyTotal, dummyOffsets);
-                 continue;
+            if (bookIndex.loadBookMetrics(book.id, dummyTotal, dummyOffsets))
+            {
+                ESP_LOGI(TAG, "BgIndexer: Found existing metrics for book %d, updating index", book.id);
+                // This will update the in-memory flag and save to index.txt
+                bookIndex.saveBookMetrics(book.id, dummyTotal, dummyOffsets);
+                continue;
             }
 
             ESP_LOGI(TAG, "BgIndexer: Processing book %d (%s)", book.id, book.title.c_str());
-            
+
             EpubLoader localLoader;
             // Note: We don't take epubMutex here because we are using a separate loader instance
             // and separate file handle. SPIFFS is thread-safe.
-            
-            if (localLoader.load(book.path.c_str())) {
+
+            if (localLoader.load(book.path.c_str()))
+            {
                 int chapters = localLoader.getTotalChapters();
                 std::vector<size_t> sums;
                 sums.resize(chapters + 1, 0);
                 size_t cumulative = 0;
-                
-                for (int i = 0; i < chapters; ++i) {
+
+                for (int i = 0; i < chapters; ++i)
+                {
                     // Yield frequently to keep UI responsive
                     vTaskDelay(1);
 
                     // Check for web activity and pause if needed to avoid starving the upload handler
                     uint32_t lastHttp = WebServer::getLastActivityTime();
                     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-                    if (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000)) {
+                    if (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000))
+                    {
                         ESP_LOGI(TAG, "BgIndexer: Pausing for web activity...");
-                        while (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000)) {
+                        while (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000))
+                        {
                             vTaskDelay(pdMS_TO_TICKS(1000));
                             lastHttp = WebServer::getLastActivityTime();
                             now = (uint32_t)(esp_timer_get_time() / 1000);
                         }
                         ESP_LOGI(TAG, "BgIndexer: Resuming...");
                     }
-                    
+
                     // If user started reading this specific book, abort
-                    if (currentState == AppState::READER && currentBook.id == book.id) {
+                    if (currentState == AppState::READER && currentBook.id == book.id)
+                    {
                         ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it", book.id);
                         goto next_book;
                     }
 
                     size_t len = localLoader.getChapterTextLength(i);
                     cumulative += len;
-                    sums[i+1] = cumulative;
+                    sums[i + 1] = cumulative;
                 }
-                
+
                 bookIndex.saveBookMetrics(book.id, cumulative, sums);
                 localLoader.close();
-            } else {
+            }
+            else
+            {
                 ESP_LOGW(TAG, "BgIndexer: Failed to load book %d", book.id);
             }
-            
-            next_book:
+
+        next_book:
             vTaskDelay(pdMS_TO_TICKS(100)); // Rest between books
         }
     }
-    
+
     ESP_LOGI(TAG, "BgIndexer finished");
     backgroundIndexerTaskHandle = nullptr;
     vTaskDelete(NULL);
@@ -814,12 +978,13 @@ void GUI::update()
     handleTouch();
 
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    
+
     // Check web server activity - if there's been recent HTTP activity, don't sleep
     uint32_t lastHttpActivity = webServer.getLastActivityTime();
     bool recentHttpActivity = (lastHttpActivity > 0) && (now - lastHttpActivity < 30 * 1000); // 30 second grace period
 
-    if (recentHttpActivity) {
+    if (recentHttpActivity)
+    {
         lastActivityTime = now; // Reset idle timer if web is active
     }
 
@@ -936,49 +1101,75 @@ void GUI::drawStatusBar(LovyanGFX *target)
     int wifiX = batteryX - batteryTextWidth - 12;
     int wifiTextWidth = gfx->textWidth(buf);
     gfx->drawString(buf, wifiX, centerY);
-    
+
     // Book title (center, if in reader mode)
-    if (currentState == AppState::READER && !currentBook.title.empty()) {
+    if (currentState == AppState::READER && !currentBook.title.empty())
+    {
         gfx->setTextDatum(textdatum_t::middle_center);
         int availableWidth = wifiX - wifiTextWidth - timeWidth - 20;
         int bookTitleX = timeWidth + availableWidth / 2;
-        
+
         // Truncate title to fit
         std::string title = currentBook.title;
-        gfx->setTextSize(1.2f);  // Slightly smaller for title
-        
+        gfx->setTextSize(1.2f); // Slightly smaller for title
+
         bool isHeb = isHebrew(title);
+        bool isAra = isArabic(title);
         bool swapped = false;
-        if (isHeb) {
-            ensureHebrewFontLoaded();
-            if (!fontDataHebrew.empty()) {
-                gfx->loadFont(fontDataHebrew.data());
+        if (isHeb || isAra)
+        {
+            if (isHeb)
+                ensureHebrewFontLoaded();
+            else
+                ensureArabicFontLoaded();
+
+            const uint8_t *fontPtr = isHeb ? fontDataHebrew.data() : fontDataArabic.data();
+            if (fontPtr && !(isHeb ? fontDataHebrew.empty() : fontDataArabic.empty()))
+            {
+                gfx->loadFont(fontPtr);
                 swapped = true;
             }
-            title = processTextForDisplay(title);
         }
 
-        while (!title.empty() && gfx->textWidth(title.c_str()) > availableWidth - 10) {
+        bool truncated = false;
+        while (!title.empty() && gfx->textWidth(title.c_str()) > availableWidth - 10)
+        {
             size_t pos = title.length();
-            if (pos > 0) {
-                do {
+            if (pos > 0)
+            {
+                do
+                {
                     pos--;
                 } while (pos > 0 && (title[pos] & 0xC0) == 0x80);
                 title = title.substr(0, pos);
+                truncated = true;
             }
         }
-        
+        if (truncated && title.length() > 3)
+        {
+            title = title.substr(0, title.length() - 3) + "...";
+        }
+
+        if (isHeb || isAra)
+        {
+            title = processTextForDisplay(title);
+        }
+
         gfx->setTextColor(TFT_DARKGREY, TFT_WHITE);
         gfx->drawString(title.c_str(), bookTitleX, centerY);
-        
-        if (swapped) {
-            if (currentFont != "Default" && !fontData.empty()) {
+
+        if (swapped)
+        {
+            if (currentFont != "Default" && !fontData.empty())
+            {
                 gfx->loadFont(fontData.data());
-            } else {
+            }
+            else
+            {
                 gfx->unloadFont();
             }
         }
-        
+
         gfx->setTextSize(1.6f);
         gfx->setTextColor(TFT_BLACK, TFT_WHITE);
     }
@@ -1087,247 +1278,288 @@ void GUI::drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage)
     gfx->setTextColor(TFT_BLACK, TFT_WHITE);
 }
 
-void GUI::drawSearchBar(LovyanGFX* target)
+void GUI::drawSearchBar(LovyanGFX *target)
 {
     int screenW = target->width();
     int padding = 16;
     int starBtnSize = 44;
     int searchBtnW = 80;
-    int clearBtnSize = 28;  // Small clear button
+    int clearBtnSize = 28; // Small clear button
     int searchBoxX = padding;
     int searchBoxW = screenW - padding * 3 - starBtnSize - searchBtnW - 10;
     int searchBoxH = SEARCH_BAR_HEIGHT - 6;
     int searchBtnX = searchBoxX + searchBoxW + 8;
     int starBtnX = searchBtnX + searchBtnW + 8;
-    
+
     // Use system font for search bar (independent of reader font)
     target->setFont(&lgfx::v1::fonts::Font2);
-    
+
     // Draw search textbox
     target->drawRect(searchBoxX, SEARCH_BAR_Y, searchBoxW, searchBoxH, TFT_BLACK);
     target->fillRect(searchBoxX + 1, SEARCH_BAR_Y + 1, searchBoxW - 2, searchBoxH - 2, TFT_WHITE);
-    
+
     // Draw search text or placeholder - use fixed font size
     target->setTextSize(1.4f);
     target->setTextDatum(textdatum_t::middle_left);
     int textY = SEARCH_BAR_Y + searchBoxH / 2;
-    
+
     // Calculate clear button position (inside text box, right side)
     int clearBtnX = searchBoxX + searchBoxW - clearBtnSize - 4;
     int clearBtnY = SEARCH_BAR_Y + (searchBoxH - clearBtnSize) / 2;
     int maxTextW = searchBoxW - 20 - (searchQuery.empty() ? 0 : clearBtnSize + 4);
-    
-    if (searchQuery.empty() && !showKeyboard) {
+
+    if (searchQuery.empty() && !showKeyboard)
+    {
         target->setTextColor(TFT_DARKGREY, TFT_WHITE);
-        drawStringMixed("Search books...", searchBoxX + 10, textY, (M5Canvas*)target, 1.4f);
-    } else {
+        drawStringMixed("Search books...", searchBoxX + 10, textY, (M5Canvas *)target, 1.4f);
+    }
+    else
+    {
         target->setTextColor(TFT_BLACK, TFT_WHITE);
         // Truncate if too long
         std::string displayText = searchQuery;
-        
+
         bool isHeb = isHebrew(displayText);
         bool swapped = false;
-        if (isHeb) {
+        if (isHeb)
+        {
             ensureHebrewFontLoaded();
-            if (!fontDataHebrew.empty()) {
+            if (!fontDataHebrew.empty())
+            {
                 target->loadFont(fontDataHebrew.data());
                 swapped = true;
             }
             displayText = processTextForDisplay(displayText);
         }
 
-        while (!displayText.empty() && target->textWidth(displayText.c_str()) > maxTextW) {
+        while (!displayText.empty() && target->textWidth(displayText.c_str()) > maxTextW)
+        {
             size_t charLen = 1;
             unsigned char c = (unsigned char)displayText[0];
-            if ((c & 0x80) == 0) charLen = 1;
-            else if ((c & 0xE0) == 0xC0) charLen = 2;
-            else if ((c & 0xF0) == 0xE0) charLen = 3;
-            else charLen = 4;
+            if ((c & 0x80) == 0)
+                charLen = 1;
+            else if ((c & 0xE0) == 0xC0)
+                charLen = 2;
+            else if ((c & 0xF0) == 0xE0)
+                charLen = 3;
+            else
+                charLen = 4;
             displayText = displayText.substr(charLen);
         }
         target->drawString(displayText.c_str(), searchBoxX + 10, textY);
-        
+
         // Draw cursor if keyboard is showing
-        if (showKeyboard) {
+        if (showKeyboard)
+        {
             int cursorX = searchBoxX + 10 + target->textWidth(displayText.c_str());
             target->drawLine(cursorX, SEARCH_BAR_Y + 8, cursorX, SEARCH_BAR_Y + searchBoxH - 8, TFT_BLACK);
         }
 
-        if (swapped) {
+        if (swapped)
+        {
             target->unloadFont();
             target->setFont(&lgfx::v1::fonts::Font2);
             target->setTextSize(1.4f);
         }
     }
-        
-        // Draw clear (x) button if there's text
-        if (!searchQuery.empty()) {
-            target->fillRect(clearBtnX, clearBtnY, clearBtnSize, clearBtnSize, TFT_LIGHTGREY);
-            target->drawRect(clearBtnX, clearBtnY, clearBtnSize, clearBtnSize, TFT_DARKGREY);
-            target->setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-            target->setTextDatum(textdatum_t::middle_center);
-            target->setTextSize(1.2f);
-            target->drawString("x", clearBtnX + clearBtnSize / 2, clearBtnY + clearBtnSize / 2);
-            target->setTextSize(1.4f);
-        }
+
+    // Draw clear (x) button if there's text
+    if (!searchQuery.empty())
+    {
+        target->fillRect(clearBtnX, clearBtnY, clearBtnSize, clearBtnSize, TFT_LIGHTGREY);
+        target->drawRect(clearBtnX, clearBtnY, clearBtnSize, clearBtnSize, TFT_DARKGREY);
+        target->setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        target->setTextDatum(textdatum_t::middle_center);
+        target->setTextSize(1.2f);
+        target->drawString("x", clearBtnX + clearBtnSize / 2, clearBtnY + clearBtnSize / 2);
+        target->setTextSize(1.4f);
     }
-    
+
     // Draw Search button
     target->fillRect(searchBtnX, SEARCH_BAR_Y, searchBtnW, searchBoxH, TFT_LIGHTGREY);
     target->drawRect(searchBtnX, SEARCH_BAR_Y, searchBtnW, searchBoxH, TFT_BLACK);
     target->setTextColor(TFT_BLACK, TFT_LIGHTGREY);
     target->setTextDatum(textdatum_t::middle_center);
     target->drawString("Search", searchBtnX + searchBtnW / 2, textY);
-    
+
     // Draw star (favorites) toggle button
     uint16_t starFill = showFavoritesOnly ? TFT_YELLOW : TFT_WHITE;
     uint16_t starBorder = TFT_BLACK;
     target->fillRect(starBtnX, SEARCH_BAR_Y, starBtnSize, searchBoxH, starFill);
     target->drawRect(starBtnX, SEARCH_BAR_Y, starBtnSize, searchBoxH, starBorder);
-    
+
     // Draw star symbol (★)
     target->setTextColor(showFavoritesOnly ? TFT_BLACK : TFT_DARKGREY, starFill);
     target->setTextDatum(textdatum_t::middle_center);
     target->setTextSize(1.8f);
     target->drawString("*", starBtnX + starBtnSize / 2, textY);
-    
+
     target->setTextDatum(textdatum_t::top_left);
 }
 
-void GUI::drawKeyboard(LovyanGFX* target)
+void GUI::drawKeyboard(LovyanGFX *target)
 {
     int screenW = target->width();
     int screenH = target->height();
-    
+
     // Hebrew keyboard layout (standard Hebrew QWERTY mapping)
-    const char* hebrewRows[] = {
+    const char *hebrewRows[] = {
         "1234567890",
         // Hebrew letters mapped to QWERTY positions
-        "/'קראטוןםפ",  // QWERTYUIOP -> / ' ק ר א ט ו ן ם פ
+        "/'קראטוןםפ", // QWERTYUIOP -> / ' ק ר א ט ו ן ם פ
         "שדגכעיחלך",  // ASDFGHJKL -> ש ד ג כ ע י ח ל ך
         "זסבהנמצ",    // ZXCVBNM -> ז ס ב ה נ מ צ
     };
-    
+
     // English keyboard layout
-    const char* englishRows[] = {
+    const char *englishRows[] = {
         "1234567890",
         "QWERTYUIOP",
         "ASDFGHJKL",
         "ZXCVBNM",
     };
-    
-    const char** rows = keyboardHebrew ? hebrewRows : englishRows;
+
+    const char **rows = keyboardHebrew ? hebrewRows : englishRows;
     int numRows = 4;
-    
+
     // Reduced sizes to fit on screen
     int keyboardH = 200;
     int keyboardY = screenH - keyboardH;
     int keyW = screenW / 12;
     int keyH = 36;
     int padding = 3;
-    
+
     // Draw keyboard background
     target->fillRect(0, keyboardY, screenW, keyboardH, TFT_LIGHTGREY);
     target->drawLine(0, keyboardY, screenW, keyboardY, TFT_DARKGREY);
-    
+
     // Use system font for keyboard
     target->setFont(&lgfx::v1::fonts::Font2);
     target->setTextSize(1.3f);
     target->setTextDatum(textdatum_t::middle_center);
-    
+
     int y = keyboardY + 6;
-    for (int r = 0; r < numRows; r++) {
-        const char* row = rows[r];
-        
+    for (int r = 0; r < numRows; r++)
+    {
+        const char *row = rows[r];
+
         // Count UTF-8 characters properly for Hebrew
         int len = 0;
-        for (const char* p = row; *p; ) {
+        for (const char *p = row; *p;)
+        {
             unsigned char c = *p;
-            if ((c & 0x80) == 0) { p++; len++; }
-            else if ((c & 0xE0) == 0xC0) { p += 2; len++; }
-            else if ((c & 0xF0) == 0xE0) { p += 3; len++; }
-            else { p += 4; len++; }
+            if ((c & 0x80) == 0)
+            {
+                p++;
+                len++;
+            }
+            else if ((c & 0xE0) == 0xC0)
+            {
+                p += 2;
+                len++;
+            }
+            else if ((c & 0xF0) == 0xE0)
+            {
+                p += 3;
+                len++;
+            }
+            else
+            {
+                p += 4;
+                len++;
+            }
         }
-        
+
         int rowW = len * keyW + (len - 1) * padding;
         int startX = (screenW - rowW) / 2;
-        
+
         // Iterate UTF-8 characters
-        const char* p = row;
+        const char *p = row;
         int c = 0;
-        while (*p) {
+        while (*p)
+        {
             unsigned char ch = *p;
             int charLen = 1;
-            if ((ch & 0x80) == 0) charLen = 1;
-            else if ((ch & 0xE0) == 0xC0) charLen = 2;
-            else if ((ch & 0xF0) == 0xE0) charLen = 3;
-            else charLen = 4;
-            
+            if ((ch & 0x80) == 0)
+                charLen = 1;
+            else if ((ch & 0xE0) == 0xC0)
+                charLen = 2;
+            else if ((ch & 0xF0) == 0xE0)
+                charLen = 3;
+            else
+                charLen = 4;
+
             int x = startX + c * (keyW + padding);
             target->fillRect(x, y, keyW, keyH, TFT_WHITE);
             target->drawRect(x, y, keyW, keyH, TFT_BLACK);
-            
+
             char chStr[5] = {0};
             strncpy(chStr, p, charLen);
             target->setTextColor(TFT_BLACK, TFT_WHITE);
-            
-            if (isHebrew(chStr)) {
+
+            if (isHebrew(chStr))
+            {
                 ensureHebrewFontLoaded();
-                if (!fontDataHebrew.empty()) {
+                if (!fontDataHebrew.empty())
+                {
                     target->loadFont(fontDataHebrew.data());
-                    target->setTextSize(1.3f);
+                    target->setTextSize(1.1f); // Slightly smaller for Hebrew keys
                     target->drawString(chStr, x + keyW / 2, y + keyH / 2);
                     target->unloadFont();
                     target->setFont(&lgfx::v1::fonts::Font2);
                     target->setTextSize(1.3f);
-                } else {
+                }
+                else
+                {
                     target->drawString(chStr, x + keyW / 2, y + keyH / 2);
                 }
-            } else {
+            }
+            else
+            {
                 target->drawString(chStr, x + keyW / 2, y + keyH / 2);
             }
-            
+
             p += charLen;
             c++;
         }
         y += keyH + padding;
     }
-    
+
     // Bottom row: Lang, Backspace, Space, Done
     y = keyboardY + 6 + 4 * (keyH + padding);
     int langW = 55;
     int bsW = 55;
     int doneW = 60;
     int spaceW = screenW - langW - bsW - doneW - padding * 5;
-    
+
     // Language toggle (Hebrew/English)
     int langX = padding;
     uint16_t langFill = keyboardHebrew ? TFT_YELLOW : TFT_WHITE;
     target->fillRect(langX, y, langW, keyH, langFill);
     target->drawRect(langX, y, langW, keyH, TFT_BLACK);
     target->setTextColor(TFT_BLACK, langFill);
-    drawStringMixed(keyboardHebrew ? "EN" : "עב", langX + langW / 2, y + keyH / 2, (M5Canvas*)target, 1.3f);
-    
+    drawStringMixed(keyboardHebrew ? "EN" : "עב", langX + langW / 2, y + keyH / 2, (M5Canvas *)target, keyboardHebrew ? 1.3f : 1.1f);
+
     // Backspace
     int bsX = langX + langW + padding;
     target->fillRect(bsX, y, bsW, keyH, TFT_WHITE);
     target->drawRect(bsX, y, bsW, keyH, TFT_BLACK);
     target->setTextColor(TFT_BLACK, TFT_WHITE);
     target->drawString("<-", bsX + bsW / 2, y + keyH / 2);
-    
+
     // Space
     int spaceX = bsX + bsW + padding;
     target->fillRect(spaceX, y, spaceW, keyH, TFT_WHITE);
     target->drawRect(spaceX, y, spaceW, keyH, TFT_BLACK);
     target->drawString("Space", spaceX + spaceW / 2, y + keyH / 2);
-    
+
     // Done
     int doneX = spaceX + spaceW + padding;
     target->fillRect(doneX, y, doneW, keyH, TFT_DARKGREY);
     target->drawRect(doneX, y, doneW, keyH, TFT_BLACK);
     target->setTextColor(TFT_WHITE, TFT_DARKGREY);
     target->drawString("Done", doneX + doneW / 2, y + keyH / 2);
-    
+
     target->setTextDatum(textdatum_t::top_left);
 }
 
@@ -1335,19 +1567,19 @@ void GUI::drawLibrary()
 {
     abortRender = true; // Stop any background rendering
     // Use canvasNext as a buffer if available to speed up drawing
-    M5Canvas* sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
-    LovyanGFX* target = sprite ? (LovyanGFX*)sprite : (LovyanGFX*)&M5.Display;
+    M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
+    LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
 
     target->fillScreen(TFT_WHITE);
     drawStatusBar(target);
-    
+
     // Draw search bar
     drawSearchBar(target);
 
     // Use system font for library (consistent size, independent of reader settings)
     target->setFont(&lgfx::v1::fonts::Font2);
     target->setTextColor(TFT_BLACK);
-    const float itemSize = 1.6f;
+    const float itemSize = 1.8f;
     target->setTextSize(itemSize);
 
     // Get filtered books based on search and favorites
@@ -1377,10 +1609,15 @@ void GUI::drawLibrary()
     for (int i = startIdx; i < endIdx; ++i)
     {
         const auto &book = books[i];
-        // Truncate display title if too long
+        // Truncate display title if too long (UTF-8 aware)
         std::string displayTitle = book.title;
         if (displayTitle.length() > 45)
-            displayTitle = displayTitle.substr(0, 42) + "...";
+        {
+            size_t pos = 42;
+            while (pos > 0 && (displayTitle[pos] & 0xC0) == 0x80)
+                pos--;
+            displayTitle = displayTitle.substr(0, pos) + "...";
+        }
 
         // Draw bullet
         target->setCursor(20, y);
@@ -1427,14 +1664,18 @@ void GUI::drawLibrary()
     if (books.empty())
     {
         target->setCursor(20, LIBRARY_LIST_START_Y);
-        if (!searchQuery.empty() || showFavoritesOnly) {
+        if (!searchQuery.empty() || showFavoritesOnly)
+        {
             // Show "no results" message when filtering
             target->println("No matching books found.");
-            if (showFavoritesOnly) {
+            if (showFavoritesOnly)
+            {
                 target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
                 target->println("No favorites yet.");
             }
-        } else {
+        }
+        else
+        {
             target->println("No books found.");
             target->setCursor(20, LIBRARY_LIST_START_Y + LIBRARY_LINE_HEIGHT);
             target->println("Upload via WiFi:");
@@ -1449,7 +1690,7 @@ void GUI::drawLibrary()
             }
         }
     }
-    
+
     // Draw keyboard overlay if visible
     if (showKeyboard)
     {
@@ -2029,7 +2270,20 @@ void GUI::goToSleep()
 
     // Light sleep with touch wakeup handled by M5.Power. Also arm a timer so we can fall through to deep sleep.
     drawSleepSymbol("z");
+
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    // M5PaperS3 specific: 5 minutes light sleep with GPIO 48 wake-up
+    // Touch interrupt is connected to GPIO48 which is NOT an RTC GPIO,
+    // therefore touch wakeup only works with light sleep.
+    uint64_t s3_light_sleep_us = 5ULL * 60ULL * 1000000ULL;
+    esp_sleep_enable_timer_wakeup(s3_light_sleep_us);
+    gpio_wakeup_enable((gpio_num_t)48, GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+    esp_light_sleep_start();
+    gpio_wakeup_disable((gpio_num_t)48);
+#else
     M5.Power.lightSleep(LIGHT_SLEEP_TO_DEEP_SLEEP_US, true);
+#endif
 
     // Restore display state after wake from light sleep
     // drawSleepSymbol changed font, size, and datum. We must restore them.
@@ -2230,13 +2484,13 @@ void GUI::drawSettings()
     // --- Favorite Row ---
     int row5CenterY = layout.row5Y + layout.rowHeight / 2;
     target->drawString("Favorite", layout.padding, row5CenterY + yOffset);
-    
+
     // Favorite toggle button with star
     int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
     bool isFav = bookIndex.isFavorite(currentBook.id);
     uint16_t favFill = isFav ? TFT_YELLOW : TFT_WHITE;
     uint16_t favText = TFT_BLACK;
-    const char* favLabel = isFav ? "* Remove" : "* Add";
+    const char *favLabel = isFav ? "* Remove" : "* Add";
     drawButton(layout.toggleButtonX, favButtonY, layout.toggleButtonW, layout.fontButtonH,
                favLabel, favFill, favText);
 
@@ -2437,10 +2691,12 @@ void GUI::handleTouch()
 
     // Check orientation periodically for auto-rotate (M5PaperS3)
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-    if (deviceHAL.isAutoRotateEnabled() && 
-        (now - lastOrientationCheck > ORIENTATION_CHECK_INTERVAL_MS)) {
+    if (deviceHAL.isAutoRotateEnabled() &&
+        (now - lastOrientationCheck > ORIENTATION_CHECK_INTERVAL_MS))
+    {
         lastOrientationCheck = now;
-        if (deviceHAL.updateOrientation()) {
+        if (deviceHAL.updateOrientation())
+        {
             // Rotation changed - need to redraw
             needsRedraw = true;
             // Invalidate pre-rendered canvases
@@ -2578,6 +2834,8 @@ void GUI::handleTouch()
                     if (currentFont == "Default")
                         setFont("Hebrew");
                     else if (currentFont == "Hebrew")
+                        setFont("Arabic");
+                    else if (currentFont == "Arabic")
                         setFont("Roboto");
                     else
                         setFont("Default");
@@ -2607,7 +2865,8 @@ void GUI::handleTouch()
                     needsRedraw = true;
                 }
                 // Favorite Toggle
-                else {
+                else
+                {
                     int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
                     if (t.y >= favButtonY && t.y <= favButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
                     {
@@ -2754,20 +3013,24 @@ bool GUI::openBookById(int id)
         }
     }
     isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
-    
-    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums)) {
+
+    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
+    {
         bookMetricsComputed = true;
         ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
-    } else {
+    }
+    else
+    {
         // Kill any existing metrics task (e.g. from previous book)
-        if (metricsTaskHandle != nullptr) {
+        if (metricsTaskHandle != nullptr)
+        {
             vTaskDelete(metricsTaskHandle);
             metricsTaskHandle = nullptr;
         }
         // Spawn new task
         metricsTaskTargetBookId = currentBook.id;
         xTaskCreate([](void *arg)
-                { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+                    { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
     }
 
     // Release mutex
@@ -2801,9 +3064,10 @@ void GUI::refreshLibrary()
     }
 
     // Trigger background indexer if not running to process any new books
-    if (backgroundIndexerTaskHandle == nullptr) {
-         xTaskCreate([](void *arg)
-            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+    if (backgroundIndexerTaskHandle == nullptr)
+    {
+        xTaskCreate([](void *arg)
+                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
     }
 }
 
@@ -2818,13 +3082,13 @@ void GUI::saveSettings()
         nvs_set_i32(my_handle, "wifi_enabled", wifiEnabled ? 1 : 0);
         int32_t spacingInt = (int32_t)(lineSpacing * 10);
         nvs_set_i32(my_handle, "line_spacing", spacingInt);
-        
+
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         // Save M5PaperS3-specific settings
         nvs_set_i32(my_handle, "buzzer_en", buzzerEnabled ? 1 : 0);
         nvs_set_i32(my_handle, "auto_rotate", autoRotateEnabled ? 1 : 0);
 #endif
-        
+
         nvs_commit(my_handle);
         nvs_close(my_handle);
     }
@@ -2874,7 +3138,8 @@ bool GUI::isAutoRotateEnabled() const
 void GUI::checkOrientation()
 {
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-    if (deviceHAL.updateOrientation()) {
+    if (deviceHAL.updateOrientation())
+    {
         // Rotation changed
         needsRedraw = true;
         nextCanvasValid = false;
@@ -2975,6 +3240,7 @@ void GUI::loadFonts()
     // Clear buffers to ensure we don't hold two fonts at once if possible
     fontData.clear();
     fontDataHebrew.clear();
+    fontDataArabic.clear();
     M5.Display.unloadFont();
 
     if (currentFont == "Default")
@@ -2988,6 +3254,16 @@ void GUI::loadFonts()
         if (!fontDataHebrew.empty())
         {
             M5.Display.loadFont(fontDataHebrew.data());
+        }
+        return;
+    }
+
+    if (currentFont == "Arabic")
+    {
+        ensureArabicFontLoaded();
+        if (!fontDataArabic.empty())
+        {
+            M5.Display.loadFont(fontDataArabic.data());
         }
         return;
     }
@@ -3077,21 +3353,74 @@ void GUI::ensureHebrewFontLoaded()
     }
 }
 
+void GUI::ensureArabicFontLoaded()
+{
+    if (!fontDataArabic.empty())
+    {
+        return;
+    }
+
+    // Clear other fonts to save memory
+    if (!fontData.empty())
+    {
+        fontData.clear();
+        M5.Display.unloadFont();
+    }
+
+    const char *path = "/spiffs/fonts/Arabic-Merged.vlw";
+    ESP_LOGI(TAG, "Attempting to load Arabic font from: %s", path);
+    FILE *f = fopen(path, "rb");
+    if (f)
+    {
+        fseek(f, 0, SEEK_END);
+        size_t size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        try
+        {
+            fontDataArabic.resize(size);
+        }
+        catch (const std::bad_alloc &e)
+        {
+            ESP_LOGE(TAG, "Failed to allocate memory for Arabic font (%u bytes)", (unsigned int)size);
+            fclose(f);
+            return;
+        }
+
+        size_t read = fread(fontDataArabic.data(), 1, size, f);
+        fclose(f);
+        ESP_LOGI(TAG, "Arabic font loaded: %u bytes read", (unsigned int)read);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Failed to open Arabic font file: %s (errno=%d)", path, errno);
+    }
+}
+
 void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size, bool isProcessed)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
     float effectiveSize = (size > 0.0f) ? size : fontSize;
 
-    if (isHebrew(text))
+    bool isHeb = isHebrew(text);
+    bool isAra = isArabic(text);
+
+    if (isHeb || isAra)
     {
-        ensureHebrewFontLoaded();
-        if (!fontDataHebrew.empty())
+        if (isHeb) ensureHebrewFontLoaded();
+        else ensureArabicFontLoaded();
+
+        const uint8_t* fontPtr = isHeb ? fontDataHebrew.data() : fontDataArabic.data();
+        bool fontEmpty = isHeb ? fontDataHebrew.empty() : fontDataArabic.empty();
+        const char* fontName = isHeb ? "Hebrew" : "Arabic";
+
+        if (!fontEmpty)
         {
             bool swapped = false;
-            // Only swap if not already using Hebrew font
-            if (currentFont != "Hebrew")
+            // Only swap if not already using the correct font
+            if (currentFont != fontName)
             {
-                gfx->loadFont(fontDataHebrew.data());
+                gfx->loadFont(fontPtr);
                 swapped = true;
             }
 
@@ -3126,7 +3455,8 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
         // Non-Hebrew text - use current font
         // ESP_LOGI(TAG, "Drawing non-Hebrew text: %s, font size: %.2f", text.c_str(), effectiveSize);
         std::string processedText = text;
-        if (!isProcessed) {
+        if (!isProcessed)
+        {
             // Replace HTML entities
             size_t pos = 0;
             while ((pos = processedText.find("&quot;", pos)) != std::string::npos)
@@ -3348,12 +3678,13 @@ void GUI::drawWifiScan()
 void GUI::onWifiScanClick(int x, int y)
 {
     // Check status bar tap - go back to library
-    if (y < STATUS_BAR_HEIGHT) {
+    if (y < STATUS_BAR_HEIGHT)
+    {
         currentState = AppState::LIBRARY;
         needsRedraw = true;
         return;
     }
-    
+
     // Check Cancel button
     int footerY = M5.Display.height() - 60;
     if (y >= footerY && y <= footerY + 40 && x >= 20 && x <= 170)
@@ -3452,126 +3783,164 @@ void GUI::onKeyboardClick(int x, int y)
 {
     int screenW = M5.Display.width();
     int screenH = M5.Display.height();
-    
+
     // Match keyboard dimensions from drawKeyboard
     int keyboardH = 200;
     int keyboardY = screenH - keyboardH;
     int keyW = screenW / 12;
     int keyH = 36;
     int padding = 3;
-    
+
     // Check if click is above keyboard - dismiss keyboard
-    if (y < keyboardY) {
+    if (y < keyboardY)
+    {
         showKeyboard = false;
         needsRedraw = true;
         return;
     }
-    
+
     // Hebrew keyboard layout
-    const char* hebrewRows[] = {
+    const char *hebrewRows[] = {
         "1234567890",
         "/'קראטוןםפ",
         "שדגכעיחלך",
         "זסבהנמצ",
     };
-    
+
     // English keyboard layout
-    const char* englishRows[] = {
+    const char *englishRows[] = {
         "1234567890",
         "QWERTYUIOP",
         "ASDFGHJKL",
         "ZXCVBNM",
     };
-    
-    const char** rows = keyboardHebrew ? hebrewRows : englishRows;
+
+    const char **rows = keyboardHebrew ? hebrewRows : englishRows;
     int numRows = 4;
-    
+
     int rowY = keyboardY + 6;
-    for (int r = 0; r < numRows; r++) {
-        if (y >= rowY && y < rowY + keyH) {
-            const char* row = rows[r];
-            
+    for (int r = 0; r < numRows; r++)
+    {
+        if (y >= rowY && y < rowY + keyH)
+        {
+            const char *row = rows[r];
+
             // Count UTF-8 characters
             int len = 0;
-            for (const char* p = row; *p; ) {
+            for (const char *p = row; *p;)
+            {
                 unsigned char c = *p;
-                if ((c & 0x80) == 0) { p++; len++; }
-                else if ((c & 0xE0) == 0xC0) { p += 2; len++; }
-                else if ((c & 0xF0) == 0xE0) { p += 3; len++; }
-                else { p += 4; len++; }
+                if ((c & 0x80) == 0)
+                {
+                    p++;
+                    len++;
+                }
+                else if ((c & 0xE0) == 0xC0)
+                {
+                    p += 2;
+                    len++;
+                }
+                else if ((c & 0xF0) == 0xE0)
+                {
+                    p += 3;
+                    len++;
+                }
+                else
+                {
+                    p += 4;
+                    len++;
+                }
             }
-            
+
             int rowW = len * keyW + (len - 1) * padding;
             int startX = (screenW - rowW) / 2;
-            
+
             // Find which key was pressed
-            const char* p = row;
+            const char *p = row;
             int c = 0;
-            while (*p) {
+            while (*p)
+            {
                 unsigned char ch = *p;
                 int charLen = 1;
-                if ((ch & 0x80) == 0) charLen = 1;
-                else if ((ch & 0xE0) == 0xC0) charLen = 2;
-                else if ((ch & 0xF0) == 0xE0) charLen = 3;
-                else charLen = 4;
-                
+                if ((ch & 0x80) == 0)
+                    charLen = 1;
+                else if ((ch & 0xE0) == 0xC0)
+                    charLen = 2;
+                else if ((ch & 0xF0) == 0xE0)
+                    charLen = 3;
+                else
+                    charLen = 4;
+
                 int kx = startX + c * (keyW + padding);
-                if (x >= kx && x < kx + keyW) {
+                if (x >= kx && x < kx + keyW)
+                {
                     // Key pressed - add character to search
                     char chStr[5] = {0};
                     strncpy(chStr, p, charLen);
-                    
+
                     // Convert English uppercase to lowercase
-                    if (charLen == 1 && chStr[0] >= 'A' && chStr[0] <= 'Z') {
+                    if (charLen == 1 && chStr[0] >= 'A' && chStr[0] <= 'Z')
+                    {
                         chStr[0] = chStr[0] + 32;
                     }
-                    
+
                     searchQuery += chStr;
                     needsRedraw = true;
                     return;
                 }
-                
+
                 p += charLen;
                 c++;
             }
         }
         rowY += keyH + padding;
     }
-    
+
     // Bottom row: Lang, Backspace, Space, Done
     rowY = keyboardY + 6 + 4 * (keyH + padding);
-    if (y >= rowY && y < rowY + keyH) {
+    if (y >= rowY && y < rowY + keyH)
+    {
         int langW = 55;
         int bsW = 55;
         int doneW = 60;
         int spaceW = screenW - langW - bsW - doneW - padding * 5;
-        
+
         int langX = padding;
         int bsX = langX + langW + padding;
         int spaceX = bsX + bsW + padding;
         int doneX = spaceX + spaceW + padding;
-        
-        if (x >= langX && x < langX + langW) {
+
+        if (x >= langX && x < langX + langW)
+        {
             // Language toggle
             keyboardHebrew = !keyboardHebrew;
             needsRedraw = true;
-        } else if (x >= bsX && x < bsX + bsW) {
+        }
+        else if (x >= bsX && x < bsX + bsW)
+        {
             // Backspace - handle UTF-8 properly
-            if (!searchQuery.empty()) {
+            if (!searchQuery.empty())
+            {
                 // Find start of last UTF-8 character
                 size_t pos = searchQuery.length();
-                while (pos > 0 && (searchQuery[pos-1] & 0xC0) == 0x80) {
+                while (pos > 0 && (searchQuery[pos - 1] & 0xC0) == 0x80)
+                {
                     pos--;
                 }
-                if (pos > 0) pos--;
+                if (pos > 0)
+                    pos--;
                 searchQuery = searchQuery.substr(0, pos);
                 needsRedraw = true;
             }
-        } else if (x >= spaceX && x < spaceX + spaceW) {
+        }
+        else if (x >= spaceX && x < spaceX + spaceW)
+        {
             // Space
             searchQuery += ' ';
             needsRedraw = true;
-        } else if (x >= doneX && x < doneX + doneW) {
+        }
+        else if (x >= doneX && x < doneX + doneW)
+        {
             // Done - close keyboard
             showKeyboard = false;
             libraryPage = 0;
@@ -3584,31 +3953,37 @@ void GUI::onLibraryClick(int x, int y)
 {
     int screenW = M5.Display.width();
     int screenH = M5.Display.height();
-    
+
     // If keyboard is showing, handle keyboard clicks
-    if (showKeyboard) {
+    if (showKeyboard)
+    {
         onKeyboardClick(x, y);
         return;
     }
-    
+
     // Check for status bar tap - reset search and show all books
-    if (y < STATUS_BAR_HEIGHT) {
-        if (!searchQuery.empty() || showFavoritesOnly) {
+    if (y < STATUS_BAR_HEIGHT)
+    {
+        if (!searchQuery.empty() || showFavoritesOnly)
+        {
             searchQuery.clear();
             showFavoritesOnly = false;
             libraryPage = 0;
             needsRedraw = true;
-        } else {
+        }
+        else
+        {
             currentState = AppState::WIFI_SCAN;
             wifiList.clear();
             needsRedraw = true;
         }
         return;
     }
-    
+
     // Check search bar area
     int searchBoxH = SEARCH_BAR_HEIGHT - 6;
-    if (y >= SEARCH_BAR_Y && y < SEARCH_BAR_Y + searchBoxH) {
+    if (y >= SEARCH_BAR_Y && y < SEARCH_BAR_Y + searchBoxH)
+    {
         int padding = 16;
         int starBtnSize = 44;
         int searchBtnW = 80;
@@ -3617,13 +3992,15 @@ void GUI::onLibraryClick(int x, int y)
         int searchBoxW = screenW - padding * 3 - starBtnSize - searchBtnW - 10;
         int searchBtnX = searchBoxX + searchBoxW + 8;
         int starBtnX = searchBtnX + searchBtnW + 8;
-        
+
         // Check clear button first (if there's text)
-        if (!searchQuery.empty()) {
+        if (!searchQuery.empty())
+        {
             int clearBtnX = searchBoxX + searchBoxW - clearBtnSize - 4;
             int clearBtnY = SEARCH_BAR_Y + (searchBoxH - clearBtnSize) / 2;
             if (x >= clearBtnX && x < clearBtnX + clearBtnSize &&
-                y >= clearBtnY && y < clearBtnY + clearBtnSize) {
+                y >= clearBtnY && y < clearBtnY + clearBtnSize)
+            {
                 // Clear button pressed
                 searchQuery.clear();
                 libraryPage = 0;
@@ -3631,23 +4008,26 @@ void GUI::onLibraryClick(int x, int y)
                 return;
             }
         }
-        
-        if (x >= searchBoxX && x < searchBoxX + searchBoxW) {
+
+        if (x >= searchBoxX && x < searchBoxX + searchBoxW)
+        {
             // Search textbox tapped - show keyboard
             showKeyboard = true;
             needsRedraw = true;
             return;
         }
-        
-        if (x >= searchBtnX && x < searchBtnX + searchBtnW) {
+
+        if (x >= searchBtnX && x < searchBtnX + searchBtnW)
+        {
             // Search button tapped - perform search (already filtering, just hide keyboard)
             showKeyboard = false;
             libraryPage = 0;
             needsRedraw = true;
             return;
         }
-        
-        if (x >= starBtnX && x < starBtnX + starBtnSize) {
+
+        if (x >= starBtnX && x < starBtnX + starBtnSize)
+        {
             // Star (favorites) toggle button
             showFavoritesOnly = !showFavoritesOnly;
             libraryPage = 0;
@@ -3655,36 +4035,42 @@ void GUI::onLibraryClick(int x, int y)
             return;
         }
     }
-    
+
     // Get filtered books for position calculation
     auto books = bookIndex.getFilteredBooks(searchQuery, showFavoritesOnly);
     int availableHeight = screenH - LIBRARY_LIST_START_Y - 60;
     int itemsPerPage = availableHeight / LIBRARY_LINE_HEIGHT;
-    if (itemsPerPage < 1) itemsPerPage = 1;
-    
+    if (itemsPerPage < 1)
+        itemsPerPage = 1;
+
     int totalPages = (books.size() + itemsPerPage - 1) / itemsPerPage;
-    
+
     // Check paging buttons
-    if (totalPages > 1 && y > screenH - 60) {
-        if (x < 150 && libraryPage > 0) {
+    if (totalPages > 1 && y > screenH - 60)
+    {
+        if (x < 150 && libraryPage > 0)
+        {
             libraryPage--;
             needsRedraw = true;
             return;
         }
-        if (x > screenW - 150 && libraryPage < totalPages - 1) {
+        if (x > screenW - 150 && libraryPage < totalPages - 1)
+        {
             libraryPage++;
             needsRedraw = true;
             return;
         }
     }
-    
+
     // Check book list items
     int startIdx = libraryPage * itemsPerPage;
     int endIdx = std::min((int)books.size(), startIdx + itemsPerPage);
-    
+
     int bookY = LIBRARY_LIST_START_Y;
-    for (int i = startIdx; i < endIdx; ++i) {
-        if (y >= bookY && y < bookY + LIBRARY_LINE_HEIGHT) {
+    for (int i = startIdx; i < endIdx; ++i)
+    {
+        if (y >= bookY && y < bookY + LIBRARY_LINE_HEIGHT)
+        {
             ESP_LOGI(TAG, "Touched book at index %d, ID %d", i, books[i].id);
             openBookById(books[i].id);
             return;
