@@ -315,9 +315,16 @@ bool DeviceHAL::mountSDCard() {
 
     ESP_LOGI(TAG, "Mounting SD card...");
 
+    // Ensure pins are pulled up
+    gpio_set_pull_mode(M5PAPERS3_SD_MISO_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_MOSI_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_CLK_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_CS_PIN, GPIO_PULLUP_ONLY);
+
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
     host.max_freq_khz = 25000; // 25 MHz as requested
+    host.command_timeout_ms = 5000; // Increase timeout for stability
 
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
@@ -434,9 +441,17 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     if (progressCallback) progressCallback(10);
 
     // Mount with format_if_mount_failed = true to trigger format
+    
+    // Ensure pins are pulled up
+    gpio_set_pull_mode(M5PAPERS3_SD_MISO_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_MOSI_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_CLK_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_CS_PIN, GPIO_PULLUP_ONLY);
+
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
     host.max_freq_khz = 25000;
+    host.command_timeout_ms = 5000;
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = M5PAPERS3_SD_CS_PIN;
@@ -456,6 +471,13 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     sdmmc_card_t* tempCard = nullptr;
 
     // Re-initialize SPI bus (it might already be initialized)
+    
+    // Ensure pins are pulled up
+    gpio_set_pull_mode(M5PAPERS3_SD_MISO_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_MOSI_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_CLK_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(M5PAPERS3_SD_CS_PIN, GPIO_PULLUP_ONLY);
+
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
         .miso_io_num = M5PAPERS3_SD_MISO_PIN,
