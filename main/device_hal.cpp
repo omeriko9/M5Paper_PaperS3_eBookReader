@@ -251,14 +251,15 @@ bool DeviceHAL::updateOrientation() {
     // Determine orientation based on accelerometer
     int newRotation = m_currentRotation;
     
+    // Swapped logic as per user request (Landscape <-> Portrait)
     if (ay > TILT_THRESHOLD) {
-        newRotation = 0; // Portrait (normal)
-    } else if (ay < -TILT_THRESHOLD) {
-        newRotation = 2; // Portrait (upside down)
-    } else if (ax > TILT_THRESHOLD) {
         newRotation = 1; // Landscape (left)
-    } else if (ax < -TILT_THRESHOLD) {
+    } else if (ay < -TILT_THRESHOLD) {
         newRotation = 3; // Landscape (right)
+    } else if (ax > TILT_THRESHOLD) {
+        newRotation = 0; // Portrait (normal)
+    } else if (ax < -TILT_THRESHOLD) {
+        newRotation = 2; // Portrait (upside down)
     }
 
     // Debounce rotation changes
@@ -316,7 +317,7 @@ bool DeviceHAL::mountSDCard() {
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
-    host.max_freq_khz = 20000; // 20 MHz for stability
+    host.max_freq_khz = 25000; // 25 MHz as requested
 
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
@@ -435,7 +436,7 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     // Mount with format_if_mount_failed = true to trigger format
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
-    host.max_freq_khz = 20000;
+    host.max_freq_khz = 25000;
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = M5PAPERS3_SD_CS_PIN;

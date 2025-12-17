@@ -151,7 +151,13 @@ std::vector<std::string> WifiManager::scanNetworks() {
 
     wifi_scan_config_t scan_config = {0};
     scan_config.show_hidden = true;
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    scan_config.scan_time.active.min = 120;
+    scan_config.scan_time.active.max = 300;
     
+    // Ensure power save is off for scanning
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     // Blocking scan
     esp_err_t err = esp_wifi_scan_start(&scan_config, true);
     std::vector<std::string> ssids;
