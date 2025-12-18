@@ -132,7 +132,7 @@ public:
      */
     void getAcceleration(float& x, float& y, float& z);
 
-    // ==================== SD Card (M5PaperS3 only) ====================
+    // ==================== SD Card ====================
 
     /**
      * @brief Check if SD card slot is available

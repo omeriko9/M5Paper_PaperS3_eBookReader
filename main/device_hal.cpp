@@ -8,6 +8,9 @@
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
 #include "driver/ledc.h"
+#endif
+
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
@@ -39,7 +42,9 @@ static constexpr gpio_num_t M5PAPERS3_SD_CLK_PIN = GPIO_NUM_39;
 static constexpr ledc_timer_t BUZZER_TIMER = LEDC_TIMER_0;
 static constexpr ledc_channel_t BUZZER_CHANNEL = LEDC_CHANNEL_0;
 static constexpr ledc_mode_t BUZZER_MODE = LEDC_LOW_SPEED_MODE;
+#endif
 
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
 static sdmmc_card_t* s_card = nullptr;
 #endif
 
@@ -295,7 +300,7 @@ void DeviceHAL::getAcceleration(float& x, float& y, float& z) {
 // ==================== SD Card ====================
 
 bool DeviceHAL::hasSDCardSlot() const {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     return true;
 #else
     return false;
@@ -307,43 +312,58 @@ bool DeviceHAL::isSDCardMounted() const {
 }
 
 bool DeviceHAL::mountSDCard() {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     if (m_sdCardMounted) {
         ESP_LOGI(TAG, "SD card already mounted");
         return true;
     }
 
-    ESP_LOGI(TAG, "Mounting SD card on pins CS=%d, CLK=%d, MOSI=%d, MISO=%d",
-             M5PAPERS3_SD_CS_PIN, M5PAPERS3_SD_CLK_PIN, 
-             M5PAPERS3_SD_MOSI_PIN, M5PAPERS3_SD_MISO_PIN);
-
-    // Use SPI3_HOST to avoid conflict with M5Unified/M5GFX which may use SPI2
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
-    host.max_freq_khz = 20000;  // 20MHz - stable speed
+    spi_bus_config_t bus_cfg = {};
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    int mosi, miso, clk, cs;
+    spi_host_device_t host_id;
 
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
-        .miso_io_num = M5PAPERS3_SD_MISO_PIN,
-        .sclk_io_num = M5PAPERS3_SD_CLK_PIN,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4096,
-        .flags = SPICOMMON_BUSFLAG_MASTER,
-        .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
-        .intr_flags = 0
-    };
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    mosi = M5PAPERS3_SD_MOSI_PIN;
+    miso = M5PAPERS3_SD_MISO_PIN;
+    clk = M5PAPERS3_SD_CLK_PIN;
+    cs = M5PAPERS3_SD_CS_PIN;
+    host_id = SPI3_HOST;
+    host.max_freq_khz = 20000;
+#else
+    mosi = M5PAPER_SD_MOSI_PIN;
+    miso = M5PAPER_SD_MISO_PIN;
+    clk = M5PAPER_SD_CLK_PIN;
+    cs = M5PAPER_SD_CS_PIN;
+    host_id = SPI2_HOST;
+    host.max_freq_khz = 20000;
+#endif
 
-    esp_err_t ret = spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    ESP_LOGI(TAG, "Mounting SD card on pins CS=%d, CLK=%d, MOSI=%d, MISO=%d, Host=%d",
+             cs, clk, mosi, miso, host_id);
+
+    host.slot = host_id;
+
+    bus_cfg.mosi_io_num = mosi;
+    bus_cfg.miso_io_num = miso;
+    bus_cfg.sclk_io_num = clk;
+    bus_cfg.quadwp_io_num = -1;
+    bus_cfg.quadhd_io_num = -1;
+    bus_cfg.max_transfer_sz = 4096;
+    bus_cfg.flags = SPICOMMON_BUSFLAG_MASTER;
+    bus_cfg.isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO;
+    bus_cfg.intr_flags = 0;
+
+    esp_err_t ret = spi_bus_initialize(host_id, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to initialize SPI3 bus: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
         return false;
     }
-    ESP_LOGI(TAG, "SPI3 bus initialized");
+    ESP_LOGI(TAG, "SPI bus initialized");
 
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = M5PAPERS3_SD_CS_PIN;
-    slot_config.host_id = SPI3_HOST;
+    slot_config.gpio_cs = (gpio_num_t)cs;
+    slot_config.host_id = host_id;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
@@ -354,7 +374,7 @@ bool DeviceHAL::mountSDCard() {
 
     ESP_LOGI(TAG, "Attempting SD card mount...");
     ret = esp_vfs_fat_sdspi_mount(
-        CONFIG_EBOOK_S3_SD_MOUNT_POINT,
+        CONFIG_EBOOK_SD_MOUNT_POINT,
         &host,
         &slot_config,
         &mount_config,
@@ -367,7 +387,7 @@ bool DeviceHAL::mountSDCard() {
     }
 
     m_sdCardMounted = true;
-    ESP_LOGI(TAG, "SD card mounted at %s", CONFIG_EBOOK_S3_SD_MOUNT_POINT);
+    ESP_LOGI(TAG, "SD card mounted at %s", CONFIG_EBOOK_SD_MOUNT_POINT);
     
     if (s_card) {
         sdmmc_card_print_info(stdout, s_card);
@@ -380,10 +400,10 @@ bool DeviceHAL::mountSDCard() {
 }
 
 void DeviceHAL::unmountSDCard() {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     if (!m_sdCardMounted) return;
 
-    esp_vfs_fat_sdcard_unmount(CONFIG_EBOOK_S3_SD_MOUNT_POINT, s_card);
+    esp_vfs_fat_sdcard_unmount(CONFIG_EBOOK_SD_MOUNT_POINT, s_card);
     s_card = nullptr;
     m_sdCardMounted = false;
     ESP_LOGI(TAG, "SD card unmounted");
@@ -391,20 +411,20 @@ void DeviceHAL::unmountSDCard() {
 }
 
 const char* DeviceHAL::getSDCardMountPoint() const {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
-    return CONFIG_EBOOK_S3_SD_MOUNT_POINT;
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
+    return CONFIG_EBOOK_SD_MOUNT_POINT;
 #else
     return nullptr;
 #endif
 }
 
 uint64_t DeviceHAL::getSDCardTotalSize() const {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     if (!m_sdCardMounted) return 0;
 
     uint64_t totalBytes = 0;
     uint64_t freeBytes = 0;
-    if (esp_vfs_fat_info(CONFIG_EBOOK_S3_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
+    if (esp_vfs_fat_info(CONFIG_EBOOK_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
         return totalBytes;
     }
     return 0;
@@ -414,12 +434,12 @@ uint64_t DeviceHAL::getSDCardTotalSize() const {
 }
 
 uint64_t DeviceHAL::getSDCardFreeSize() const {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     if (!m_sdCardMounted) return 0;
 
     uint64_t totalBytes = 0;
     uint64_t freeBytes = 0;
-    if (esp_vfs_fat_info(CONFIG_EBOOK_S3_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
+    if (esp_vfs_fat_info(CONFIG_EBOOK_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
         return freeBytes;
     }
     return 0;
@@ -429,7 +449,7 @@ uint64_t DeviceHAL::getSDCardFreeSize() const {
 }
 
 bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     if (!hasSDCardSlot()) return false;
 
     ESP_LOGW(TAG, "Formatting SD card...");
@@ -441,14 +461,31 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
 
     if (progressCallback) progressCallback(10);
 
-    // Use SPI3_HOST to match mountSDCard
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
-    host.max_freq_khz = 20000;
-
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = M5PAPERS3_SD_CS_PIN;
-    slot_config.host_id = SPI3_HOST;
+    spi_bus_config_t bus_cfg = {};
+    int mosi, miso, clk, cs;
+    spi_host_device_t host_id;
+
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    mosi = M5PAPERS3_SD_MOSI_PIN;
+    miso = M5PAPERS3_SD_MISO_PIN;
+    clk = M5PAPERS3_SD_CLK_PIN;
+    cs = M5PAPERS3_SD_CS_PIN;
+    host_id = SPI3_HOST;
+    host.max_freq_khz = 20000;
+#else
+    mosi = M5PAPER_SD_MOSI_PIN;
+    miso = M5PAPER_SD_MISO_PIN;
+    clk = M5PAPER_SD_CLK_PIN;
+    cs = M5PAPER_SD_CS_PIN;
+    host_id = SPI2_HOST;
+    host.max_freq_khz = 20000;
+#endif
+
+    host.slot = host_id;
+    slot_config.gpio_cs = (gpio_num_t)cs;
+    slot_config.host_id = host_id;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = true,  // This will format!
@@ -462,23 +499,22 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     sdmmc_card_t* tempCard = nullptr;
 
     // Re-initialize SPI bus (it might already be initialized)
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = M5PAPERS3_SD_MOSI_PIN,
-        .miso_io_num = M5PAPERS3_SD_MISO_PIN,
-        .sclk_io_num = M5PAPERS3_SD_CLK_PIN,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4096,
-        .flags = SPICOMMON_BUSFLAG_MASTER,
-        .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
-        .intr_flags = 0
-    };
-    spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    bus_cfg.mosi_io_num = mosi;
+    bus_cfg.miso_io_num = miso;
+    bus_cfg.sclk_io_num = clk;
+    bus_cfg.quadwp_io_num = -1;
+    bus_cfg.quadhd_io_num = -1;
+    bus_cfg.max_transfer_sz = 4096;
+    bus_cfg.flags = SPICOMMON_BUSFLAG_MASTER;
+    bus_cfg.isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO;
+    bus_cfg.intr_flags = 0;
+    
+    spi_bus_initialize(host_id, &bus_cfg, SPI_DMA_CH_AUTO);
 
     if (progressCallback) progressCallback(50);
 
     esp_err_t ret = esp_vfs_fat_sdspi_mount(
-        CONFIG_EBOOK_S3_SD_MOUNT_POINT,
+        CONFIG_EBOOK_SD_MOUNT_POINT,
         &host,
         &slot_config,
         &mount_config,

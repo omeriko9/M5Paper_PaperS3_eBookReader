@@ -339,8 +339,8 @@ extern "C" void app_main(void)
     // Initialize HAL
     deviceHAL.init(is_wake_from_sleep);
 
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
-    // Try to mount SD card on M5PaperS3
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
+    // Try to mount SD card
     if (deviceHAL.mountSDCard()) {
         ESP_LOGI(TAG, "SD card mounted successfully");
     } else {

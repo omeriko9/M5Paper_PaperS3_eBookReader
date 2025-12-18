@@ -1058,7 +1058,7 @@ static esp_err_t api_sd_status_handler(httpd_req_t *req)
     WebServer::updateActivityTime();
     httpd_resp_set_type(req, "application/json");
     
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     char buf[256];
     bool mounted = deviceHAL.isSDCardMounted();
     bool available = deviceHAL.hasSDCardSlot();
@@ -1085,7 +1085,7 @@ static esp_err_t api_format_sd_handler(httpd_req_t *req)
     WebServer::updateActivityTime();
     httpd_resp_set_type(req, "application/json");
     
-#ifdef CONFIG_EBOOK_S3_ENABLE_SD_CARD
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     ESP_LOGW(TAG, "Formatting SD card via web request");
     
     bool success = deviceHAL.formatSDCard([](int progress) {

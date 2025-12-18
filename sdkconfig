@@ -438,6 +438,13 @@ CONFIG_EBOOK_DEVICE_M5PAPER=y
 CONFIG_EBOOK_DEVICE_NAME="M5Paper"
 
 #
+# Storage Settings
+#
+CONFIG_EBOOK_ENABLE_SD_CARD=y
+CONFIG_EBOOK_SD_MOUNT_POINT="/sdcard"
+# end of Storage Settings
+
+#
 # Display Settings
 #
 CONFIG_EBOOK_DISPLAY_WIDTH=540

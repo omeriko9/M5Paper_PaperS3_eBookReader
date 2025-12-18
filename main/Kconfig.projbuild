@@ -25,21 +25,25 @@ menu "M5Paper E-Book Reader Configuration"
         default "M5Paper" if EBOOK_DEVICE_M5PAPER
         default "M5PaperS3" if EBOOK_DEVICE_M5PAPERS3
 
-    menu "M5PaperS3 Features"
-        depends on EBOOK_DEVICE_M5PAPERS3
+    menu "Storage Settings"
 
-        config EBOOK_S3_ENABLE_SD_CARD
+        config EBOOK_ENABLE_SD_CARD
             bool "Enable SD Card Support"
             default y
             help
                 Enable SD card support for additional book storage.
 
-        config EBOOK_S3_SD_MOUNT_POINT
+        config EBOOK_SD_MOUNT_POINT
             string "SD Card Mount Point"
             default "/sdcard"
-            depends on EBOOK_S3_ENABLE_SD_CARD
+            depends on EBOOK_ENABLE_SD_CARD
             help
                 Mount point for the SD card filesystem.
+
+    endmenu
+
+    menu "M5PaperS3 Features"
+        depends on EBOOK_DEVICE_M5PAPERS3
 
         config EBOOK_S3_ENABLE_BUZZER
             bool "Enable Buzzer Support"
