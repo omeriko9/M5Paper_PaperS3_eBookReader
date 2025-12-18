@@ -145,6 +145,8 @@ void EpubLoader::close() {
     chapterTextLengths.clear();
     currentChapterContent.clear();
     currentChapterContent.shrink_to_fit();
+    currentChapterImages.clear();
+    manifest.clear();
 }
 
 std::string EpubLoader::getTitle() {
@@ -231,7 +233,8 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
         }
     }
     
-    std::map<std::string, std::string> manifest;
+    // Clear and rebuild manifest
+    manifest.clear();
     
     // 1. Parse Manifest
     // <item id="id" href="path" ... />
@@ -296,6 +299,9 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
 
 struct LoadChapterContext {
     std::string* content;
+    std::vector<EpubImage>* images;
+    std::string chapterDir;  // Directory of current chapter for relative path resolution
+    std::string rootDir;     // EPUB root directory
     bool inTag;
     bool lastSpace;
     std::string currentTag;
@@ -381,6 +387,95 @@ static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
     return true;
 }
 
+// Helper to extract attribute value from tag string
+static std::string extractAttribute(const std::string& tag, const std::string& attr) {
+    std::string search = attr + "=\"";
+    size_t pos = tag.find(search);
+    if (pos == std::string::npos) {
+        // Try single quotes
+        search = attr + "='";
+        pos = tag.find(search);
+    }
+    if (pos == std::string::npos) return "";
+    
+    pos += search.length();
+    char quote = (search.back() == '"') ? '"' : '\'';
+    size_t end = tag.find(quote, pos);
+    if (end == std::string::npos) return "";
+    
+    return tag.substr(pos, end - pos);
+}
+
+// Helper to decode HTML entities in a string
+static std::string decodeHtmlEntities(const std::string& str) {
+    std::string result;
+    result.reserve(str.length());
+    
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '&') {
+            // Look for entity
+            size_t end = str.find(';', i);
+            if (end != std::string::npos && end - i < 10) {
+                std::string entity = str.substr(i + 1, end - i - 1);
+                if (entity == "amp") result += '&';
+                else if (entity == "lt") result += '<';
+                else if (entity == "gt") result += '>';
+                else if (entity == "quot") result += '"';
+                else if (entity == "apos") result += '\'';
+                else if (entity == "nbsp") result += ' ';
+                else if (entity[0] == '#') {
+                    // Numeric entity
+                    int code = 0;
+                    if (entity[1] == 'x' || entity[1] == 'X') {
+                        code = strtol(entity.c_str() + 2, nullptr, 16);
+                    } else {
+                        code = atoi(entity.c_str() + 1);
+                    }
+                    if (code > 0 && code < 128) result += (char)code;
+                    else result += '?';
+                } else {
+                    // Unknown entity, keep as-is
+                    result += str.substr(i, end - i + 1);
+                }
+                i = end;
+                continue;
+            }
+        }
+        result += str[i];
+    }
+    return result;
+}
+
+// Helper to resolve relative image path
+static std::string resolveRelativePath(const std::string& basePath, const std::string& relativePath) {
+    // Handle absolute paths (starting with /)
+    if (!relativePath.empty() && relativePath[0] == '/') {
+        return relativePath.substr(1);  // Remove leading /
+    }
+    
+    // Handle ../ navigation
+    std::string base = basePath;
+    std::string rel = relativePath;
+    
+    while (rel.length() >= 3 && rel.substr(0, 3) == "../") {
+        rel = rel.substr(3);
+        // Remove last component from base
+        size_t lastSlash = base.rfind('/');
+        if (lastSlash != std::string::npos) {
+            base = base.substr(0, lastSlash);
+            // Try to find another slash
+            lastSlash = base.rfind('/');
+            if (lastSlash != std::string::npos) {
+                base = base.substr(0, lastSlash + 1);
+            } else {
+                base = "";
+            }
+        }
+    }
+    
+    return base + rel;
+}
+
 static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
     LoadChapterContext* context = (LoadChapterContext*)ctx;
     for (size_t i = 0; i < len; ++i) {
@@ -396,8 +491,6 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                 context->inTag = false;
                 
                 // Check for block tags to insert newlines
-                // Simple heuristic: if tag starts with p, div, br, li, h1..h6
-                // or closing tags /p, /div, /li, /h1..
                 std::string& tag = context->currentTag;
                 bool isBlock = false;
                 if (tag == "p" || tag == "/p" || tag.find("p ") == 0) isBlock = true;
@@ -408,18 +501,84 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
 
                 if (isBlock) {
                     // Insert newline if not already there
-                    if (!context->lastSpace) { // Reuse lastSpace to track if we just outputted a separator
+                    if (!context->lastSpace) {
                         context->content->push_back('\n');
                         context->lastSpace = true; 
                     }
                 } else if (tag == "img" || tag.find("img ") == 0) {
-                     // Output [Image]
-                     context->content->append("[Image]");
-                     context->lastSpace = false;
-                } else {
-                    // For inline tags, maybe just a space if needed? 
-                    // Actually, usually no space needed for <b>, <i> etc.
+                    // Parse image tag and store reference
+                    EpubImage img;
+                    img.textOffset = context->content->length();
+                    
+                    // Extract src attribute
+                    std::string src = extractAttribute(tag, "src");
+                    if (src.empty()) {
+                        // Try xlink:href for SVG images
+                        src = extractAttribute(tag, "xlink:href");
+                    }
+                    
+                    if (!src.empty()) {
+                        // Decode HTML entities in src
+                        src = decodeHtmlEntities(src);
+                        
+                        // Resolve relative path
+                        img.path = resolveRelativePath(context->chapterDir, src);
+                        
+                        // Extract alt text
+                        img.alt = extractAttribute(tag, "alt");
+                        if (!img.alt.empty()) {
+                            img.alt = decodeHtmlEntities(img.alt);
+                        }
+                        
+                        // Extract dimensions if specified
+                        std::string widthStr = extractAttribute(tag, "width");
+                        std::string heightStr = extractAttribute(tag, "height");
+                        img.width = widthStr.empty() ? -1 : atoi(widthStr.c_str());
+                        img.height = heightStr.empty() ? -1 : atoi(heightStr.c_str());
+                        
+                        // Determine if block-level (heuristic: large images or in figure/div)
+                        // For now, treat images > 200px as block-level
+                        img.isBlock = (img.width > 200 || img.height > 200);
+                        
+                        // Store image reference
+                        if (context->images) {
+                            context->images->push_back(img);
+                        }
+                    }
+                    
+                    // Output placeholder in text
+                    context->content->append("\xEE\x80\x80");  // Custom placeholder character (U+E000)
+                    context->lastSpace = false;
+                } else if (tag.find("image ") == 0 || tag == "image") {
+                    // SVG <image> tag
+                    EpubImage img;
+                    img.textOffset = context->content->length();
+                    
+                    std::string href = extractAttribute(tag, "xlink:href");
+                    if (href.empty()) {
+                        href = extractAttribute(tag, "href");
+                    }
+                    
+                    if (!href.empty()) {
+                        href = decodeHtmlEntities(href);
+                        img.path = resolveRelativePath(context->chapterDir, href);
+                        img.alt = "";
+                        img.isBlock = true;
+                        
+                        std::string widthStr = extractAttribute(tag, "width");
+                        std::string heightStr = extractAttribute(tag, "height");
+                        img.width = widthStr.empty() ? -1 : atoi(widthStr.c_str());
+                        img.height = heightStr.empty() ? -1 : atoi(heightStr.c_str());
+                        
+                        if (context->images) {
+                            context->images->push_back(img);
+                        }
+                    }
+                    
+                    context->content->append("\xEE\x80\x80");
+                    context->lastSpace = false;
                 }
+                // For inline tags like <b>, <i>, no action needed
             } else {
                 context->currentTag += c;
             }
@@ -427,14 +586,9 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
         }
         
         if (!context->inTag) {
-            // Handle basic entities
-            if (c == '&') {
-                // TODO: Better entity handling
-            }
-            // Skip newlines in HTML source as they are usually whitespace
+            // Skip newlines in HTML source
             if (c == '\n' || c == '\r') {
-                 // Treat source newlines as spaces
-                 c = ' ';
+                c = ' ';
             }
             
             if (c == ' ') {
@@ -458,6 +612,17 @@ void EpubLoader::loadChapter(int index) {
     currentTextOffset = 0;
     currentChapterSize = 0;
     currentChapterContent.clear();
+    currentChapterImages.clear();
+    
+    // Determine chapter directory for relative path resolution
+    const std::string& chapterPath = spine[index];
+    size_t lastSlash = chapterPath.rfind('/');
+    if (lastSlash != std::string::npos) {
+        currentChapterDir = chapterPath.substr(0, lastSlash + 1);
+    } else {
+        currentChapterDir = "";
+    }
+    
     // Reserve memory based on uncompressed size to avoid reallocations
     uint32_t size = zip.getUncompressedSize(spine[index]);
     if (size > 0) {
@@ -471,6 +636,9 @@ void EpubLoader::loadChapter(int index) {
 
     LoadChapterContext* ctx = new LoadChapterContext();
     ctx->content = &currentChapterContent;
+    ctx->images = &currentChapterImages;
+    ctx->chapterDir = currentChapterDir;
+    ctx->rootDir = rootDir;
     ctx->inTag = false;
     ctx->lastSpace = true; // Start assuming we are at start of line (no leading spaces)
 
@@ -485,7 +653,7 @@ void EpubLoader::loadChapter(int index) {
         chapterTextLengths[currentChapterIndex] = currentChapterSize;
     }
     
-    ESP_LOGI(TAG, "Loaded chapter %d, size: %u", index, (unsigned)currentChapterSize);
+    ESP_LOGI(TAG, "Loaded chapter %d, size: %u, images: %zu", index, (unsigned)currentChapterSize, currentChapterImages.size());
 }
 
 bool EpubLoader::jumpToChapter(int index) {
@@ -545,3 +713,76 @@ bool EpubLoader::prevChapter() {
     return false;
 }
 
+// ============================================================================
+// Image Support
+// ============================================================================
+
+bool EpubLoader::extractImage(const std::string& imagePath, std::vector<uint8_t>& outData) {
+    if (!isOpen) {
+        ESP_LOGE(TAG, "EPUB not open");
+        return false;
+    }
+    
+    // Try the path as-is first
+    if (zip.fileExists(imagePath)) {
+        return zip.extractBinary(imagePath, outData);
+    }
+    
+    // Try with rootDir prefix
+    std::string fullPath = rootDir + imagePath;
+    if (zip.fileExists(fullPath)) {
+        return zip.extractBinary(fullPath, outData);
+    }
+    
+    // Try without any prefix (image might be at root)
+    size_t lastSlash = imagePath.rfind('/');
+    if (lastSlash != std::string::npos) {
+        std::string filename = imagePath.substr(lastSlash + 1);
+        // Search in common image directories
+        std::vector<std::string> searchPaths = {
+            "images/" + filename,
+            "Images/" + filename,
+            "OEBPS/images/" + filename,
+            "OEBPS/Images/" + filename,
+            rootDir + "images/" + filename,
+            rootDir + "Images/" + filename,
+            filename
+        };
+        
+        for (const auto& path : searchPaths) {
+            if (zip.fileExists(path)) {
+                ESP_LOGI(TAG, "Found image at: %s (searched for: %s)", path.c_str(), imagePath.c_str());
+                return zip.extractBinary(path, outData);
+            }
+        }
+    }
+    
+    ESP_LOGW(TAG, "Image not found: %s", imagePath.c_str());
+    return false;
+}
+
+const EpubImage* EpubLoader::findImageAtOffset(size_t textOffset, size_t tolerance) const {
+    for (const auto& img : currentChapterImages) {
+        if (textOffset >= img.textOffset && textOffset <= img.textOffset + tolerance) {
+            return &img;
+        }
+        if (img.textOffset >= textOffset && img.textOffset <= textOffset + tolerance) {
+            return &img;
+        }
+    }
+    return nullptr;
+}
+
+bool EpubLoader::hasImageAtOffset(size_t textOffset) const {
+    for (const auto& img : currentChapterImages) {
+        if (img.textOffset == textOffset) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string EpubLoader::resolveImagePath(const std::string& src) {
+    // Already handled by resolveRelativePath in the callback
+    return src;
+}

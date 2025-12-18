@@ -5,6 +5,7 @@
 #include "wifi_manager.h"
 #include "book_index.h"
 #include "device_hal.h"
+#include "image_handler.h"
 #include <vector>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -22,6 +23,10 @@
 #include <new>
 #include "sdkconfig.h"
 #include <ctime>
+
+// Image placeholder character (U+E000 in UTF-8)
+static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
+static const size_t IMAGE_PLACEHOLDER_LEN = 3;
 
 static const char *TAG = "GUI";
 bool GUI::canJump() const
@@ -595,6 +600,9 @@ void GUI::init(bool isWakeFromSleep)
     loadSettings();
     loadFonts();
     
+    // Initialize image handler
+    ImageHandler::getInstance().init();
+    
     // Play startup sound
     deviceHAL.playStartupSound();
     
@@ -1044,6 +1052,14 @@ void GUI::setWebServerEnabled(bool enabled)
     }
 }
 
+void GUI::setShowImages(bool enabled)
+{
+    if (showImages == enabled) return;
+    showImages = enabled;
+    saveSettings();
+    needsRedraw = true;
+}
+
 void GUI::update()
 {
     handleTouch();
@@ -1121,6 +1137,9 @@ void GUI::update()
             break;
         case AppState::WIFI_PASSWORD:
             drawWifiPassword();
+            break;
+        case AppState::IMAGE_VIEWER:
+            drawImageViewer();
             break;
         }
         needsRedraw = false;
@@ -1865,6 +1884,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
     if (draw)
         gfx->startWrite();
+    
+    // Clear rendered images list when drawing to main display
+    if (draw && target == nullptr)
+    {
+        pageRenderedImages.clear();
+    }
 
     // Store indices (start, length) instead of strings to save memory
     std::vector<std::pair<size_t, size_t>> currentLine;
@@ -1980,6 +2005,140 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             if (draw)
                 gfx->endWrite();
             return 0;
+        }
+        
+        // Check for image placeholder character (U+E000 = \xEE\x80\x80)
+        if (i + IMAGE_PLACEHOLDER_LEN <= text.length() &&
+            text.compare(i, IMAGE_PLACEHOLDER_LEN, IMAGE_PLACEHOLDER) == 0)
+        {
+            // If images are disabled, just skip the placeholder
+            if (!showImages) {
+                i += IMAGE_PLACEHOLDER_LEN;
+                continue;
+            }
+
+            // Found image placeholder - flush current line first
+            if (!currentLine.empty())
+            {
+                drawLine(currentLine);
+                linesDrawn++;
+                currentLine.clear();
+                currentLineWidth = 0;
+                currentY += lineHeight;
+            }
+            
+            // Find the image at this offset
+            const EpubImage* image = nullptr;
+            size_t imageOffset = startOffset + i;
+            if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+            {
+                image = epubLoader.findImageAtOffset(imageOffset, 10);
+                xSemaphoreGive(epubMutex);
+            }
+            
+            if (image && draw)
+            {
+                // Calculate image dimensions
+                int imgMaxWidth = maxWidth;
+                int imgMaxHeight = maxY - currentY;
+                
+                // For inline images, limit height more
+                if (!image->isBlock)
+                {
+                    imgMaxHeight = std::min(imgMaxHeight, lineHeight * 4);
+                    imgMaxWidth = maxWidth / 2;
+                }
+                
+                // Only render if we have enough vertical space
+                if (imgMaxHeight > 50)
+                {
+                    // Extract and render image
+                    std::vector<uint8_t> imageData;
+                    bool extracted = false;
+                    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+                    {
+                        extracted = epubLoader.extractImage(image->path, imageData);
+                        xSemaphoreGive(epubMutex);
+                    }
+                    
+                    if (extracted && !imageData.empty())
+                    {
+                        ImageHandler& imgHandler = ImageHandler::getInstance();
+                        int imgX = x;
+                        int imgY = currentY;
+                        
+                        ImageDecodeResult result = imgHandler.decodeAndRender(
+                            imageData.data(),
+                            imageData.size(),
+                            (M5Canvas*)target,
+                            imgX, imgY,
+                            imgMaxWidth,
+                            imgMaxHeight,
+                            image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE
+                        );
+                        
+                        if (result.success)
+                        {
+                            // Track this rendered image for tap detection (only for main display)
+                            if (target == nullptr)
+                            {
+                                RenderedImageInfo ri;
+                                ri.x = imgX;
+                                ri.y = imgY;
+                                ri.width = result.scaledWidth;
+                                ri.height = result.scaledHeight;
+                                ri.image = *image;
+                                pageRenderedImages.push_back(ri);
+                            }
+                            
+                            // Move Y past the image
+                            currentY += result.scaledHeight + 10;  // Add some padding
+                            ESP_LOGI(TAG, "Rendered image at Y=%d, size=%dx%d", 
+                                     imgY, result.scaledWidth, result.scaledHeight);
+                        }
+                        else
+                        {
+                            // Show placeholder text for failed image
+                            gfx->setTextColor(TFT_DARKGRAY, TFT_WHITE);
+                            gfx->setTextDatum(textdatum_t::top_left);
+                            gfx->drawString("[Image]", x, currentY);
+                            gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+                            currentY += lineHeight;
+                        }
+                    }
+                    else
+                    {
+                        // Show placeholder for missing image
+                        gfx->setTextColor(TFT_DARKGRAY, TFT_WHITE);
+                        gfx->setTextDatum(textdatum_t::top_left);
+                        gfx->drawString("[Image]", x, currentY);
+                        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+                        currentY += lineHeight;
+                    }
+                }
+                else
+                {
+                    // Not enough space - page is full
+                    break;
+                }
+            }
+            else if (!draw)
+            {
+                // When measuring (not drawing), account for image space
+                // Estimate a reasonable image height
+                currentY += lineHeight * 3;  // Reserve space for typical image
+            }
+            
+            // Skip past the placeholder
+            i += IMAGE_PLACEHOLDER_LEN;
+            
+            // Check if page is full after image
+            if (currentY + lineHeight > maxY)
+            {
+                break;
+            }
+            
+            continue;  // Continue to next word/element
         }
 
         // Find next word boundary
@@ -2982,6 +3141,21 @@ void GUI::drawWifiConfig()
 
 void GUI::processReaderTap(int x, int y, bool isDouble)
 {
+    // First, check if tap is on a rendered image
+    for (const auto& ri : pageRenderedImages)
+    {
+        if (x >= ri.x && x <= ri.x + ri.width &&
+            y >= ri.y && y <= ri.y + ri.height)
+        {
+            // Tapped on an image - open full screen viewer
+            ESP_LOGI(TAG, "Tap on image at (%d, %d), opening viewer", x, y);
+            if (openImageViewer(ri.image))
+            {
+                return;  // Image viewer opened, don't process as page turn
+            }
+        }
+    }
+    
     bool isRTL = isRTLDocument;
     bool next = false;
 
@@ -3489,6 +3663,11 @@ void GUI::handleTouch()
                 onWifiPasswordClick(t.x, t.y);
                 justWokeUp = false;
             }
+            else if (currentState == AppState::IMAGE_VIEWER)
+            {
+                onImageViewerClick(t.x, t.y);
+                justWokeUp = false;
+            }
         }
     }
     justWokeUp = false;
@@ -3674,6 +3853,7 @@ void GUI::saveSettings()
         nvs_set_i32(my_handle, "font_size", sizeInt);
         nvs_set_str(my_handle, "font_name", currentFont.c_str());
         nvs_set_i32(my_handle, "wifi_enabled", wifiEnabled ? 1 : 0);
+        nvs_set_i32(my_handle, "show_images", showImages ? 1 : 0);
         int32_t spacingInt = (int32_t)(lineSpacing * 10);
         nvs_set_i32(my_handle, "line_spacing", spacingInt);
 
@@ -3800,6 +3980,12 @@ void GUI::loadSettings()
         if (nvs_get_i32(my_handle, "wifi_enabled", &wifiEn) == ESP_OK)
         {
             wifiEnabled = (wifiEn != 0);
+        }
+
+        int32_t showImg = 1;
+        if (nvs_get_i32(my_handle, "show_images", &showImg) == ESP_OK)
+        {
+            showImages = (showImg != 0);
         }
 
         int32_t spacingInt = 11; // Default 1.1
@@ -4770,4 +4956,177 @@ void GUI::onWifiPasswordClick(int x, int y)
         M5.Display.drawString(wifiPasswordInput.c_str(), 30, 115);
         M5.Display.display();
     }
+}
+
+// ============================================================================
+// Image Viewer Implementation
+// ============================================================================
+
+void GUI::drawImageViewer()
+{
+    ESP_LOGI(TAG, "Drawing image viewer");
+    
+    // Clear screen with white background
+    M5.Display.fillScreen(TFT_WHITE);
+    
+    if (currentImageData.empty()) {
+        // No image loaded - show error message
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.setTextDatum(textdatum_t::middle_center);
+        M5.Display.setTextSize(1.5f);
+        M5.Display.drawString("Image could not be loaded", M5.Display.width() / 2, M5.Display.height() / 2);
+        M5.Display.display();
+        return;
+    }
+    
+    // Decode and display image centered on screen
+    ImageHandler& imgHandler = ImageHandler::getInstance();
+    
+    // Use full screen for rendering
+    ImageDecodeResult result = imgHandler.decodeToDisplay(
+        currentImageData.data(),
+        currentImageData.size(),
+        -1,  // Auto-center X
+        -1,  // Auto-center Y
+        true // Fit to screen
+    );
+    
+    if (!result.success) {
+        ESP_LOGE(TAG, "Failed to decode image: %s", result.errorMsg.c_str());
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.setTextDatum(textdatum_t::middle_center);
+        M5.Display.setTextSize(1.5f);
+        M5.Display.drawString("Image decode failed", M5.Display.width() / 2, M5.Display.height() / 2);
+    } else {
+        ESP_LOGI(TAG, "Image displayed: %dx%d -> %dx%d", 
+                 result.originalWidth, result.originalHeight,
+                 result.scaledWidth, result.scaledHeight);
+    }
+    
+    // Draw a small "X" close indicator in the corner
+    M5.Display.setTextColor(TFT_DARKGRAY, TFT_WHITE);
+    M5.Display.setTextDatum(textdatum_t::top_right);
+    M5.Display.setTextSize(2.0f);
+    M5.Display.drawString("X", M5.Display.width() - 10, 10);
+    
+    // Draw alt text or "Tap to close" hint at bottom
+    M5.Display.setTextColor(TFT_DARKGRAY, TFT_WHITE);
+    M5.Display.setTextDatum(textdatum_t::bottom_center);
+    M5.Display.setTextSize(1.2f);
+    if (!currentImageInfo.alt.empty()) {
+        // Truncate if too long
+        std::string altText = currentImageInfo.alt;
+        if (altText.length() > 50) {
+            altText = altText.substr(0, 47) + "...";
+        }
+        M5.Display.drawString(altText.c_str(), M5.Display.width() / 2, M5.Display.height() - 10);
+    } else {
+        M5.Display.drawString("Tap to close", M5.Display.width() / 2, M5.Display.height() - 10);
+    }
+    
+    M5.Display.display();
+}
+
+void GUI::onImageViewerClick(int x, int y)
+{
+    ESP_LOGI(TAG, "Image viewer click at %d, %d", x, y);
+    
+    // Any tap closes the image viewer
+    closeImageViewer();
+}
+
+bool GUI::openImageViewer(const EpubImage& image)
+{
+    ESP_LOGI(TAG, "Opening image viewer for: %s", image.path.c_str());
+    
+    // Store image info
+    currentImageInfo = image;
+    imageTextOffset = image.textOffset;
+    
+    // Extract image data from EPUB
+    currentImageData.clear();
+    
+    bool success = false;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        success = epubLoader.extractImage(image.path, currentImageData);
+        xSemaphoreGive(epubMutex);
+    }
+    
+    if (!success || currentImageData.empty()) {
+        ESP_LOGE(TAG, "Failed to extract image: %s", image.path.c_str());
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Extracted image: %zu bytes", currentImageData.size());
+    
+    // Transition to image viewer state
+    previousState = currentState;
+    currentState = AppState::IMAGE_VIEWER;
+    imageViewerActive = true;
+    needsRedraw = true;
+    
+    return true;
+}
+
+void GUI::closeImageViewer()
+{
+    ESP_LOGI(TAG, "Closing image viewer");
+    
+    // Free image data memory
+    currentImageData.clear();
+    currentImageData.shrink_to_fit();
+    
+    imageViewerActive = false;
+    
+    // Return to reader state
+    currentState = AppState::READER;
+    needsRedraw = true;
+}
+
+bool GUI::renderImageAtOffset(size_t offset, M5Canvas* target, int x, int y, int maxWidth, int maxHeight)
+{
+    // Find image at this offset
+    const EpubImage* image = nullptr;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        image = epubLoader.findImageAtOffset(offset, 5);
+        xSemaphoreGive(epubMutex);
+    }
+    
+    if (!image) {
+        ESP_LOGW(TAG, "No image found at offset %zu", offset);
+        return false;
+    }
+    
+    // Extract image data
+    std::vector<uint8_t> imageData;
+    bool success = false;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+        success = epubLoader.extractImage(image->path, imageData);
+        xSemaphoreGive(epubMutex);
+    }
+    
+    if (!success || imageData.empty()) {
+        ESP_LOGW(TAG, "Failed to extract image at offset %zu", offset);
+        return false;
+    }
+    
+    // Decode and render
+    ImageHandler& imgHandler = ImageHandler::getInstance();
+    ImageDecodeResult result = imgHandler.decodeAndRender(
+        imageData.data(),
+        imageData.size(),
+        target,
+        x, y,
+        maxWidth,
+        maxHeight,
+        image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE
+    );
+    
+    if (!result.success) {
+        ESP_LOGE(TAG, "Failed to decode image: %s", result.errorMsg.c_str());
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Rendered image at offset %zu: %dx%d", offset, result.scaledWidth, result.scaledHeight);
+    return true;
 }

@@ -144,6 +144,12 @@ input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100
         <option value="Roboto">Roboto</option>
     </select>
   </div>
+  <div style="margin-top: 15px;">
+    <label style="display: flex; align-items: center; gap: 10px;">
+        <input type="checkbox" id="showImages" onchange="toggleShowImages()" style="width: auto; margin: 0;">
+        Show Images
+    </label>
+  </div>
   <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
     <label>Jump to:</label>
     <div style="display: flex; gap: 10px; margin-top: 5px;">
@@ -243,6 +249,9 @@ function fetchSettings() {
         if(s.timezone) {
             document.getElementById('tzStr').value = s.timezone;
         }
+        if(typeof s.showImages !== 'undefined') {
+            document.getElementById('showImages').checked = s.showImages;
+        }
         
         // M5PaperS3 specific settings
         if(s.deviceName) {
@@ -295,6 +304,15 @@ function toggleAutoRotate() {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({autoRotate: enabled})
+    });
+}
+
+function toggleShowImages() {
+    const enabled = document.getElementById('showImages').checked;
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({showImages: enabled})
     });
 }
 
@@ -951,17 +969,17 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
         char buf[512];
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         snprintf(buf, sizeof(buf), 
-            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"sdFreeSpace\":%llu, \"timezone\":\"%s\", "
+            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"sdFreeSpace\":%llu, \"timezone\":\"%s\", "
             "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s}", 
-            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), 
+            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
             (unsigned int)getFreeSpace(), deviceHAL.getSDCardFreeSize(), tz,
             deviceHAL.getDeviceName(),
             gui.isBuzzerEnabled() ? "true" : "false",
             gui.isAutoRotateEnabled() ? "true" : "false");
 #else
         snprintf(buf, sizeof(buf), 
-            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\"}", 
-            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), 
+            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\"}", 
+            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
             (unsigned int)getFreeSpace(), tz,
             deviceHAL.getDeviceName());
 #endif
@@ -1002,6 +1020,12 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
         if (pLineSpacing) {
             float spacing = atof(pLineSpacing + 14);
             gui.setLineSpacing(spacing);
+        }
+
+        char* pShowImages = strstr(buf, "\"showImages\":");
+        if (pShowImages) {
+            bool show = (strncmp(pShowImages + 13, "true", 4) == 0);
+            gui.setShowImages(show);
         }
         
         httpd_resp_send(req, "OK", 2);

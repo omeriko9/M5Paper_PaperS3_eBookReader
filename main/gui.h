@@ -5,6 +5,7 @@
 #include <freertos/semphr.h>
 #include "book_index.h"
 #include "sdkconfig.h"
+#include "epub_loader.h"
 
 enum class AppState {
     MAIN_MENU,      // New main menu with 6 buttons
@@ -15,13 +16,21 @@ enum class AppState {
     BOOK_SETTINGS,  // In-book settings overlay
     WIFI_SCAN,
     WIFI_PASSWORD,
-    FAVORITES       // Favorites-only book list
+    FAVORITES,      // Favorites-only book list
+    IMAGE_VIEWER    // Full-screen image viewing mode
 };
 
 struct RenderRequest {
     size_t offset;
     M5Canvas* target;
     bool isNext; // true for next, false for prev
+};
+
+// Tracks a rendered image position on the page for tap detection
+struct RenderedImageInfo {
+    int x, y;           // Top-left corner
+    int width, height;  // Dimensions
+    EpubImage image;    // Image metadata
 };
 
 class GUI {
@@ -50,6 +59,9 @@ public:
     
     void setWebServerEnabled(bool enabled);
     bool isWifiEnabled() const { return wifiEnabled; }
+    
+    void setShowImages(bool enabled);
+    bool isShowImages() const { return showImages; }
 
     // M5PaperS3 specific features
     void setBuzzerEnabled(bool enabled);
@@ -121,6 +133,7 @@ private:
     std::vector<uint8_t> fontDataHebrew; // Cache for Hebrew font
     std::vector<uint8_t> fontDataArabic; // Cache for Arabic font
     bool wifiEnabled = true;
+    bool showImages = true;
     
     size_t lastPageChars = 0;
     int lastPageTotal = 1;
@@ -142,6 +155,16 @@ private:
     std::vector<std::string> wifiList;
     std::string wifiPasswordInput;
     std::string selectedSSID;
+    
+    // Image Viewer State
+    std::vector<uint8_t> currentImageData;  // Binary data of currently viewed image
+    EpubImage currentImageInfo;              // Info about current image
+    bool imageViewerActive = false;
+    int imageViewerRotation = -1;           // Rotation override (-1 = use current)
+    size_t imageTextOffset = 0;             // Text offset where image was clicked
+    
+    // Rendered images on current page (for tap detection)
+    std::vector<RenderedImageInfo> pageRenderedImages;
 
     void drawStatusBar(LovyanGFX* target = nullptr);
     void drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage);
@@ -157,6 +180,7 @@ private:
     void drawSettings();
     void drawWifiScan();
     void drawWifiPassword();
+    void drawImageViewer();   // Full-screen image display
     
     void handleTouch();
     void handleButtonPress();   // Handle hardware button press (long press = shutdown)
@@ -167,6 +191,12 @@ private:
     void onLibraryClick(int x, int y);
     void onKeyboardClick(int x, int y);
     void onSettingsClick(int x, int y);  // Handle standalone settings clicks
+    void onImageViewerClick(int x, int y);  // Handle image viewer clicks
+    
+    // Image rendering helpers
+    bool renderImageAtOffset(size_t offset, M5Canvas* target, int x, int y, int maxWidth, int maxHeight);
+    bool openImageViewer(const EpubImage& image);
+    void closeImageViewer();
 
     void processText(std::string &text);
     

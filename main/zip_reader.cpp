@@ -449,3 +449,52 @@ uint32_t ZipReader::getUncompressedSize(const std::string& filename) {
     if (files.find(filename) == files.end()) return 0;
     return files[filename].uncompressedSize;
 }
+
+bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>& outData) {
+    outData.clear();
+    
+    if (files.find(filename) == files.end()) {
+        ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
+        return false;
+    }
+
+    ZipFileInfo& info = files[filename];
+    
+    // Pre-allocate for efficiency
+    if (info.uncompressedSize > 0) {
+        outData.reserve(info.uncompressedSize);
+    }
+    
+    // Use callback-based extraction for streaming
+    struct BinaryContext {
+        std::vector<uint8_t>* data;
+    };
+    
+    BinaryContext ctx;
+    ctx.data = &outData;
+    
+    bool success = extractFile(filename, [](const char* data, size_t len, void* context) -> bool {
+        BinaryContext* ctx = (BinaryContext*)context;
+        const uint8_t* bytes = (const uint8_t*)data;
+        ctx->data->insert(ctx->data->end(), bytes, bytes + len);
+        return true;
+    }, &ctx);
+    
+    if (!success || outData.empty()) {
+        ESP_LOGE(TAG, "Failed to extract binary: %s", filename.c_str());
+        outData.clear();
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Extracted binary '%s': %u bytes", filename.c_str(), (unsigned)outData.size());
+    return true;
+}
+
+std::vector<std::string> ZipReader::listFiles() const {
+    std::vector<std::string> result;
+    result.reserve(files.size());
+    for (const auto& pair : files) {
+        result.push_back(pair.first);
+    }
+    return result;
+}

@@ -1,7 +1,20 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <map>
 #include "zip_reader.h"
+
+/**
+ * @brief Represents an image reference embedded in chapter content
+ */
+struct EpubImage {
+    size_t textOffset;       // Position in text content where image appears
+    std::string path;        // Path to image within EPUB (relative to rootDir)
+    std::string alt;         // Alt text if provided
+    bool isBlock;            // True if image is block-level (full width)
+    int width;               // Specified width (-1 if not specified)
+    int height;              // Specified height (-1 if not specified)
+};
 
 class EpubLoader {
 public:
@@ -28,16 +41,47 @@ public:
     
     std::string getLanguage() const { return language; }
     
+    // Image support
+    /**
+     * @brief Get all images in the current chapter
+     * @return Vector of image references
+     */
+    const std::vector<EpubImage>& getChapterImages() const { return currentChapterImages; }
+    
+    /**
+     * @brief Extract image data from EPUB
+     * @param imagePath Path to image within EPUB
+     * @param outData Output buffer for binary image data
+     * @return true if successful
+     */
+    bool extractImage(const std::string& imagePath, std::vector<uint8_t>& outData);
+    
+    /**
+     * @brief Find image at or near text offset
+     * @param textOffset Text offset to search near
+     * @param tolerance How many characters to search around offset
+     * @return Pointer to image info, or nullptr if not found
+     */
+    const EpubImage* findImageAtOffset(size_t textOffset, size_t tolerance = 10) const;
+    
+    /**
+     * @brief Check if there's an image placeholder at exact offset
+     * @param textOffset Text offset to check
+     * @return true if there's an image placeholder at this offset
+     */
+    bool hasImageAtOffset(size_t textOffset) const;
+    
 private:
     std::string currentPath;
     std::string language;
-    std::string title; // Added title
-    std::string author; // Book author
+    std::string title;
+    std::string author;
     ZipReader zip;
     bool isOpen = false;
     
     std::vector<std::string> spine; // List of HTML files in order
     std::string rootDir; // Directory where OPF is located
+    std::string currentChapterDir; // Directory of current chapter file
     
     int currentChapterIndex = 0;
     int currentTextOffset = 0;
@@ -46,6 +90,12 @@ private:
     
     // Memory cache for current chapter
     std::string currentChapterContent;
+    
+    // Image references in current chapter
+    std::vector<EpubImage> currentChapterImages;
+    
+    // Manifest mapping (id -> href) for resolving image references
+    std::map<std::string, std::string> manifest;
 
     // Helpers
     bool parseContainer();
@@ -53,4 +103,7 @@ private:
     void loadChapter(int index);
     std::string readFileFromZip(const std::string& path);
     bool isChapterSkippable(int index);
+    
+    // Image path resolution
+    std::string resolveImagePath(const std::string& src);
 };
