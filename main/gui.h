@@ -7,12 +7,15 @@
 #include "sdkconfig.h"
 
 enum class AppState {
+    MAIN_MENU,      // New main menu with 6 buttons
     LIBRARY,
     READER,
     WIFI_CONFIG,
-    SETTINGS,
+    SETTINGS,       // Standalone settings (from main menu)
+    BOOK_SETTINGS,  // In-book settings overlay
     WIFI_SCAN,
-    WIFI_PASSWORD
+    WIFI_PASSWORD,
+    FAVORITES       // Favorites-only book list
 };
 
 struct RenderRequest {
@@ -63,12 +66,16 @@ public:
     void backgroundIndexerTaskLoop();
 
 private:
-    AppState currentState = AppState::LIBRARY;
-    AppState previousState = AppState::LIBRARY; // For returning from settings
+    AppState currentState = AppState::MAIN_MENU;
+    AppState previousState = AppState::MAIN_MENU; // For returning from settings
     bool needsRedraw = true;
     BookEntry currentBook;
     struct PageInfo { int current = 1; int total = 1; };
     bool isRTLDocument = false;
+    
+    // Last book info for main menu
+    int lastBookId = -1;
+    std::string lastBookTitle;
     
     // Search and Filter State
     std::string searchQuery;           // Current search text
@@ -139,10 +146,12 @@ private:
     void drawStatusBar(LovyanGFX* target = nullptr);
     void drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage);
     void drawSleepSymbol(const char* symbol);
-    void drawLibrary();
+    void drawMainMenu();        // New main menu with 6 buttons
+    void drawLibrary(bool favoritesOnly = false);  // Book list with optional favorites filter
     void drawSearchBar(LovyanGFX* target);
     void drawKeyboard(LovyanGFX* target);
-    void drawBookSettings();  // Half-page settings for book in reader
+    void drawBookSettings();  // Half-page settings for book in reader (overlay)
+    void drawStandaloneSettings(); // Full-page settings (from main menu)
     void drawReader(bool flush = true);
     void drawWifiConfig();
     void drawSettings();
@@ -150,11 +159,14 @@ private:
     void drawWifiPassword();
     
     void handleTouch();
+    void handleButtonPress();   // Handle hardware button press (long press = shutdown)
     void processReaderTap(int x, int y, bool isDouble);
+    void onMainMenuClick(int x, int y);  // Handle main menu clicks
     void onWifiScanClick(int x, int y);
     void onWifiPasswordClick(int x, int y);
     void onLibraryClick(int x, int y);
     void onKeyboardClick(int x, int y);
+    void onSettingsClick(int x, int y);  // Handle standalone settings clicks
 
     void processText(std::string &text);
     

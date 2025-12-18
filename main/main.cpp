@@ -166,6 +166,31 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    // Load timezone from NVS early - required for correct time display on RTC
+    {
+        char tz[64] = {0};
+        nvs_handle_t my_handle;
+        if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK) {
+            size_t required_size = sizeof(tz);
+            if (nvs_get_str(my_handle, "timezone", tz, &required_size) == ESP_OK) {
+                ESP_LOGI(TAG, "Loaded timezone from NVS on boot: %s", tz);
+                setenv("TZ", tz, 1);
+                tzset();
+            } else {
+                // Default to Jerusalem if not set
+                const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+                ESP_LOGI(TAG, "Timezone not set, using default: %s", defaultTz);
+                setenv("TZ", defaultTz, 1);
+                tzset();
+            }
+            nvs_close(my_handle);
+        } else {
+            const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+            setenv("TZ", defaultTz, 1);
+            tzset();
+        }
+    }
+
     // Initialize SD Card BEFORE M5Unified to avoid SPI conflicts
     // M5Paper SD card pins: MOSI=12, MISO=13, CLK=14, CS=4
     // ESP_LOGI(TAG, "Initializing SD card");
@@ -411,15 +436,62 @@ extern "C" void app_main(void)
     {
         M5.update();
 
-        // Check buttons for restart
-        if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed() || M5.BtnPWR.wasClicked())
+        // Check for long press on PWR button (or BtnA for devices without PWR button)
+        // Long press = deep sleep shutdown (no timer, only wake on another button press)
+        static uint32_t buttonPressStart = 0;
+        static bool buttonLongPressHandled = false;
+        const uint32_t LONG_PRESS_MS = 2000;  // 2 seconds for long press
+        
+        bool buttonPressed = M5.BtnPWR.isPressed() || M5.BtnA.isPressed();
+        
+        if (buttonPressed)
         {
-            ESP_LOGI(TAG, "Button pressed - Restarting...");
-            M5.Display.clear();
-            M5.Display.setCursor(0, 100);
-            M5.Display.println("Restarting...");
-            vTaskDelay(200 / portTICK_PERIOD_MS);
-            esp_restart();
+            if (buttonPressStart == 0)
+            {
+                buttonPressStart = (uint32_t)(esp_timer_get_time() / 1000);
+                buttonLongPressHandled = false;
+            }
+            else if (!buttonLongPressHandled)
+            {
+                uint32_t pressDuration = (uint32_t)(esp_timer_get_time() / 1000) - buttonPressStart;
+                if (pressDuration >= LONG_PRESS_MS)
+                {
+                    buttonLongPressHandled = true;
+                    ESP_LOGI(TAG, "Long button press detected - entering deep sleep shutdown");
+                    
+                    // Show shutdown message
+                    M5.Display.fillScreen(TFT_WHITE);
+                    M5.Display.setFont(&lgfx::v1::fonts::Font4);
+                    M5.Display.setTextSize(1.0f);
+                    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+                    M5.Display.setTextDatum(textdatum_t::middle_center);
+                    M5.Display.drawString("Shutting down...", M5.Display.width() / 2, M5.Display.height() / 2);
+                    M5.Display.display();
+                    M5.Display.waitDisplay();
+                    
+                    vTaskDelay(500 / portTICK_PERIOD_MS);
+                    
+                    // Enter deep sleep with no timer - only button wake
+                    GUI::enterDeepSleepShutdown();
+                    // Should not return
+                }
+            }
+        }
+        else
+        {
+            // Button released
+            if (buttonPressStart > 0 && !buttonLongPressHandled)
+            {
+                // Short press - restart (existing behavior)
+                ESP_LOGI(TAG, "Short button press - Restarting...");
+                M5.Display.clear();
+                M5.Display.setCursor(0, 100);
+                M5.Display.println("Restarting...");
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+                esp_restart();
+            }
+            buttonPressStart = 0;
+            buttonLongPressHandled = false;
         }
 
         gui.setWifiStatus(wifiManager.isConnected(), wifiManager.getRssi());
