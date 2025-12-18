@@ -3907,16 +3907,16 @@ void GUI::ensureHebrewFontLoaded()
         // For now, let's just rely on system malloc. If PSRAM is configured, large blocks go there.
         // But if not, we might fail.
 
-        try
-        {
+        //try
+        //{
             fontDataHebrew.resize(size);
-        }
-        catch (const std::bad_alloc &e)
-        {
-            ESP_LOGE(TAG, "Failed to allocate memory for Hebrew font (%u bytes)", (unsigned int)size);
-            fclose(f);
-            return;
-        }
+        //}
+        //catch (const std::bad_alloc &e)
+        //{
+         //   ESP_LOGE(TAG, "Failed to allocate memory for Hebrew font (%u bytes)", (unsigned int)size);
+         //   fclose(f);
+         //   return;
+       // }
 
         size_t read = fread(fontDataHebrew.data(), 1, size, f);
         fclose(f);
@@ -3959,16 +3959,16 @@ void GUI::ensureArabicFontLoaded()
         size_t size = ftell(f);
         fseek(f, 0, SEEK_SET);
 
-        try
-        {
+        //try
+        //{
             fontDataArabic.resize(size);
-        }
-        catch (const std::bad_alloc &e)
-        {
-            ESP_LOGE(TAG, "Failed to allocate memory for Arabic font (%u bytes)", (unsigned int)size);
-            fclose(f);
-            return;
-        }
+        //}
+        //catch (const std::bad_alloc &e)
+        //{
+        //    ESP_LOGE(TAG, "Failed to allocate memory for Arabic font (%u bytes)", (unsigned int)size);
+        //    fclose(f);
+         //   return;
+        //}
 
         size_t read = fread(fontDataArabic.data(), 1, size, f);
         fclose(f);

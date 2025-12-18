@@ -149,6 +149,15 @@ std::vector<std::string> WifiManager::scanNetworks() {
         esp_wifi_start();
     }
 
+#ifdef CONFIG_IDF_TARGET_ESP32
+    // On ESP32, ensure WiFi is started even if mode is not NULL
+    // This fixes ESP_FAIL if WiFi was stopped but mode was preserved
+    esp_err_t start_ret = esp_wifi_start();
+    if (start_ret != ESP_OK && start_ret != ESP_ERR_WIFI_ALREADY_STARTED) {
+        ESP_LOGW(TAG, "esp_wifi_start failed: %s", esp_err_to_name(start_ret));
+    }
+#endif
+
     wifi_scan_config_t scan_config = {0};
     scan_config.show_hidden = true;
     scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
