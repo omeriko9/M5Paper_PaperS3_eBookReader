@@ -94,6 +94,16 @@ public:
     void playTone(int frequency, int duration);
 
     /**
+     * @brief Play startup sound sequence
+     */
+    void playStartupSound();
+
+    /**
+     * @brief Play shutdown sound sequence
+     */
+    void playShutdownSound();
+
+    /**
      * @brief Set buzzer enabled state
      */
     void setBuzzerEnabled(bool enabled);

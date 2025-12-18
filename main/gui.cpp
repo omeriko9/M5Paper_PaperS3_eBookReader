@@ -594,7 +594,18 @@ void GUI::init(bool isWakeFromSleep)
 
     loadSettings();
     loadFonts();
-    bookIndex.init(isWakeFromSleep);
+    
+    // Play startup sound
+    deviceHAL.playStartupSound();
+    
+    bookIndex.init(isWakeFromSleep, [](int current, int total, const char* msg) {
+        M5.Display.fillScreen(TFT_WHITE);
+        M5.Display.setTextSize(1.3f);
+        M5.Display.setTextColor(TFT_BLACK);
+        M5.Display.setTextDatum(textdatum_t::middle_center);
+        M5.Display.drawString(msg, M5.Display.width() / 2, M5.Display.height() / 2);
+        M5.Display.display();
+    });
     resetPageInfoCache();
 
     M5.Display.setTextColor(TFT_BLACK);
@@ -2350,11 +2361,11 @@ void GUI::drawMainMenu()
     int availableH = screenH - STATUS_BAR_HEIGHT - 20; // Leave margin at bottom
     int availableW = screenW - 20; // 10px margin on each side
     
-    int cols = 2;
-    int rows = 3;
+    int cols = (screenW > screenH) ? 3 : 2;
+    int rows = (screenW > screenH) ? 2 : 3;
     int btnGap = 12;
-    int btnW = (availableW - btnGap) / cols;
-    int btnH = (availableH - btnGap * 2) / rows;
+    int btnW = (availableW - btnGap * (cols - 1)) / cols;
+    int btnH = (availableH - btnGap * (rows - 1)) / rows;
     
     int startX = 10;
     int startY = STATUS_BAR_HEIGHT + 10;

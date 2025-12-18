@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <functional>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -19,7 +20,10 @@ struct BookEntry {
 class BookIndex {
 public:
     BookIndex();
-    bool init(bool fastMode = false);
+    // Callback for progress updates: (current, total, message)
+    using ProgressCallback = std::function<void(int, int, const char*)>;
+    
+    bool init(bool fastMode = false, ProgressCallback callback = nullptr);
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);
     void removeBook(int id);
@@ -27,7 +31,7 @@ public:
     std::vector<BookEntry> getBooks();
     std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);
     BookEntry getBook(int id);
-    bool scanDirectory(const char* basePath);
+    bool scanDirectory(const char* basePath, ProgressCallback callback = nullptr);
     
     // Favorites management
     void setFavorite(int id, bool favorite);

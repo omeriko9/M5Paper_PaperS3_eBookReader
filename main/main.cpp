@@ -459,6 +459,9 @@ extern "C" void app_main(void)
                     buttonLongPressHandled = true;
                     ESP_LOGI(TAG, "Long button press detected - entering deep sleep shutdown");
                     
+                    // Play shutdown sound
+                    deviceHAL.playShutdownSound();
+                    
                     // Show shutdown message
                     M5.Display.fillScreen(TFT_WHITE);
                     M5.Display.setFont(&lgfx::v1::fonts::Font4);

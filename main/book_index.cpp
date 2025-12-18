@@ -16,7 +16,7 @@ BookIndex::BookIndex() {
     mutex = xSemaphoreCreateRecursiveMutex();
 }
 
-bool BookIndex::init(bool fastMode)
+bool BookIndex::init(bool fastMode, ProgressCallback callback)
 {
     if (!mutex) mutex = xSemaphoreCreateRecursiveMutex();
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
@@ -25,13 +25,13 @@ bool BookIndex::init(bool fastMode)
     load();
     if (!fastMode)
     {
-        foundNewBooks |= scanDirectory("/spiffs");
+        foundNewBooks |= scanDirectory("/spiffs", callback);
         
         DeviceHAL& hal = DeviceHAL::getInstance();
         if (hal.isSDCardMounted()) {
             const char* sdPath = hal.getSDCardMountPoint();
             if (sdPath) {
-                foundNewBooks |= scanDirectory(sdPath);
+                foundNewBooks |= scanDirectory(sdPath, callback);
             }
         }
         save();
@@ -192,12 +192,15 @@ bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>&
     return true;
 }
 
-bool BookIndex::scanDirectory(const char *basePath)
+bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
 {
     // Private helper or public? Public. Needs lock.
     // But init calls it. Recursive mutex handles this.
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     bool foundNewBooks = false;
+
+    // First pass: count epub files
+    int totalFiles = 0;
     DIR *dir = opendir(basePath);
     if (!dir)
     {
@@ -210,12 +213,43 @@ bool BookIndex::scanDirectory(const char *basePath)
     while ((entry = readdir(dir)) != NULL)
     {
         if (entry->d_type == DT_REG)
+        {
+            std::string fname = entry->d_name;
+            if (fname.length() > 5 &&
+                (fname.substr(fname.length() - 5) == ".epub" || fname.substr(fname.length() - 5) == ".EPUB"))
+            {
+                totalFiles++;
+            }
+        }
+    }
+    closedir(dir);
+
+    // Second pass: process files
+    dir = opendir(basePath);
+    if (!dir)
+    {
+        xSemaphoreGiveRecursive(mutex);
+        return false;
+    }
+
+    int processedFiles = 0;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (entry->d_type == DT_REG)
         { // Regular file
             std::string fname = entry->d_name;
             // Check extension .epub
             if (fname.length() > 5 &&
                 (fname.substr(fname.length() - 5) == ".epub" || fname.substr(fname.length() - 5) == ".EPUB"))
             {
+                processedFiles++;
+                
+                // Update progress every 20 books or if it's the last one
+                if (callback && (processedFiles % 20 == 0 || processedFiles == totalFiles)) {
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Indexing %d out of %d books...", processedFiles, totalFiles);
+                    callback(processedFiles, totalFiles, msg);
+                }
 
                 std::string fullPath = std::string(basePath) + "/" + fname;
 

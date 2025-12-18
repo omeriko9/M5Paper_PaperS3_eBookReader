@@ -5,6 +5,8 @@
 #include "esp_sleep.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
 #include "driver/ledc.h"
@@ -213,6 +215,30 @@ void DeviceHAL::playTone(int frequency, int duration) {
 #else
     (void)frequency;
     (void)duration;
+#endif
+}
+
+void DeviceHAL::playStartupSound() {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+    if (!m_buzzerEnabled) return;
+    // Ascending sequence
+    playTone(1000, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    playTone(1500, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    playTone(2000, 100);
+#endif
+}
+
+void DeviceHAL::playShutdownSound() {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+    if (!m_buzzerEnabled) return;
+    // Descending sequence ("bye bye")
+    playTone(2000, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    playTone(1500, 100);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    playTone(1000, 100);
 #endif
 }
 
