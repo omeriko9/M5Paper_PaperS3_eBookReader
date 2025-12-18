@@ -129,7 +129,7 @@ size_t GUI::getCurrentOffset() const
     return currentTextOffset;
 }
 static constexpr int PAGEINFO_ESTIMATE_MIN_CHARS = 50;
-static constexpr uint64_t LIGHT_SLEEP_TO_DEEP_SLEEP_US = 2ULL * 60ULL * 1000000ULL; // 2 minutes
+static constexpr uint64_t LIGHT_SLEEP_TO_DEEP_SLEEP_US = 5ULL * 60ULL * 1000000ULL; // 5 minutes
 
 // Helper to split string by delimiters but keep delimiters if needed
 // For word wrapping, we split by space.
@@ -185,17 +185,21 @@ static bool isArabic(const std::string &word)
         // Presentation forms (FB50-FEFF) start with 0xEF 0xAC-0xEF 0xBB
         if (c >= 0xD8 && c <= 0xDB)
             return true;
-        if (c == 0xEF) {
-            if (i + 1 < word.length()) {
-                unsigned char c2 = (unsigned char)word[i+1];
-                if (c2 >= 0xAC && c2 <= 0xBB) return true;
+        if (c == 0xEF)
+        {
+            if (i + 1 < word.length())
+            {
+                unsigned char c2 = (unsigned char)word[i + 1];
+                if (c2 >= 0xAC && c2 <= 0xBB)
+                    return true;
             }
         }
     }
     return false;
 }
 
-struct ArabicForm {
+struct ArabicForm
+{
     uint16_t code;
     uint16_t isolated;
     uint16_t initial;
@@ -242,65 +246,102 @@ static const ArabicForm arabicForms[] = {
     {0x064A, 0xFEF1, 0xFEF3, 0xFEF4, 0xFEF2}, // Yeh
 };
 
-static bool canConnectLeft(uint16_t code) {
-    for (const auto& f : arabicForms) {
-        if (f.code == code) {
+static bool canConnectLeft(uint16_t code)
+{
+    for (const auto &f : arabicForms)
+    {
+        if (f.code == code)
+        {
             return f.initial != f.isolated;
         }
     }
     return false;
 }
 
-static bool canConnectRight(uint16_t code) {
-    for (const auto& f : arabicForms) {
-        if (f.code == code) {
+static bool canConnectRight(uint16_t code)
+{
+    for (const auto &f : arabicForms)
+    {
+        if (f.code == code)
+        {
             return f.final != f.isolated;
         }
     }
     return false;
 }
 
-static std::string reshapeArabic(const std::string &text) {
+static std::string reshapeArabic(const std::string &text)
+{
     std::vector<uint16_t> codes;
-    for (size_t i = 0; i < text.length(); ) {
+    for (size_t i = 0; i < text.length();)
+    {
         unsigned char c = (unsigned char)text[i];
         uint16_t code = 0;
-        if ((c & 0x80) == 0) { code = c; i++; }
-        else if ((c & 0xE0) == 0xC0) { code = ((c & 0x1F) << 6) | (text[i+1] & 0x3F); i += 2; }
-        else if ((c & 0xF0) == 0xE0) { code = ((c & 0x0F) << 12) | ((text[i+1] & 0x3F) << 6) | (text[i+2] & 0x3F); i += 3; }
-        else i++; // Skip 4-byte for now
+        if ((c & 0x80) == 0)
+        {
+            code = c;
+            i++;
+        }
+        else if ((c & 0xE0) == 0xC0)
+        {
+            code = ((c & 0x1F) << 6) | (text[i + 1] & 0x3F);
+            i += 2;
+        }
+        else if ((c & 0xF0) == 0xE0)
+        {
+            code = ((c & 0x0F) << 12) | ((text[i + 1] & 0x3F) << 6) | (text[i + 2] & 0x3F);
+            i += 3;
+        }
+        else
+            i++; // Skip 4-byte for now
         codes.push_back(code);
     }
 
     std::vector<uint16_t> reshaped;
-    for (size_t i = 0; i < codes.size(); i++) {
+    for (size_t i = 0; i < codes.size(); i++)
+    {
         uint16_t code = codes[i];
-        const ArabicForm* form = nullptr;
-        for (const auto& f : arabicForms) {
-            if (f.code == code) { form = &f; break; }
+        const ArabicForm *form = nullptr;
+        for (const auto &f : arabicForms)
+        {
+            if (f.code == code)
+            {
+                form = &f;
+                break;
+            }
         }
 
-        if (!form) {
+        if (!form)
+        {
             reshaped.push_back(code);
             continue;
         }
 
-        bool prevConnects = (i > 0 && canConnectLeft(codes[i-1]));
-        bool nextConnects = (i < codes.size() - 1 && canConnectRight(codes[i+1]));
+        bool prevConnects = (i > 0 && canConnectLeft(codes[i - 1]));
+        bool nextConnects = (i < codes.size() - 1 && canConnectRight(codes[i + 1]));
 
-        if (prevConnects && nextConnects) reshaped.push_back(form->medial);
-        else if (prevConnects) reshaped.push_back(form->final);
-        else if (nextConnects) reshaped.push_back(form->initial);
-        else reshaped.push_back(form->isolated);
+        if (prevConnects && nextConnects)
+            reshaped.push_back(form->medial);
+        else if (prevConnects)
+            reshaped.push_back(form->final);
+        else if (nextConnects)
+            reshaped.push_back(form->initial);
+        else
+            reshaped.push_back(form->isolated);
     }
 
     std::string result;
-    for (uint16_t code : reshaped) {
-        if (code < 0x80) result += (char)code;
-        else if (code < 0x800) {
+    for (uint16_t code : reshaped)
+    {
+        if (code < 0x80)
+            result += (char)code;
+        else if (code < 0x800)
+        {
             result += (char)(0xC0 | (code >> 6));
             result += (char)(0x80 | (code & 0x3F));
-        } else {
+        }
+        else
+        {
             result += (char)(0xE0 | (code >> 12));
             result += (char)(0x80 | ((code >> 6) & 0x3F));
             result += (char)(0x80 | (code & 0x3F));
@@ -450,11 +491,12 @@ static std::string processTextForDisplay(const std::string &text)
                 pos += 1;
             }
 
-            if (isAra) {
+            if (isAra)
+            {
                 // Arabic needs shaping before reversing
                 processedWord = reshapeArabic(processedWord);
             }
-            
+
             result += reverseHebrewWord(processedWord);
         }
         else
@@ -988,39 +1030,28 @@ void GUI::update()
         lastActivityTime = now; // Reset idle timer if web is active
     }
 
-    // Library Mode Logic
-    if (currentState == AppState::LIBRARY)
+    // Unified Sleep and WebServer Logic
+    uint32_t idleTimeout = 5 * 60 * 1000; // Default 5 minutes for Library and other states
+    if (currentState == AppState::READER || currentState == AppState::SETTINGS)
     {
-        // WebServer active for 5 minutes, but don't sleep if there's recent HTTP activity
-        if (now - lastActivityTime > 5 * 60 * 1000 && !recentHttpActivity)
-        {
-            if (webServerEnabled)
-            {
-                ESP_LOGI(TAG, "Library idle timeout: Stopping WebServer");
-                setWebServerEnabled(false);
-            }
-            // Also go to sleep if idle for 5 minutes
-            goToSleep();
-            lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
-        }
-        else
-        {
-            if (!webServerEnabled)
-            {
-                setWebServerEnabled(true);
-            }
-        }
+        idleTimeout = 60 * 1000; // 60 seconds for reader/settings
     }
-    // Reader Mode Logic
-    else if (currentState == AppState::READER || currentState == AppState::SETTINGS)
+
+    if (now - lastActivityTime > idleTimeout && !recentHttpActivity)
     {
-        // Active for 60 seconds
-        if (now - lastActivityTime > 60 * 1000)
+        if (currentState == AppState::LIBRARY && webServerEnabled)
         {
-            goToSleep();
-            // After waking up, update lastActivityTime so we don't loop immediately
-            lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+            ESP_LOGI(TAG, "Library idle timeout: Stopping WebServer");
+            setWebServerEnabled(false);
         }
+        goToSleep();
+        // After waking up, update lastActivityTime so we don't loop immediately
+        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+    }
+    else if (currentState == AppState::LIBRARY && !webServerEnabled)
+    {
+        // If we are in library and not idle yet, ensure web server is on
+        setWebServerEnabled(true);
     }
 
     if (fontChanged)
@@ -1538,7 +1569,8 @@ void GUI::drawKeyboard(LovyanGFX *target)
     target->fillRect(langX, y, langW, keyH, langFill);
     target->drawRect(langX, y, langW, keyH, TFT_BLACK);
     target->setTextColor(TFT_BLACK, langFill);
-    drawStringMixed(keyboardHebrew ? "EN" : "עב", langX + langW / 2, y + keyH / 2, (M5Canvas *)target, keyboardHebrew ? 1.3f : 1.1f);
+    // Pass false for respectUserFont to ensure we restore to Font2
+    drawStringMixed(keyboardHebrew ? "EN" : "עב", langX + langW / 2, y + keyH / 2, (M5Canvas *)target, keyboardHebrew ? 1.3f : 1.1f, false, false);
 
     // Backspace
     int bsX = langX + langW + padding;
@@ -1608,6 +1640,10 @@ void GUI::drawLibrary()
 
     for (int i = startIdx; i < endIdx; ++i)
     {
+        // Ensure font is reset to system font for each item to prevent drift
+        target->setFont(&lgfx::v1::fonts::Font2);
+        target->setTextSize(itemSize);
+
         const auto &book = books[i];
         // Truncate display title if too long (UTF-8 aware)
         std::string displayTitle = book.title;
@@ -1627,7 +1663,8 @@ void GUI::drawLibrary()
         int titleX = 20 + target->textWidth("- ");
         // Note: drawStringMixed takes M5Canvas*, so we pass sprite (which might be null)
         // If sprite is null, drawStringMixed uses M5.Display.
-        drawStringMixed(displayTitle, titleX, y, sprite, itemSize);
+        // Pass false for respectUserFont to ensure we restore to Font2 (Library font) instead of Reader font
+        drawStringMixed(displayTitle, titleX, y, sprite, itemSize, false, false);
 
         y += LIBRARY_LINE_HEIGHT;
     }
@@ -2275,8 +2312,7 @@ void GUI::goToSleep()
     // M5PaperS3 specific: 5 minutes light sleep with GPIO 48 wake-up
     // Touch interrupt is connected to GPIO48 which is NOT an RTC GPIO,
     // therefore touch wakeup only works with light sleep.
-    uint64_t s3_light_sleep_us = 5ULL * 60ULL * 1000000ULL;
-    esp_sleep_enable_timer_wakeup(s3_light_sleep_us);
+    esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_TO_DEEP_SLEEP_US);
     gpio_wakeup_enable((gpio_num_t)48, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
     esp_light_sleep_start();
@@ -3397,7 +3433,50 @@ void GUI::ensureArabicFontLoaded()
     }
 }
 
-void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size, bool isProcessed)
+void GUI::processText(std::string &text)
+{
+    // Currently no special processing needed
+    // Placeholder for future text processing if needed
+    // Replace HTML entities
+    size_t pos = 0;
+    while ((pos = text.find("&quot;", pos)) != std::string::npos)
+    {
+        text.replace(pos, 6, "\"");
+        pos += 1;
+    }
+    pos = 0;
+    while ((pos = text.find("&amp;", pos)) != std::string::npos)
+    {
+        text.replace(pos, 5, "&");
+        pos += 1;
+    }
+    pos = 0;
+    while ((pos = text.find("&lt;", pos)) != std::string::npos)
+    {
+        text.replace(pos, 4, "<");
+        pos += 1;
+    }
+    pos = 0;
+    while ((pos = text.find("&gt;", pos)) != std::string::npos)
+    {
+        text.replace(pos, 4, ">");
+        pos += 1;
+    }
+    pos = 0;
+    while ((pos = text.find("&apos;", pos)) != std::string::npos)
+    {
+        text.replace(pos, 6, "'");
+        pos += 1;
+    }
+    pos = 0;
+    while ((pos = text.find("&#160;", pos)) != std::string::npos)
+    {
+        text.replace(pos, 6, " ");
+        pos += 1;
+    }
+}
+
+void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size, bool isProcessed, bool respectUserFont)
 {
     LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
     float effectiveSize = (size > 0.0f) ? size : fontSize;
@@ -3407,33 +3486,63 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
 
     if (isHeb || isAra)
     {
-        if (isHeb) ensureHebrewFontLoaded();
-        else ensureArabicFontLoaded();
+        if (isHeb)
+            ensureHebrewFontLoaded();
+        else
+            ensureArabicFontLoaded();
 
-        const uint8_t* fontPtr = isHeb ? fontDataHebrew.data() : fontDataArabic.data();
+        const uint8_t *fontPtr = isHeb ? fontDataHebrew.data() : fontDataArabic.data();
         bool fontEmpty = isHeb ? fontDataHebrew.empty() : fontDataArabic.empty();
-        const char* fontName = isHeb ? "Hebrew" : "Arabic";
+        const char *fontName = isHeb ? "Hebrew" : "Arabic";
 
         if (!fontEmpty)
         {
             bool swapped = false;
             // Only swap if not already using the correct font
-            if (currentFont != fontName)
+            // If respectUserFont is false, we assume the current font is NOT the user font (e.g. Library mode),
+            // so we MUST load the VLW font.
+            if (!respectUserFont || currentFont != fontName)
             {
                 gfx->loadFont(fontPtr);
                 swapped = true;
             }
 
+            // Scale down Hebrew/Arabic in UI mode (Library/Keyboard) if requested
+            // User requested ~1/3 size for Library.
+            // itemSize is 1.8. 1.8 * 0.4 = 0.72.
+            // In Keyboard, size is 1.1 or 1.3. 1.3 * 0.4 = 0.52 (too small?).
+            // Let's use a fixed scaling factor for UI mode.
+            float drawSize = effectiveSize;
+            if (!respectUserFont)
+            {
+                drawSize = effectiveSize * 0.45f;
+            }
+
             std::string processedText = isProcessed ? text : processTextForDisplay(text);
 
-            gfx->setTextSize(effectiveSize);
+            gfx->setTextSize(drawSize);
             gfx->drawString(processedText.c_str(), x, y);
 
             if (swapped)
             {
-                if (currentFont != "Default" && !fontData.empty())
+                if (respectUserFont)
                 {
-                    gfx->loadFont(fontData.data());
+                    if (currentFont != "Default" && !fontData.empty())
+                    {
+                        gfx->loadFont(fontData.data());
+                    }
+                    else if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+                    {
+                        gfx->loadFont(fontDataHebrew.data());
+                    }
+                    else if (currentFont == "Arabic" && !fontDataArabic.empty())
+                    {
+                        gfx->loadFont(fontDataArabic.data());
+                    }
+                    else
+                    {
+                        gfx->unloadFont();
+                    }
                 }
                 else
                 {
@@ -3457,43 +3566,7 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
         std::string processedText = text;
         if (!isProcessed)
         {
-            // Replace HTML entities
-            size_t pos = 0;
-            while ((pos = processedText.find("&quot;", pos)) != std::string::npos)
-            {
-                processedText.replace(pos, 6, "\"");
-                pos += 1;
-            }
-            pos = 0;
-            while ((pos = processedText.find("&amp;", pos)) != std::string::npos)
-            {
-                processedText.replace(pos, 5, "&");
-                pos += 1;
-            }
-            pos = 0;
-            while ((pos = processedText.find("&lt;", pos)) != std::string::npos)
-            {
-                processedText.replace(pos, 4, "<");
-                pos += 1;
-            }
-            pos = 0;
-            while ((pos = processedText.find("&gt;", pos)) != std::string::npos)
-            {
-                processedText.replace(pos, 4, ">");
-                pos += 1;
-            }
-            pos = 0;
-            while ((pos = processedText.find("&apos;", pos)) != std::string::npos)
-            {
-                processedText.replace(pos, 6, "'");
-                pos += 1;
-            }
-            pos = 0;
-            while ((pos = processedText.find("&#160;", pos)) != std::string::npos)
-            {
-                processedText.replace(pos, 6, " ");
-                pos += 1;
-            }
+            processText(processedText);
         }
 
         gfx->setTextSize(effectiveSize);

@@ -155,11 +155,13 @@ private:
     void onWifiPasswordClick(int x, int y);
     void onLibraryClick(int x, int y);
     void onKeyboardClick(int x, int y);
+
+    void processText(std::string &text);
     
     void loadFonts();
     void ensureHebrewFontLoaded();
     void ensureArabicFontLoaded();
-    void drawStringMixed(const std::string &text, int x, int y, M5Canvas *target = nullptr, float size = -1.0f, bool isProcessed = false);
+    void drawStringMixed(const std::string &text, int x, int y, M5Canvas *target = nullptr, float size = -1.0f, bool isProcessed = false, bool respectUserFont = true);
     
     void saveSettings();
     void loadSettings();
