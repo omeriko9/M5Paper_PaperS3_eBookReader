@@ -1,6 +1,7 @@
 #include "book_index.h"
 #include "epub_loader.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include <stdio.h>
 #include <algorithm>
 #include <dirent.h>
@@ -21,25 +22,32 @@ bool BookIndex::init(bool fastMode, ProgressCallback callback)
     if (!mutex) mutex = xSemaphoreCreateRecursiveMutex();
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     
-    bool foundNewBooks = false;
+    // Only load the index from disk. Scanning is now done in background.
     load();
-    if (!fastMode)
-    {
-        foundNewBooks |= scanDirectory("/spiffs", callback);
-        
-        DeviceHAL& hal = DeviceHAL::getInstance();
-        if (hal.isSDCardMounted()) {
-            const char* sdPath = hal.getSDCardMountPoint();
-            if (sdPath) {
-                foundNewBooks |= scanDirectory(sdPath, callback);
-            }
+    
+    xSemaphoreGiveRecursive(mutex);
+    return false; // No new books found during init
+}
+
+bool BookIndex::scanForNewBooks(ProgressCallback callback)
+{
+    bool foundNewBooks = false;
+    foundNewBooks |= scanDirectory("/spiffs", callback);
+    
+    DeviceHAL& hal = DeviceHAL::getInstance();
+    if (hal.isSDCardMounted()) {
+        const char* sdPath = hal.getSDCardMountPoint();
+        if (sdPath) {
+            foundNewBooks |= scanDirectory(sdPath, callback);
         }
-        save();
     }
     
-    // checkMetricsExistence(); // Removed to avoid WDT timeout on wake
-
-    xSemaphoreGiveRecursive(mutex);
+    if (foundNewBooks) {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        save();
+        xSemaphoreGiveRecursive(mutex);
+    }
+    
     return foundNewBooks;
 }
 
@@ -194,24 +202,22 @@ bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>&
 
 bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
 {
-    // Private helper or public? Public. Needs lock.
-    // But init calls it. Recursive mutex handles this.
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    bool foundNewBooks = false;
-
-    // First pass: count epub files
+    // We don't take the mutex for the whole function anymore to avoid freezing the UI.
+    // Instead, we take it only when accessing shared data.
+    
+    // First pass: count epub files (no lock needed for filesystem)
     int totalFiles = 0;
     DIR *dir = opendir(basePath);
     if (!dir)
     {
         ESP_LOGW(TAG, "Failed to open directory: %s", basePath);
-        xSemaphoreGiveRecursive(mutex);
         return false;
     }
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL)
     {
+        esp_task_wdt_reset();
         if (entry->d_type == DT_REG)
         {
             std::string fname = entry->d_name;
@@ -221,6 +227,8 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
                 totalFiles++;
             }
         }
+        // Yield to let UI task run
+        if (totalFiles % 10 == 0) vTaskDelay(1);
     }
     closedir(dir);
 
@@ -228,13 +236,30 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     dir = opendir(basePath);
     if (!dir)
     {
-        xSemaphoreGiveRecursive(mutex);
         return false;
     }
 
+    // Pre-process existing books for faster lookup
+    // Take lock briefly to build the map
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    std::vector<std::pair<std::string, size_t>> bookMap;
+    bookMap.reserve(books.size());
+    for (size_t i = 0; i < books.size(); ++i) {
+        std::string p = books[i].path;
+        size_t lastSlash = p.find_last_of('/');
+        std::string fname = (lastSlash != std::string::npos) ? p.substr(lastSlash + 1) : p;
+        bookMap.push_back({fname, i});
+    }
+    xSemaphoreGiveRecursive(mutex);
+
+    bool foundNewBooks = false;
     int processedFiles = 0;
     while ((entry = readdir(dir)) != NULL)
     {
+        esp_task_wdt_reset();
+        // Yield to let UI task run
+        vTaskDelay(1);
+        
         if (entry->d_type == DT_REG)
         { // Regular file
             std::string fname = entry->d_name;
@@ -263,43 +288,65 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
 
                 // Check if already exists in books
                 bool found = false;
-                for (auto &book : books)
-                {
-                    if (book.path == fullPath)
-                    {
+                
+                // Try to find by filename using our map
+                for (const auto& pair : bookMap) {
+                    if (pair.first == fname) {
                         found = true;
-                        // Check if file changed
-                        if (book.fileSize != currentSize || book.fileSize == 0)
-                        {
-                            ESP_LOGI(TAG, "Book changed or no size cached: %s", fname.c_str());
-                            // Reload title and author (metadata only, avoids chapter parsing)
-                            EpubLoader loader;
-                            if (loader.loadMetadataOnly(fullPath.c_str()))
-                            {
-                                std::string metaTitle = loader.getTitle();
-                                if (!metaTitle.empty() && metaTitle != "Unknown Title")
-                                {
-                                    book.title = metaTitle;
-                                }
-                                std::string metaAuthor = loader.getAuthor();
-                                book.author = metaAuthor;
-                                loader.close();
+                        
+                        // Lock only for checking/updating the specific book
+                        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+                        // Re-verify index validity (though we are the only writer)
+                        if (pair.second < books.size()) {
+                            BookEntry& book = books[pair.second];
+                            
+                            // Update path if it changed (e.g. mount point change)
+                            if (book.path != fullPath) {
+                                ESP_LOGI(TAG, "Updating book path from %s to %s", book.path.c_str(), fullPath.c_str());
+                                book.path = fullPath;
+                                foundNewBooks = true;
                             }
-                            book.fileSize = currentSize;
-                            foundNewBooks = true; // Treat changed book as "new" for refresh
+                            
+                            // Check size
+                            if (book.fileSize != currentSize || book.fileSize == 0) {
+                                ESP_LOGI(TAG, "Book changed or no size cached: %s", fname.c_str());
+                                // Release lock to do slow metadata loading
+                                xSemaphoreGiveRecursive(mutex);
+                                
+                                EpubLoader loader;
+                                std::string metaTitle, metaAuthor;
+                                if (loader.loadMetadataOnly(fullPath.c_str()))
+                                {
+                                    metaTitle = loader.getTitle();
+                                    metaAuthor = loader.getAuthor();
+                                    loader.close();
+                                }
+                                
+                                // Re-take lock to update
+                                xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+                                if (pair.second < books.size()) {
+                                    BookEntry& b = books[pair.second];
+                                    if (!metaTitle.empty() && metaTitle != "Unknown Title") b.title = metaTitle;
+                                    b.author = metaAuthor;
+                                    b.fileSize = currentSize;
+                                    foundNewBooks = true;
+                                }
+                            }
                         }
+                        xSemaphoreGiveRecursive(mutex);
                         break;
                     }
                 }
 
                 if (!found)
                 {
-                    int id = getNextId();
-                    // Use filename as title initially
+                    // New book found. Load metadata first (slow, no lock)
+                    int id = getNextId(); // This needs lock? Yes, usually. But we can guess or take lock briefly.
+                    // Actually getNextId iterates books.
+                    
                     std::string title = fname.substr(0, fname.length() - 5);
                     std::string bookAuthor;
 
-                    // Try to load title and author from metadata
                     EpubLoader loader;
                     if (loader.loadMetadataOnly(fullPath.c_str()))
                     {
@@ -312,16 +359,20 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
                         loader.close();
                     }
 
+                    // Now take lock to add to vector
+                    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+                    // Recalculate ID safely
+                    id = getNextId(); 
                     books.push_back({id, title, bookAuthor, fullPath, 0, 0, currentSize, false, false});
                     ESP_LOGI(TAG, "Found new book: %s by %s", title.c_str(), bookAuthor.c_str());
                     foundNewBooks = true;
+                    xSemaphoreGiveRecursive(mutex);
                 }
             }
         }
     }
     closedir(dir);
 
-    xSemaphoreGiveRecursive(mutex);
     return foundNewBooks;
 }
 
@@ -339,14 +390,20 @@ void BookIndex::load()
         return;
     }
 
-    char line[256];
+    char line[512]; // Increased buffer size
     while (fgets(line, sizeof(line), f))
     {
-        char *nl = strchr(line, '\n');
-        if (nl)
-            *nl = 0;
+        esp_task_wdt_reset();
+        // Strip newline and carriage return
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
+            line[len-1] = 0;
+            len--;
+        }
 
         std::string s(line);
+        if (s.empty()) continue;
+
         std::vector<std::string> parts;
         size_t start = 0;
         size_t end = s.find('|');
@@ -365,6 +422,7 @@ void BookIndex::load()
             int chapter = 0;
             size_t offset = 0;
             std::string path;
+            
 
             if (parts.size() >= 3)
                 chapter = atoi(parts[2].c_str());
@@ -400,12 +458,24 @@ void BookIndex::load()
             if (stat(path.c_str(), &st) == 0)
             {
                 books.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite});
+                // log the book
+                ESP_LOGI(TAG, "Loaded book: %s by %s", title.c_str(), author.c_str());
             }
         }
     }
 
     fclose(f);
     ESP_LOGI(TAG, "Loaded %d books", books.size());
+}
+
+static std::string sanitize(const std::string& s) {
+    std::string res = s;
+    for (char& c : res) {
+        if (c == '|') c = '-';
+        if (c == '\n') c = ' ';
+        if (c == '\r') c = ' ';
+    }
+    return res;
 }
 
 void BookIndex::save()
@@ -420,7 +490,17 @@ void BookIndex::save()
 
     for (const auto &book : books)
     {
-        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d\n", book.id, book.title.c_str(), book.currentChapter, (unsigned int)book.currentOffset, book.path.c_str(), (unsigned int)book.fileSize, book.hasMetrics ? 1 : 0, book.author.c_str(), book.isFavorite ? 1 : 0);
+        esp_task_wdt_reset();
+        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d\n", 
+            book.id, 
+            sanitize(book.title).c_str(), 
+            book.currentChapter, 
+            (unsigned int)book.currentOffset, 
+            book.path.c_str(), 
+            (unsigned int)book.fileSize, 
+            book.hasMetrics ? 1 : 0, 
+            sanitize(book.author).c_str(), 
+            book.isFavorite ? 1 : 0);
     }
     fclose(f);
 }

@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "ZIP";
 
@@ -79,6 +80,7 @@ bool ZipReader::parseCentralDirectory() {
 
     long currentPos = fileSize;
     while (currentPos > searchLimit) {
+        esp_task_wdt_reset();
         long readSize = BUF_SIZE;
         if (currentPos - readSize < searchLimit) {
             readSize = currentPos - searchLimit;
@@ -190,6 +192,7 @@ bool ZipReader::parseCentralDirectory() {
 
         // Yield occasionally so the idle task can reset the watchdog when reading large EPUBs
         if ((i & 0x0F) == 0) {
+            esp_task_wdt_reset();
             vTaskDelay(1);
         }
     }
@@ -325,6 +328,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
 }
 
 bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const char*, size_t, void*), void* context) {
+    esp_task_wdt_reset();
     if (files.find(filename) == files.end()) {
         ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
         return false;
@@ -334,6 +338,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
     FILE* f = fopen(filePath.c_str(), "rb");
     if (!f) return false;
 
+    esp_task_wdt_reset();
     // Go to Local File Header
     fseek(f, info.localHeaderOffset, SEEK_SET);
     
@@ -386,7 +391,10 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             }
 
             remaining -= bytesRead;
-            if ((remaining & 0x3FFF) == 0) vTaskDelay(1); // yield occasionally
+            if ((remaining & 0x3FFF) == 0) {
+                esp_task_wdt_reset();
+                vTaskDelay(1); // yield occasionally
+            }
         }
     } else if (info.compressionMethod == 8) {
         // Deflate streaming
@@ -433,7 +441,10 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             }
 
             // Yield occasionally
-            if ((strm.total_out & 0x3FFF) == 0) vTaskDelay(1);
+            if ((strm.total_out & 0x3FFF) == 0) {
+                esp_task_wdt_reset();
+                vTaskDelay(1);
+            }
         }
 
         inflateEnd(&strm);
@@ -460,6 +471,12 @@ bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>&
 
     ZipFileInfo& info = files[filename];
     
+    // Safety limit: don't extract files larger than 5MB to avoid OOM
+    if (info.uncompressedSize > 5 * 1024 * 1024) {
+        ESP_LOGW(TAG, "File too large to extract: %s (%u bytes)", filename.c_str(), (unsigned)info.uncompressedSize);
+        return false;
+    }
+
     // Pre-allocate for efficiency
     if (info.uncompressedSize > 0) {
         outData.reserve(info.uncompressedSize);
@@ -488,6 +505,81 @@ bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>&
     
     ESP_LOGI(TAG, "Extracted binary '%s': %u bytes", filename.c_str(), (unsigned)outData.size());
     return true;
+}
+
+size_t ZipReader::peekFile(const std::string& filename, uint8_t* outData, size_t size) {
+    if (files.find(filename) == files.end()) {
+        return 0;
+    }
+
+    ZipFileInfo& info = files[filename];
+    FILE* f = fopen(filePath.c_str(), "rb");
+    if (!f) return 0;
+
+    // Go to Local File Header
+    fseek(f, info.localHeaderOffset, SEEK_SET);
+    
+    uint32_t sig;
+    fread(&sig, 1, 4, f);
+    if (sig != LFH_SIGNATURE) {
+        fclose(f);
+        return 0;
+    }
+
+    // Skip to name length in LFH
+    fseek(f, 22, SEEK_CUR); // Skip to name len
+    uint16_t nameLen, extraLen;
+    fread(&nameLen, 1, 2, f);
+    fread(&extraLen, 1, 2, f);
+    
+    // Skip name and extra field to get to data
+    fseek(f, nameLen + extraLen, SEEK_CUR);
+    
+    size_t bytesRead = 0;
+    
+    if (info.compressionMethod == 0) {
+        // Stored
+        size_t toRead = size;
+        if (toRead > info.compressedSize) toRead = info.compressedSize;
+        bytesRead = fread(outData, 1, toRead, f);
+    } else if (info.compressionMethod == 8) {
+        // Deflate - need to inflate just enough
+        // We can't easily peek compressed data without inflating
+        // But we only need a few bytes, so we can use a small buffer
+        
+        constexpr size_t IN_CHUNK = 256; // Small chunk for header
+        uint8_t inBuf[IN_CHUNK];
+        
+        z_stream strm;
+        memset(&strm, 0, sizeof(strm));
+        if (inflateInit2(&strm, -MAX_WBITS) == Z_OK) {
+            strm.next_out = outData;
+            strm.avail_out = size;
+            
+            size_t remaining = info.compressedSize;
+            int ret = Z_OK;
+            
+            while (ret != Z_STREAM_END && strm.avail_out > 0) {
+                if (strm.avail_in == 0 && remaining > 0) {
+                    size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
+                    size_t r = fread(inBuf, 1, toRead, f);
+                    if (r == 0) break;
+                    remaining -= r;
+                    strm.next_in = inBuf;
+                    strm.avail_in = r;
+                }
+                
+                ret = inflate(&strm, Z_NO_FLUSH);
+                if (ret != Z_OK && ret != Z_STREAM_END) break;
+            }
+            
+            bytesRead = size - strm.avail_out;
+            inflateEnd(&strm);
+        }
+    }
+    
+    fclose(f);
+    return bytesRead;
 }
 
 std::vector<std::string> ZipReader::listFiles() const {

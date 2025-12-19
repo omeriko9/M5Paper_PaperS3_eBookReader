@@ -1,6 +1,8 @@
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_task_wdt.h"
 #include "nvs.h"
 #include "string.h"
 #include "freertos/FreeRTOS.h"
@@ -29,37 +31,84 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-void WifiManager::init() {
-    if (s_initialized) return;
+bool WifiManager::init() {
+    if (s_initialized) return true;
 
-    ESP_ERROR_CHECK(esp_netif_init());
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    
     // Check if event loop is already created (might be by other components)
-    esp_err_t err = esp_event_loop_create_default();
+    err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_ERROR_CHECK(err);
+        ESP_LOGE(TAG, "esp_event_loop_create_default failed: %s", esp_err_to_name(err));
+        return false;
     }
     
     esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    // Reduce WiFi static RX buffer to save memory - we don't need high throughput
+    cfg.static_rx_buf_num = 4;  // Default is 10, reduce for memory savings
+    cfg.dynamic_rx_buf_num = 8; // Default is 32
+    cfg.tx_buf_type = 1;  // Dynamic TX buffer
+    cfg.static_tx_buf_num = 0;  // Use dynamic only
+    cfg.dynamic_tx_buf_num = 8;
+    cfg.cache_tx_buf_num = 0;  // Disable TX caching to save memory
+    cfg.ampdu_rx_enable = 0;   // Disable AMPDU to save memory
+    cfg.ampdu_tx_enable = 0;
+    
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s (free heap: %u, SPIRAM: %u)", 
+                 esp_err_to_name(err),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        s_init_failed = true;
+        return false;
+    }
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        NULL,
-                                                        NULL));
+    err = esp_event_handler_instance_register(WIFI_EVENT,
+                                              ESP_EVENT_ANY_ID,
+                                              &event_handler,
+                                              NULL,
+                                              NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register WIFI_EVENT handler: %s", esp_err_to_name(err));
+        esp_wifi_deinit();
+        return false;
+    }
+    
+    err = esp_event_handler_instance_register(IP_EVENT,
+                                              IP_EVENT_STA_GOT_IP,
+                                              &event_handler,
+                                              NULL,
+                                              NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register IP_EVENT handler: %s", esp_err_to_name(err));
+        esp_wifi_deinit();
+        return false;
+    }
+    
     s_initialized = true;
+    ESP_LOGI(TAG, "WiFi initialized successfully");
+    return true;
 }
 
 bool WifiManager::connect() {
-    if (!s_initialized) init();
+    if (!s_initialized) {
+        if (!init()) {
+            ESP_LOGW(TAG, "Cannot connect - WiFi init failed");
+            return false;
+        }
+    }
+    if (s_init_failed) {
+        ESP_LOGW(TAG, "Cannot connect - WiFi init previously failed");
+        return false;
+    }
 
     // Load creds from NVS
     nvs_handle_t my_handle;
@@ -84,21 +133,33 @@ bool WifiManager::connect() {
     memcpy(wifi_config.sta.ssid, ssid, ssid_len);
     memcpy(wifi_config.sta.password, pass, pass_len);
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
+        return false;
+    }
     
     // Disable power save to ensure reliable connection/throughput
     esp_wifi_set_ps(WIFI_PS_NONE);
 
     // Wait a bit for connection (simplified)
     for(int i=0; i<20; i++) {
+        esp_task_wdt_reset();
         if(s_connected) return true;
         vTaskDelay(500 / portTICK_PERIOD_MS);
     }
     return s_connected;
 }
-
 void WifiManager::disconnect() {
     if (!s_initialized) return;
     esp_wifi_stop();
@@ -106,7 +167,16 @@ void WifiManager::disconnect() {
 }
 
 void WifiManager::startAP() {
-    if (!s_initialized) init();
+    if (!s_initialized) {
+        if (!init()) {
+            ESP_LOGW(TAG, "Cannot start AP - WiFi init failed");
+            return;
+        }
+    }
+    if (s_init_failed) {
+        ESP_LOGW(TAG, "Cannot start AP - WiFi init previously failed");
+        return;
+    }
 
     wifi_config_t wifi_config = {};
     strcpy((char*)wifi_config.ap.ssid, "M5Paper_Reader");
@@ -114,9 +184,21 @@ void WifiManager::startAP() {
     wifi_config.ap.max_connection = 4;
     wifi_config.ap.authmode = WIFI_AUTH_OPEN;
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode(AP) failed: %s", esp_err_to_name(err));
+        return;
+    }
+    err = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config(AP) failed: %s", esp_err_to_name(err));
+        return;
+    }
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start(AP) failed: %s", esp_err_to_name(err));
+        return;
+    }
     ESP_LOGI(TAG, "AP Started");
     
     startDNS();

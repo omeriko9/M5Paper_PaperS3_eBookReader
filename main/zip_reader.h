@@ -31,6 +31,15 @@ public:
     bool extractBinary(const std::string& filename, std::vector<uint8_t>& outData);
     
     /**
+     * @brief Read the first N bytes of a file without extracting the whole file
+     * @param filename File to peek
+     * @param outData Buffer to store data
+     * @param size Number of bytes to read
+     * @return Number of bytes read
+     */
+    size_t peekFile(const std::string& filename, uint8_t* outData, size_t size);
+
+    /**
      * @brief Get list of all files in the ZIP
      * @return Vector of file paths
      */

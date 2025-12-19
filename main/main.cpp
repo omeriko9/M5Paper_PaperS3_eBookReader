@@ -3,6 +3,7 @@
 #include "esp_spiffs.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "M5Unified.h"
 #include "wifi_manager.h"
 #include "web_server.h"
@@ -90,6 +91,7 @@ void syncRtcFromNtp()
     // Wait for time to be set
     for (int i = 0; i < maxRetries; ++i)
     {
+        esp_task_wdt_reset();
         // Check if SNTP has synced
         if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED)
         {
@@ -132,8 +134,10 @@ void syncRtcFromNtp()
 
 extern "C" void app_main(void)
 {
+    esp_task_wdt_add(NULL);
     // Check wake reason FIRST
     auto wakeup_reason = esp_sleep_get_wakeup_cause();
+    ESP_LOGI(TAG, "Wakeup reason: %d", wakeup_reason);
 
     // // Handle Timer Wakeup (Stage 1 -> Stage 2 transition)
     // if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER)
@@ -165,6 +169,7 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    esp_task_wdt_reset();
 
     // Load timezone from NVS early - required for correct time display on RTC
     {
@@ -333,11 +338,13 @@ extern "C" void app_main(void)
 #endif
     
     M5.begin(cfg);
+    esp_task_wdt_reset();
     M5.Display.setRotation(0); // Portrait
     M5.Display.setTextSize(3);
 
     // Initialize HAL
     deviceHAL.init(is_wake_from_sleep);
+    esp_task_wdt_reset();
 
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     // Try to mount SD card
@@ -346,6 +353,7 @@ extern "C" void app_main(void)
     } else {
         ESP_LOGW(TAG, "SD card not available");
     }
+    esp_task_wdt_reset();
 #endif
     
     // Skip "Initializing..." message on wake - saves ~100ms and we want fast restore
@@ -379,6 +387,7 @@ extern "C" void app_main(void)
         }
         else
         {
+            esp_task_wdt_reset();
             // Skip expensive partition info query on wake - saves ~1.2 seconds
             if (!is_wake_from_sleep) {
                 size_t total = 0, used = 0;
@@ -391,29 +400,50 @@ extern "C" void app_main(void)
                 {
                     ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
                 }
+                esp_task_wdt_reset();
             }
         }
     }
 
-    gui.init(is_wake_from_sleep);
-    
-    // Initialize WiFi - either on cold boot or on wake from deep sleep if WiFi is enabled
+    // Initialize WiFi EARLY - before gui.init() allocates large canvas buffers
+    // WiFi needs to reserve its internal buffers first to avoid OOM on devices
+    // with limited internal SRAM
+    bool wifiInitOk = false;
     if (!is_wake_from_sleep) {
-        // Cold boot: Always init wifi manager so we can enable it later if needed
-        wifiManager.init();
+        ESP_LOGI(TAG, "Pre-initializing WiFi subsystem (heap: %u)", 
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+        wifiInitOk = wifiManager.init();
+        esp_task_wdt_reset();
+        if (!wifiInitOk) {
+            ESP_LOGW(TAG, "WiFi init failed - will run without WiFi support");
+        }
+    }
 
-        if (gui.isWifiEnabled()) {
+    gui.init(is_wake_from_sleep);
+    esp_task_wdt_reset();
+    
+    // Initialize WiFi connections - either on cold boot or on wake from deep sleep if WiFi is enabled
+    if (!is_wake_from_sleep) {
+        // Cold boot: WiFi was already initialized above
+
+        if (wifiInitOk && gui.isWifiEnabled()) {
             // Try to connect, if fails, start AP
             bool wifiOk = wifiManager.connect();
+            esp_task_wdt_reset();
             if (!wifiOk)
             {
                 wifiManager.startAP();
+                esp_task_wdt_reset();
             }
             else
             {
                 syncRtcFromNtp();
+                esp_task_wdt_reset();
             }
             webServer.init("/spiffs");
+            esp_task_wdt_reset();
+        } else if (!wifiInitOk) {
+            ESP_LOGW(TAG, "WiFi disabled due to init failure");
         } else {
             ESP_LOGI(TAG, "WiFi disabled by settings");
         }
@@ -422,11 +452,15 @@ extern "C" void app_main(void)
         if (gui.isWifiEnabled()) {
             ESP_LOGI(TAG, "Wake from deep sleep with WiFi enabled - connecting");
             wifiManager.init();
+            esp_task_wdt_reset();
             bool wifiOk = wifiManager.connect();
+            esp_task_wdt_reset();
             if (!wifiOk) {
                 wifiManager.startAP();
+                esp_task_wdt_reset();
             }
             webServer.init("/spiffs");
+            esp_task_wdt_reset();
         } else {
             ESP_LOGI(TAG, "Wake from deep sleep - WiFi disabled in settings");
         }
@@ -462,17 +496,14 @@ extern "C" void app_main(void)
                     // Play shutdown sound
                     deviceHAL.playShutdownSound();
                     
-                    // Show shutdown message
-                    M5.Display.fillScreen(TFT_WHITE);
-                    M5.Display.setFont(&lgfx::v1::fonts::Font4);
-                    M5.Display.setTextSize(1.0f);
-                    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-                    M5.Display.setTextDatum(textdatum_t::middle_center);
-                    M5.Display.drawString("Shutting down...", M5.Display.width() / 2, M5.Display.height() / 2);
+                    // Clear screen and enter deep sleep
+                    ESP_LOGI(TAG, "Clearing screen before sleep...");
+                    M5.Display.clear(TFT_WHITE);
                     M5.Display.display();
                     M5.Display.waitDisplay();
                     
-                    vTaskDelay(500 / portTICK_PERIOD_MS);
+                    // Give some time for the E-Ink to finish refresh
+                    vTaskDelay(1000 / portTICK_PERIOD_MS);
                     
                     // Enter deep sleep with no timer - only button wake
                     GUI::enterDeepSleepShutdown();
@@ -499,6 +530,7 @@ extern "C" void app_main(void)
 
         gui.setWifiStatus(wifiManager.isConnected(), wifiManager.getRssi());
         gui.update();
+        esp_task_wdt_reset();
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }

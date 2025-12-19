@@ -2,6 +2,7 @@
 #include "web_server.h"
 #include "epub_loader.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "wifi_manager.h"
 #include "book_index.h"
 #include "device_hal.h"
@@ -599,21 +600,16 @@ void GUI::init(bool isWakeFromSleep)
 
     loadSettings();
     loadFonts();
-    
+
     // Initialize image handler
     ImageHandler::getInstance().init();
-    
+
     // Play startup sound
     deviceHAL.playStartupSound();
-    
-    bookIndex.init(isWakeFromSleep, [](int current, int total, const char* msg) {
-        M5.Display.fillScreen(TFT_WHITE);
-        M5.Display.setTextSize(1.3f);
-        M5.Display.setTextColor(TFT_BLACK);
-        M5.Display.setTextDatum(textdatum_t::middle_center);
-        M5.Display.drawString(msg, M5.Display.width() / 2, M5.Display.height() / 2);
-        M5.Display.display();
-    });
+
+    // Initialize book index (loads from disk, scanning is backgrounded)
+    bookIndex.init(isWakeFromSleep, nullptr);
+
     resetPageInfoCache();
 
     M5.Display.setTextColor(TFT_BLACK);
@@ -696,7 +692,7 @@ void GUI::init(bool isWakeFromSleep)
             nvs_get_i32(my_handle, "last_state", &lastState);
             nvs_close(my_handle);
         }
-        
+
         // Store last book info for main menu "Last Book" button
         if (lastId != -1)
         {
@@ -774,8 +770,15 @@ void GUI::init(bool isWakeFromSleep)
                 // Spawn background indexer
                 if (backgroundIndexerTaskHandle == nullptr)
                 {
-                    xTaskCreate([](void *arg)
-                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+                    // If it's ESP32S3, we can pin to core 1 to avoid contention with rendering on core 0
+#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
+                    xTaskCreatePinnedToCore([](void *arg)
+                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle,
+                                            1);
+#else
+                    xTaskCreatePinnedToCore([](void *arg)
+                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle, 1);
+#endif
                 }
                 return;
             }
@@ -787,8 +790,14 @@ void GUI::init(bool isWakeFromSleep)
 
     if (backgroundIndexerTaskHandle == nullptr)
     {
-        xTaskCreate([](void *arg)
-                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
+        xTaskCreatePinnedToCore([](void *arg)
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle,
+                                1);
+#else
+        xTaskCreatePinnedToCore([](void *arg)
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle, 1);
+#endif
     }
 }
 
@@ -800,6 +809,8 @@ void GUI::renderTaskLoop()
     {
         if (xQueueReceive(renderQueue, &req, portMAX_DELAY))
         {
+            esp_task_wdt_add(NULL);
+            esp_task_wdt_reset();
             ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
 
             // Clear abort flag before starting
@@ -837,6 +848,7 @@ void GUI::renderTaskLoop()
             {
                 ESP_LOGW(TAG, "RenderTask: Aborted");
             }
+            esp_task_wdt_delete(NULL);
         }
         else
         {
@@ -847,6 +859,7 @@ void GUI::renderTaskLoop()
 
 void GUI::metricsTaskLoop()
 {
+    esp_task_wdt_add(NULL);
     ESP_LOGI(TAG, "MetricsTask started for book %d", metricsTaskTargetBookId);
     int targetId = metricsTaskTargetBookId;
 
@@ -860,6 +873,7 @@ void GUI::metricsTaskLoop()
             xSemaphoreGive(epubMutex);
             ESP_LOGW(TAG, "MetricsTask: Book changed at start, aborting");
             metricsTaskHandle = nullptr;
+            esp_task_wdt_delete(NULL);
             vTaskDelete(NULL);
             return;
         }
@@ -871,6 +885,7 @@ void GUI::metricsTaskLoop()
     {
         ESP_LOGI(TAG, "MetricsTask: No chapters or empty book");
         metricsTaskHandle = nullptr;
+        esp_task_wdt_delete(NULL);
         vTaskDelete(NULL);
         return;
     }
@@ -881,11 +896,13 @@ void GUI::metricsTaskLoop()
 
     for (int i = 0; i < chapters; ++i)
     {
+        esp_task_wdt_reset();
         // Check if book changed
         if (currentBook.id != targetId)
         {
             ESP_LOGW(TAG, "MetricsTask: Book changed during scan, aborting");
             metricsTaskHandle = nullptr;
+            esp_task_wdt_delete(NULL);
             vTaskDelete(NULL);
             return;
         }
@@ -928,15 +945,34 @@ void GUI::metricsTaskLoop()
     needsRedraw = true;
 
     metricsTaskHandle = nullptr;
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
 void GUI::backgroundIndexerTaskLoop()
 {
+    esp_task_wdt_add(NULL);
     ESP_LOGI(TAG, "BgIndexer started");
     // Wait a bit for system to settle and user to potentially start reading
     vTaskDelay(pdMS_TO_TICKS(3000));
+    esp_task_wdt_reset();
 
+    // Step 1: Scan for new books in background
+    ESP_LOGI(TAG, "BgIndexer: Scanning for new books...");
+    bool newBooksFound = bookIndex.scanForNewBooks([](int current, int total, const char *msg)
+                                                   {
+        // Optional: update a status bar or log
+        // ESP_LOGI(TAG, "Scan progress: %d/%d - %s", current, total, msg);
+        esp_task_wdt_reset(); });
+
+    if (newBooksFound)
+    {
+        ESP_LOGI(TAG, "BgIndexer: New books found, refreshing list if needed");
+        // If we are in library view, we might want to refresh, but for now just let the user see them next time
+    }
+    esp_task_wdt_reset();
+
+    // Step 2: Calculate metrics for books that need it
     auto books = bookIndex.getBooks();
     for (const auto &book : books)
     {
@@ -976,6 +1012,7 @@ void GUI::backgroundIndexerTaskLoop()
 
                 for (int i = 0; i < chapters; ++i)
                 {
+                    esp_task_wdt_reset();
                     // Yield frequently to keep UI responsive
                     vTaskDelay(1);
 
@@ -987,6 +1024,7 @@ void GUI::backgroundIndexerTaskLoop()
                         ESP_LOGI(TAG, "BgIndexer: Pausing for web activity...");
                         while (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000))
                         {
+                            esp_task_wdt_reset();
                             vTaskDelay(pdMS_TO_TICKS(1000));
                             lastHttp = WebServer::getLastActivityTime();
                             now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1021,6 +1059,7 @@ void GUI::backgroundIndexerTaskLoop()
 
     ESP_LOGI(TAG, "BgIndexer finished");
     backgroundIndexerTaskHandle = nullptr;
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
@@ -1054,7 +1093,8 @@ void GUI::setWebServerEnabled(bool enabled)
 
 void GUI::setShowImages(bool enabled)
 {
-    if (showImages == enabled) return;
+    if (showImages == enabled)
+        return;
     showImages = enabled;
     saveSettings();
     needsRedraw = true;
@@ -1118,7 +1158,7 @@ void GUI::update()
             drawLibrary(false);
             break;
         case AppState::FAVORITES:
-            drawLibrary(true);  // Favorites only
+            drawLibrary(true); // Favorites only
             break;
         case AppState::READER:
             drawReader();
@@ -1127,10 +1167,10 @@ void GUI::update()
             drawWifiConfig();
             break;
         case AppState::SETTINGS:
-            drawStandaloneSettings();  // Full-page standalone settings
+            drawStandaloneSettings(); // Full-page standalone settings
             break;
         case AppState::BOOK_SETTINGS:
-            drawSettings();  // In-book overlay settings
+            drawSettings(); // In-book overlay settings
             break;
         case AppState::WIFI_SCAN:
             drawWifiScan();
@@ -1165,7 +1205,7 @@ void GUI::drawStatusBar(LovyanGFX *target)
     gfx->setTextDatum(textdatum_t::middle_left);
     auto dt = M5.Rtc.getDateTime();
     char buf[64];
-    
+
     // Convert RTC datetime to time_t, then to local time
     struct tm rtc_tm;
     memset(&rtc_tm, 0, sizeof(rtc_tm));
@@ -1175,7 +1215,7 @@ void GUI::drawStatusBar(LovyanGFX *target)
     rtc_tm.tm_hour = dt.time.hours;
     rtc_tm.tm_min = dt.time.minutes;
     rtc_tm.tm_sec = dt.time.seconds;
-    
+
     // mktime treats input as local time, so we temporarily set TZ to UTC
     // to convert UTC RTC time to time_t, then restore TZ for localtime
     char *old_tz = getenv("TZ");
@@ -1183,16 +1223,19 @@ void GUI::drawStatusBar(LovyanGFX *target)
     setenv("TZ", "UTC0", 1);
     tzset();
     time_t utc_time = mktime(&rtc_tm);
-    if (!saved_tz.empty()) {
+    if (!saved_tz.empty())
+    {
         setenv("TZ", saved_tz.c_str(), 1);
-    } else {
+    }
+    else
+    {
         unsetenv("TZ");
     }
     tzset();
-    
+
     // localtime converts time_t to local time using TZ env var
     struct tm *local_tm = localtime(&utc_time);
-    
+
     snprintf(buf, sizeof(buf), "%02d:%02d", local_tm->tm_hour, local_tm->tm_min);
     gfx->drawString(buf, 10, centerY);
     int timeWidth = gfx->textWidth(buf) + 15;
@@ -1508,7 +1551,7 @@ void GUI::drawSearchBar(LovyanGFX *target)
     target->setTextColor(showFavoritesOnly ? TFT_BLACK : TFT_DARKGREY, starFill);
     target->setTextDatum(textdatum_t::middle_center);
     target->setTextSize(1.8f);
-    target->drawString("*", starBtnX + starBtnSize / 2, textY);
+    target->drawString("+", starBtnX + starBtnSize / 2, textY);
 
     target->setTextDatum(textdatum_t::top_left);
 }
@@ -1884,7 +1927,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
     if (draw)
         gfx->startWrite();
-    
+
     // Clear rendered images list when drawing to main display
     if (draw && target == nullptr)
     {
@@ -2006,13 +2049,14 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 gfx->endWrite();
             return 0;
         }
-        
+
         // Check for image placeholder character (U+E000 = \xEE\x80\x80)
         if (i + IMAGE_PLACEHOLDER_LEN <= text.length() &&
             text.compare(i, IMAGE_PLACEHOLDER_LEN, IMAGE_PLACEHOLDER) == 0)
         {
             // If images are disabled, just skip the placeholder
-            if (!showImages) {
+            if (!showImages)
+            {
                 i += IMAGE_PLACEHOLDER_LEN;
                 continue;
             }
@@ -2026,29 +2070,29 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 currentLineWidth = 0;
                 currentY += lineHeight;
             }
-            
+
             // Find the image at this offset
-            const EpubImage* image = nullptr;
+            const EpubImage *image = nullptr;
             size_t imageOffset = startOffset + i;
             if (xSemaphoreTake(epubMutex, portMAX_DELAY))
             {
                 image = epubLoader.findImageAtOffset(imageOffset, 10);
                 xSemaphoreGive(epubMutex);
             }
-            
+
             if (image && draw)
             {
                 // Calculate image dimensions
                 int imgMaxWidth = maxWidth;
                 int imgMaxHeight = maxY - currentY;
-                
+
                 // For inline images, limit height more
                 if (!image->isBlock)
                 {
                     imgMaxHeight = std::min(imgMaxHeight, lineHeight * 4);
                     imgMaxWidth = maxWidth / 2;
                 }
-                
+
                 // Only render if we have enough vertical space
                 if (imgMaxHeight > 50)
                 {
@@ -2060,23 +2104,22 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                         extracted = epubLoader.extractImage(image->path, imageData);
                         xSemaphoreGive(epubMutex);
                     }
-                    
+
                     if (extracted && !imageData.empty())
                     {
-                        ImageHandler& imgHandler = ImageHandler::getInstance();
+                        ImageHandler &imgHandler = ImageHandler::getInstance();
                         int imgX = x;
                         int imgY = currentY;
-                        
+
                         ImageDecodeResult result = imgHandler.decodeAndRender(
                             imageData.data(),
                             imageData.size(),
-                            (M5Canvas*)target,
+                            (M5Canvas *)target,
                             imgX, imgY,
                             imgMaxWidth,
                             imgMaxHeight,
-                            image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE
-                        );
-                        
+                            image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE);
+
                         if (result.success)
                         {
                             // Track this rendered image for tap detection (only for main display)
@@ -2085,15 +2128,15 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                                 RenderedImageInfo ri;
                                 ri.x = imgX;
                                 ri.y = imgY;
-                                ri.width = result.scaledWidth;
-                                ri.height = result.scaledHeight;
+                                ri.width = result.scaledWidth - 20 > 0 ? result.scaledWidth - 20 : result.scaledWidth;     // Adjust for margins
+                                ri.height = result.scaledHeight - 20 > 0 ? result.scaledHeight - 20 : result.scaledHeight; // Adjust for margins
                                 ri.image = *image;
                                 pageRenderedImages.push_back(ri);
                             }
-                            
+
                             // Move Y past the image
-                            currentY += result.scaledHeight + 10;  // Add some padding
-                            ESP_LOGI(TAG, "Rendered image at Y=%d, size=%dx%d", 
+                            currentY += result.scaledHeight + 10; // Add some padding
+                            ESP_LOGI(TAG, "Rendered image at Y=%d, size=%dx%d",
                                      imgY, result.scaledWidth, result.scaledHeight);
                         }
                         else
@@ -2126,19 +2169,19 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             {
                 // When measuring (not drawing), account for image space
                 // Estimate a reasonable image height
-                currentY += lineHeight * 3;  // Reserve space for typical image
+                currentY += lineHeight * 3; // Reserve space for typical image
             }
-            
+
             // Skip past the placeholder
             i += IMAGE_PLACEHOLDER_LEN;
-            
+
             // Check if page is full after image
             if (currentY + lineHeight > maxY)
             {
                 break;
             }
-            
-            continue;  // Continue to next word/element
+
+            continue; // Continue to next word/element
         }
 
         // Find next word boundary
@@ -2501,116 +2544,124 @@ void GUI::drawMainMenu()
 {
     // Main menu with 6 large buttons in a 3x2 grid
     abortRender = true; // Stop any background rendering
-    
+
     // Use canvasNext as a buffer if available
     M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
     LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
-    
+
     target->fillScreen(TFT_WHITE);
     drawStatusBar(target);
-    
+
     // Use system font
     target->setFont(&lgfx::v1::fonts::Font2);
     target->setTextColor(TFT_BLACK);
-    
+
     int screenW = target->width();
     int screenH = target->height();
-    
+
     // Calculate grid dimensions
     int availableH = screenH - STATUS_BAR_HEIGHT - 20; // Leave margin at bottom
-    int availableW = screenW - 20; // 10px margin on each side
-    
+    int availableW = screenW - 20;                     // 10px margin on each side
+
     int cols = (screenW > screenH) ? 3 : 2;
     int rows = (screenW > screenH) ? 2 : 3;
     int btnGap = 12;
     int btnW = (availableW - btnGap * (cols - 1)) / cols;
     int btnH = (availableH - btnGap * (rows - 1)) / rows;
-    
+
     int startX = 10;
     int startY = STATUS_BAR_HEIGHT + 10;
-    
+
     // Button definitions: {label, sublabel}
-    struct MenuButton {
-        const char* label;
-        const char* sublabel;
+    struct MenuButton
+    {
+        const char *label;
+        const char *sublabel;
         bool enabled;
     };
-    
+
     // Check if we have a last book
     bool hasLastBook = (lastBookId > 0 && !lastBookTitle.empty());
-    
+
     MenuButton buttons[6] = {
         {"Last Book", hasLastBook ? lastBookTitle.c_str() : "No book yet", hasLastBook},
         {"Books", "Library", true},
         {"WiFi", "Network", true},
         {"Settings", "Options", true},
         {"Favorites", "Starred", true},
-        {"", "", false}  // Empty placeholder
+        {"", "", false} // Empty placeholder
     };
-    
+
     target->startWrite();
-    
+
     for (int i = 0; i < 6; i++)
     {
         int row = i / cols;
         int col = i % cols;
-        
+
         int bx = startX + col * (btnW + btnGap);
         int by = startY + row * (btnH + btnGap);
-        
+
         // Draw button background
         uint16_t bgColor = TFT_WHITE;
         uint16_t borderColor = TFT_BLACK;
-        
-        if (i == 5) {
+
+        if (i == 5)
+        {
             // Empty button - just draw a light border
             target->drawRect(bx, by, btnW, btnH, TFT_LIGHTGREY);
             continue;
         }
-        
-        if (!buttons[i].enabled) {
+
+        if (!buttons[i].enabled)
+        {
             bgColor = TFT_LIGHTGREY;
         }
-        
+
         target->fillRect(bx, by, btnW, btnH, bgColor);
         target->drawRect(bx, by, btnW, btnH, borderColor);
         target->drawRect(bx + 1, by + 1, btnW - 2, btnH - 2, borderColor); // Double border
-        
+
         // Draw label (larger font)
         target->setTextDatum(textdatum_t::middle_center);
         target->setTextSize(2.5f);
         target->setTextColor(buttons[i].enabled ? TFT_BLACK : TFT_DARKGREY, bgColor);
-        
+
         int textY = by + btnH / 2;
-        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0) {
+        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0)
+        {
             textY -= 15; // Move up if there's a sublabel
         }
         target->drawString(buttons[i].label, bx + btnW / 2, textY);
-        
+
         // Draw sublabel (smaller font) with mixed font support for Hebrew
-        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0) {
+        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0)
+        {
             target->setTextSize(1.2f);
             target->setTextColor(buttons[i].enabled ? TFT_DARKGREY : TFT_LIGHTGREY, bgColor);
-            
+
             std::string sublabel = buttons[i].sublabel;
-            if (i == 0 && hasLastBook) {
+            if (i == 0 && hasLastBook)
+            {
                 // For last book, use mixed font support (book title may be Hebrew)
-                drawStringMixed(sublabel, bx + btnW / 2 - target->textWidth(sublabel.c_str()) / 2, 
-                               by + btnH / 2 + 20, sprite, 1.0f, false, false);
-            } else {
+                drawStringMixed(sublabel, bx + btnW / 2 - target->textWidth(sublabel.c_str()) / 2,
+                                by + btnH / 2 + 20, sprite, 1.0f, false, false);
+            }
+            else
+            {
                 target->drawString(sublabel.c_str(), bx + btnW / 2, by + btnH / 2 + 25);
             }
         }
     }
-    
+
     target->endWrite();
     target->setTextDatum(textdatum_t::top_left);
-    
+
     if (sprite)
     {
         sprite->pushSprite(&M5.Display, 0, 0);
     }
-    
+
     M5.Display.display();
 }
 
@@ -2739,8 +2790,8 @@ void GUI::drawSettings()
     // Initialize settings canvas if needed
     if (!settingsCanvasCreated)
     {
-        // Use 1bpp to minimize RAM and avoid palette crashes; only black/white UI is needed.
-        const int depth = 1;
+        // Use 4bpp for better visuals (gray background)
+        const int depth = 4;
         const size_t bytesPerSprite = ((size_t)layout.panelWidth * layout.panelHeight * depth + 7) / 8;
         const size_t freeDef = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
         const size_t freeSpi = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -2755,8 +2806,7 @@ void GUI::drawSettings()
                  (unsigned)freeSpi, (unsigned)largestSpi);
         if (settingsCanvas.createSprite(layout.panelWidth, layout.panelHeight))
         {
-            settingsCanvas.setPaletteColor(0, TFT_WHITE);
-            settingsCanvas.setPaletteColor(1, TFT_BLACK);
+            // 4bpp has default grayscale palette, no need to set manually unless customizing
             ESP_LOGI(TAG, "Settings canvas created. Free now: default=%u (largest %u) SPIRAM=%u (largest %u)",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
@@ -2782,7 +2832,7 @@ void GUI::drawSettings()
     target->setFont(&lgfx::v1::fonts::Font2);
 
     // Clear background for settings panel
-    target->fillRect(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelHeight, TFT_WHITE);
+    target->fillRect(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelHeight, TFT_LIGHTGRAY);
     target->drawRect(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelHeight, TFT_BLACK);
     target->drawLine(0, layout.panelTop + yOffset, layout.panelWidth, layout.panelTop + yOffset, TFT_BLACK); // Top border
 
@@ -2869,8 +2919,8 @@ void GUI::drawSettings()
     int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
     bool isFav = bookIndex.isFavorite(currentBook.id);
     uint16_t favFill = isFav ? TFT_YELLOW : TFT_WHITE;
-    uint16_t favText = TFT_BLACK;
-    const char *favLabel = isFav ? "* Remove" : "* Add";
+    uint16_t favText = isFav ? TFT_WHITE : TFT_BLACK;
+    const char *favLabel = isFav ? "- Remove" : "+ Add";
     drawButton(layout.toggleButtonX, favButtonY, layout.toggleButtonW, layout.fontButtonH,
                favLabel, favFill, favText);
 
@@ -2889,23 +2939,23 @@ void GUI::drawStandaloneSettings()
 {
     // Full-page settings (accessed from main menu, not as an overlay)
     abortRender = true;
-    
+
     M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
     LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
-    
+
     target->fillScreen(TFT_WHITE);
     drawStatusBar(target);
-    
+
     target->setFont(&lgfx::v1::fonts::Font2);
     target->setTextColor(TFT_BLACK, TFT_WHITE);
-    
+
     int screenW = target->width();
     int screenH = target->height();
     int padding = 20;
     int rowHeight = 60;
     int buttonH = 45;
     int buttonW = 140;
-    
+
     auto drawSettingsButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor, uint16_t textColor)
     {
         target->fillRect(x, y, w, h, fillColor);
@@ -2916,34 +2966,34 @@ void GUI::drawStandaloneSettings()
         target->setTextColor(TFT_BLACK, TFT_WHITE);
         target->setTextDatum(textdatum_t::middle_left);
     };
-    
+
     // Title
     target->setTextSize(2.5f);
     target->setTextDatum(textdatum_t::top_center);
     target->drawString("Settings", screenW / 2, STATUS_BAR_HEIGHT + 15);
     target->setTextDatum(textdatum_t::middle_left);
-    
+
     int startY = STATUS_BAR_HEIGHT + 70;
     target->setTextSize(1.8f);
-    
+
     // --- Font Size ---
     int row1Y = startY;
     int row1CenterY = row1Y + rowHeight / 2;
     target->drawString("Font Size", padding, row1CenterY);
-    
+
     char sizeBuf[16];
     snprintf(sizeBuf, sizeof(sizeBuf), "%.1f", fontSize);
     int fontValueX = screenW / 2;
     target->setTextDatum(textdatum_t::middle_center);
     target->drawString(sizeBuf, fontValueX, row1CenterY);
     target->setTextDatum(textdatum_t::middle_left);
-    
+
     int fontMinusX = screenW - padding - buttonW * 2 - 10;
     int fontPlusX = screenW - padding - buttonW;
     int btnY = row1Y + (rowHeight - buttonH) / 2;
     drawSettingsButton(fontMinusX, btnY, buttonW, buttonH, "-", TFT_WHITE, TFT_BLACK);
     drawSettingsButton(fontPlusX, btnY, buttonW, buttonH, "+", TFT_WHITE, TFT_BLACK);
-    
+
     // --- Font Family ---
     int row2Y = startY + rowHeight;
     int row2CenterY = row2Y + rowHeight / 2;
@@ -2951,26 +3001,26 @@ void GUI::drawStandaloneSettings()
     target->setTextDatum(textdatum_t::middle_center);
     target->drawString(currentFont.c_str(), fontValueX, row2CenterY);
     target->setTextDatum(textdatum_t::middle_left);
-    
+
     btnY = row2Y + (rowHeight - buttonH) / 2;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH, "Change", TFT_WHITE, TFT_BLACK);
-    
+
     // --- WiFi Toggle ---
     int row3Y = startY + rowHeight * 2;
     int row3CenterY = row3Y + rowHeight / 2;
     target->drawString("WiFi", padding, row3CenterY);
-    
+
     btnY = row3Y + (rowHeight - buttonH) / 2;
     uint16_t wifiFill = wifiEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t wifiText = wifiEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
-                      wifiEnabled ? "ON" : "OFF", wifiFill, wifiText);
-    
+                       wifiEnabled ? "ON" : "OFF", wifiFill, wifiText);
+
     // --- WiFi Status ---
     int row4Y = startY + rowHeight * 3;
     int row4CenterY = row4Y + rowHeight / 2;
     target->drawString("WiFi Status", padding, row4CenterY);
-    
+
     std::string status = wifiEnabled ? "Connecting..." : "WiFi is OFF";
     if (wifiEnabled && wifiManager.isConnected())
     {
@@ -2981,44 +3031,44 @@ void GUI::drawStandaloneSettings()
     target->setTextDatum(textdatum_t::middle_left);
     target->drawString(status.c_str(), padding + 180, row4CenterY);
     target->setTextSize(1.8f);
-    
+
     // --- Buzzer (M5PaperS3 only) ---
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     int row5Y = startY + rowHeight * 4;
     int row5CenterY = row5Y + rowHeight / 2;
     target->drawString("Buzzer", padding, row5CenterY);
-    
+
     btnY = row5Y + (rowHeight - buttonH) / 2;
     uint16_t buzzerFill = buzzerEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t buzzerText = buzzerEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
-                      buzzerEnabled ? "ON" : "OFF", buzzerFill, buzzerText);
-    
+                       buzzerEnabled ? "ON" : "OFF", buzzerFill, buzzerText);
+
     // --- Auto Rotate ---
     int row6Y = startY + rowHeight * 5;
     int row6CenterY = row6Y + rowHeight / 2;
     target->drawString("Auto Rotate", padding, row6CenterY);
-    
+
     btnY = row6Y + (rowHeight - buttonH) / 2;
     uint16_t rotateFill = autoRotateEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t rotateText = autoRotateEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
-                      autoRotateEnabled ? "ON" : "OFF", rotateFill, rotateText);
+                       autoRotateEnabled ? "ON" : "OFF", rotateFill, rotateText);
 #endif
-    
+
     // --- Back Button ---
     int backBtnY = screenH - 70;
     int backBtnW = 200;
     int backBtnX = (screenW - backBtnW) / 2;
     drawSettingsButton(backBtnX, backBtnY, backBtnW, 50, "Back to Menu", TFT_WHITE, TFT_BLACK);
-    
+
     target->setTextDatum(textdatum_t::top_left);
-    
+
     if (sprite)
     {
         sprite->pushSprite(&M5.Display, 0, 0);
     }
-    
+
     M5.Display.display();
 }
 
@@ -3032,13 +3082,13 @@ void GUI::onSettingsClick(int x, int y)
     int buttonH = 45;
     int buttonW = 140;
     int startY = STATUS_BAR_HEIGHT + 70;
-    
+
     // Font Size buttons
     int row1Y = startY;
     int fontMinusX = screenW - padding - buttonW * 2 - 10;
     int fontPlusX = screenW - padding - buttonW;
     int btnY = row1Y + (rowHeight - buttonH) / 2;
-    
+
     if (y >= btnY && y <= btnY + buttonH)
     {
         if (x >= fontMinusX && x < fontMinusX + buttonW)
@@ -3052,7 +3102,7 @@ void GUI::onSettingsClick(int x, int y)
             return;
         }
     }
-    
+
     // Font Change button
     int row2Y = startY + rowHeight;
     btnY = row2Y + (rowHeight - buttonH) / 2;
@@ -3068,7 +3118,7 @@ void GUI::onSettingsClick(int x, int y)
             setFont("Default");
         return;
     }
-    
+
     // WiFi Toggle button
     int row3Y = startY + rowHeight * 2;
     btnY = row3Y + (rowHeight - buttonH) / 2;
@@ -3076,7 +3126,7 @@ void GUI::onSettingsClick(int x, int y)
     {
         wifiEnabled = !wifiEnabled;
         saveSettings();
-        
+
         if (wifiEnabled)
         {
             if (!wifiManager.isInitialized())
@@ -3095,7 +3145,7 @@ void GUI::onSettingsClick(int x, int y)
         needsRedraw = true;
         return;
     }
-    
+
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     // Buzzer Toggle
     int row5Y = startY + rowHeight * 4;
@@ -3106,7 +3156,7 @@ void GUI::onSettingsClick(int x, int y)
         needsRedraw = true;
         return;
     }
-    
+
     // Auto Rotate Toggle
     int row6Y = startY + rowHeight * 5;
     btnY = row6Y + (rowHeight - buttonH) / 2;
@@ -3117,7 +3167,7 @@ void GUI::onSettingsClick(int x, int y)
         return;
     }
 #endif
-    
+
     // Back button
     int backBtnY = screenH - 70;
     int backBtnW = 200;
@@ -3142,7 +3192,7 @@ void GUI::drawWifiConfig()
 void GUI::processReaderTap(int x, int y, bool isDouble)
 {
     // First, check if tap is on a rendered image
-    for (const auto& ri : pageRenderedImages)
+    for (const auto &ri : pageRenderedImages)
     {
         if (x >= ri.x && x <= ri.x + ri.width &&
             y >= ri.y && y <= ri.y + ri.height)
@@ -3151,11 +3201,11 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
             ESP_LOGI(TAG, "Tap on image at (%d, %d), opening viewer", x, y);
             if (openImageViewer(ri.image))
             {
-                return;  // Image viewer opened, don't process as page turn
+                return; // Image viewer opened, don't process as page turn
             }
         }
     }
-    
+
     bool isRTL = isRTLDocument;
     bool next = false;
 
@@ -3321,33 +3371,33 @@ void GUI::onMainMenuClick(int x, int y)
 {
     int screenW = M5.Display.width();
     int screenH = M5.Display.height();
-    
+
     // Calculate grid dimensions (same as drawMainMenu)
     int availableH = screenH - STATUS_BAR_HEIGHT - 20;
     int availableW = screenW - 20;
-    
+
     int cols = 2;
     int rows = 3;
     int btnGap = 12;
     int btnW = (availableW - btnGap) / cols;
     int btnH = (availableH - btnGap * 2) / rows;
-    
+
     int startX = 10;
     int startY = STATUS_BAR_HEIGHT + 10;
-    
+
     // Find which button was clicked
     for (int i = 0; i < 6; i++)
     {
         int row = i / cols;
         int col = i % cols;
-        
+
         int bx = startX + col * (btnW + btnGap);
         int by = startY + row * (btnH + btnGap);
-        
+
         if (x >= bx && x < bx + btnW && y >= by && y < by + btnH)
         {
             ESP_LOGI(TAG, "Main menu button %d clicked", i);
-            
+
             switch (i)
             {
             case 0: // Last Book
@@ -3356,7 +3406,7 @@ void GUI::onMainMenuClick(int x, int y)
                     openBookById(lastBookId);
                 }
                 break;
-                
+
             case 1: // Books List
                 currentState = AppState::LIBRARY;
                 searchQuery.clear();
@@ -3364,26 +3414,26 @@ void GUI::onMainMenuClick(int x, int y)
                 libraryPage = 0;
                 needsRedraw = true;
                 break;
-                
+
             case 2: // WiFi
                 currentState = AppState::WIFI_SCAN;
                 wifiList.clear();
                 needsRedraw = true;
                 break;
-                
+
             case 3: // Settings
                 currentState = AppState::SETTINGS;
                 needsRedraw = true;
                 break;
-                
+
             case 4: // Favorites
                 currentState = AppState::FAVORITES;
                 searchQuery.clear();
-                showFavoritesOnly = true;  // Force favorites filter
+                showFavoritesOnly = true; // Force favorites filter
                 libraryPage = 0;
                 needsRedraw = true;
                 break;
-                
+
             case 5: // Empty - do nothing
                 break;
             }
@@ -3473,7 +3523,7 @@ void GUI::handleTouch()
                         xSemaphoreGive(epubMutex);
                     }
                     bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
-                    
+
                     currentState = AppState::MAIN_MENU;
                     epubLoader.close();
                     bookMetricsComputed = false;
@@ -4104,16 +4154,16 @@ void GUI::ensureHebrewFontLoaded()
         // For now, let's just rely on system malloc. If PSRAM is configured, large blocks go there.
         // But if not, we might fail.
 
-        //try
+        // try
         //{
-            fontDataHebrew.resize(size);
+        fontDataHebrew.resize(size);
         //}
-        //catch (const std::bad_alloc &e)
+        // catch (const std::bad_alloc &e)
         //{
-         //   ESP_LOGE(TAG, "Failed to allocate memory for Hebrew font (%u bytes)", (unsigned int)size);
-         //   fclose(f);
-         //   return;
-       // }
+        //   ESP_LOGE(TAG, "Failed to allocate memory for Hebrew font (%u bytes)", (unsigned int)size);
+        //   fclose(f);
+        //   return;
+        // }
 
         size_t read = fread(fontDataHebrew.data(), 1, size, f);
         fclose(f);
@@ -4156,15 +4206,15 @@ void GUI::ensureArabicFontLoaded()
         size_t size = ftell(f);
         fseek(f, 0, SEEK_SET);
 
-        //try
+        // try
         //{
-            fontDataArabic.resize(size);
+        fontDataArabic.resize(size);
         //}
-        //catch (const std::bad_alloc &e)
+        // catch (const std::bad_alloc &e)
         //{
         //    ESP_LOGE(TAG, "Failed to allocate memory for Arabic font (%u bytes)", (unsigned int)size);
         //    fclose(f);
-         //   return;
+        //   return;
         //}
 
         size_t read = fread(fontDataArabic.data(), 1, size, f);
@@ -4965,11 +5015,12 @@ void GUI::onWifiPasswordClick(int x, int y)
 void GUI::drawImageViewer()
 {
     ESP_LOGI(TAG, "Drawing image viewer");
-    
+
     // Clear screen with white background
     M5.Display.fillScreen(TFT_WHITE);
-    
-    if (currentImageData.empty()) {
+
+    if (currentImageData.empty())
+    {
         // No image loaded - show error message
         M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
         M5.Display.setTextDatum(textdatum_t::middle_center);
@@ -4978,10 +5029,10 @@ void GUI::drawImageViewer()
         M5.Display.display();
         return;
     }
-    
+
     // Decode and display image centered on screen
-    ImageHandler& imgHandler = ImageHandler::getInstance();
-    
+    ImageHandler &imgHandler = ImageHandler::getInstance();
+
     // Use full screen for rendering
     ImageDecodeResult result = imgHandler.decodeToDisplay(
         currentImageData.data(),
@@ -4990,128 +5041,141 @@ void GUI::drawImageViewer()
         -1,  // Auto-center Y
         true // Fit to screen
     );
-    
-    if (!result.success) {
+
+    if (!result.success)
+    {
         ESP_LOGE(TAG, "Failed to decode image: %s", result.errorMsg.c_str());
         M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
         M5.Display.setTextDatum(textdatum_t::middle_center);
         M5.Display.setTextSize(1.5f);
         M5.Display.drawString("Image decode failed", M5.Display.width() / 2, M5.Display.height() / 2);
-    } else {
-        ESP_LOGI(TAG, "Image displayed: %dx%d -> %dx%d", 
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Image displayed: %dx%d -> %dx%d",
                  result.originalWidth, result.originalHeight,
                  result.scaledWidth, result.scaledHeight);
     }
-    
+
     // Draw a small "X" close indicator in the corner
     M5.Display.setTextColor(TFT_DARKGRAY, TFT_WHITE);
     M5.Display.setTextDatum(textdatum_t::top_right);
     M5.Display.setTextSize(2.0f);
     M5.Display.drawString("X", M5.Display.width() - 10, 10);
-    
+
     // Draw alt text or "Tap to close" hint at bottom
     M5.Display.setTextColor(TFT_DARKGRAY, TFT_WHITE);
     M5.Display.setTextDatum(textdatum_t::bottom_center);
     M5.Display.setTextSize(1.2f);
-    if (!currentImageInfo.alt.empty()) {
+    if (!currentImageInfo.alt.empty())
+    {
         // Truncate if too long
         std::string altText = currentImageInfo.alt;
-        if (altText.length() > 50) {
+        if (altText.length() > 50)
+        {
             altText = altText.substr(0, 47) + "...";
         }
         M5.Display.drawString(altText.c_str(), M5.Display.width() / 2, M5.Display.height() - 10);
-    } else {
+    }
+    else
+    {
         M5.Display.drawString("Tap to close", M5.Display.width() / 2, M5.Display.height() - 10);
     }
-    
+
     M5.Display.display();
 }
 
 void GUI::onImageViewerClick(int x, int y)
 {
     ESP_LOGI(TAG, "Image viewer click at %d, %d", x, y);
-    
+
     // Any tap closes the image viewer
     closeImageViewer();
 }
 
-bool GUI::openImageViewer(const EpubImage& image)
+bool GUI::openImageViewer(const EpubImage &image)
 {
     ESP_LOGI(TAG, "Opening image viewer for: %s", image.path.c_str());
-    
+
     // Store image info
     currentImageInfo = image;
     imageTextOffset = image.textOffset;
-    
+
     // Extract image data from EPUB
     currentImageData.clear();
-    
+
     bool success = false;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         success = epubLoader.extractImage(image.path, currentImageData);
         xSemaphoreGive(epubMutex);
     }
-    
-    if (!success || currentImageData.empty()) {
+
+    if (!success || currentImageData.empty())
+    {
         ESP_LOGE(TAG, "Failed to extract image: %s", image.path.c_str());
         return false;
     }
-    
+
     ESP_LOGI(TAG, "Extracted image: %zu bytes", currentImageData.size());
-    
+
     // Transition to image viewer state
     previousState = currentState;
     currentState = AppState::IMAGE_VIEWER;
     imageViewerActive = true;
     needsRedraw = true;
-    
+
     return true;
 }
 
 void GUI::closeImageViewer()
 {
     ESP_LOGI(TAG, "Closing image viewer");
-    
+
     // Free image data memory
     currentImageData.clear();
     currentImageData.shrink_to_fit();
-    
+
     imageViewerActive = false;
-    
+
     // Return to reader state
     currentState = AppState::READER;
     needsRedraw = true;
 }
 
-bool GUI::renderImageAtOffset(size_t offset, M5Canvas* target, int x, int y, int maxWidth, int maxHeight)
+bool GUI::renderImageAtOffset(size_t offset, M5Canvas *target, int x, int y, int maxWidth, int maxHeight)
 {
     // Find image at this offset
-    const EpubImage* image = nullptr;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    const EpubImage *image = nullptr;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         image = epubLoader.findImageAtOffset(offset, 5);
         xSemaphoreGive(epubMutex);
     }
-    
-    if (!image) {
+
+    if (!image)
+    {
         ESP_LOGW(TAG, "No image found at offset %zu", offset);
         return false;
     }
-    
+
     // Extract image data
     std::vector<uint8_t> imageData;
     bool success = false;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
         success = epubLoader.extractImage(image->path, imageData);
         xSemaphoreGive(epubMutex);
     }
-    
-    if (!success || imageData.empty()) {
+
+    if (!success || imageData.empty())
+    {
         ESP_LOGW(TAG, "Failed to extract image at offset %zu", offset);
         return false;
     }
-    
+
     // Decode and render
-    ImageHandler& imgHandler = ImageHandler::getInstance();
+    ImageHandler &imgHandler = ImageHandler::getInstance();
     ImageDecodeResult result = imgHandler.decodeAndRender(
         imageData.data(),
         imageData.size(),
@@ -5119,14 +5183,14 @@ bool GUI::renderImageAtOffset(size_t offset, M5Canvas* target, int x, int y, int
         x, y,
         maxWidth,
         maxHeight,
-        image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE
-    );
-    
-    if (!result.success) {
+        image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE);
+
+    if (!result.success)
+    {
         ESP_LOGE(TAG, "Failed to decode image: %s", result.errorMsg.c_str());
         return false;
     }
-    
+
     ESP_LOGI(TAG, "Rendered image at offset %zu: %dx%d", offset, result.scaledWidth, result.scaledHeight);
     return true;
 }

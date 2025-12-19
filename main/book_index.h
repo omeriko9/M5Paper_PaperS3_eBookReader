@@ -24,6 +24,10 @@ public:
     using ProgressCallback = std::function<void(int, int, const char*)>;
     
     bool init(bool fastMode = false, ProgressCallback callback = nullptr);
+    
+    // Background scanning
+    bool scanForNewBooks(ProgressCallback callback = nullptr);
+
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);
     void removeBook(int id);

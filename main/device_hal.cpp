@@ -653,9 +653,9 @@ void DeviceHAL::enterDeepSleepShutdown() {
     M5.Display.sleep();
     M5.Display.waitDisplay();
     
-    // Configure wake source for S3
+    // Configure wake source for S3: Wake on button (GPIO 0)
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    esp_sleep_enable_ext0_wakeup(getTouchInterruptPin(), 0);
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
 #endif
 
     esp_deep_sleep_start();

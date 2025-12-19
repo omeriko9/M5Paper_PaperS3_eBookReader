@@ -83,6 +83,16 @@ public:
     ImageFormat detectFormatFromFilename(const std::string& filename);
 
     /**
+     * @brief Get image dimensions from header data
+     * @param data Header data (at least 32 bytes recommended)
+     * @param size Size of header data
+     * @param outWidth Output width
+     * @param outHeight Output height
+     * @return true if dimensions found
+     */
+    bool getDimensions(const uint8_t* data, size_t size, int& outWidth, int& outHeight);
+
+    /**
      * @brief Decode image and render to canvas at specified position
      * 
      * Uses streaming decode to minimize memory. Image is converted to grayscale

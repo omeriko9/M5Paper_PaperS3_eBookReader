@@ -1,5 +1,7 @@
 #include "epub_loader.h"
+#include "image_handler.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include <stdio.h>
 #include <string.h>
 #include <map>
@@ -85,6 +87,7 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex) {
         if (spine.size() > 1) {
             int maxSkip = std::min((int)spine.size() - 1, 5); 
             for (int i = 0; i < maxSkip; ++i) {
+                esp_task_wdt_reset();
                 if (isChapterSkippable(i)) {
                     ESP_LOGI(TAG, "Skipping chapter %d (heuristic)", i);
                     currentChapterIndex++;
@@ -97,6 +100,7 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex) {
 
     currentTextOffset = 0;
     loadChapter(currentChapterIndex);
+    esp_task_wdt_reset();
 
     // If the loaded chapter is very small (likely empty or just an image wrapper), try next
     // Limit this to a few chapters to avoid infinite loop
@@ -104,12 +108,14 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex) {
     if (restoreChapterIndex == -1) {
         int retries = 0;
         while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
+            esp_task_wdt_reset();
             ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
             currentChapterIndex++;
             loadChapter(currentChapterIndex);
             retries++;
         }
     }
+    esp_task_wdt_reset();
     
     return true;
 }
@@ -124,6 +130,7 @@ bool EpubLoader::loadMetadataOnly(const char* path) {
         return false;
     }
     isOpen = true;
+    esp_task_wdt_reset();
 
     if (!parseContainer()) {
         ESP_LOGE(TAG, "Failed to parse container.xml (metadata)");
@@ -240,6 +247,7 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     // <item id="id" href="path" ... />
     size_t pos = 0;
     while (true) {
+        esp_task_wdt_reset();
         pos = xml.find("<item ", pos);
         if (pos == std::string::npos) break;
         
@@ -276,6 +284,7 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     if (pos == std::string::npos) return false;
     
     while (true) {
+        esp_task_wdt_reset();
         pos = xml.find("<itemref ", pos);
         if (pos == std::string::npos) break;
         
@@ -723,42 +732,67 @@ bool EpubLoader::extractImage(const std::string& imagePath, std::vector<uint8_t>
         return false;
     }
     
+    std::string finalPath = "";
+    
     // Try the path as-is first
     if (zip.fileExists(imagePath)) {
-        return zip.extractBinary(imagePath, outData);
-    }
-    
-    // Try with rootDir prefix
-    std::string fullPath = rootDir + imagePath;
-    if (zip.fileExists(fullPath)) {
-        return zip.extractBinary(fullPath, outData);
-    }
-    
-    // Try without any prefix (image might be at root)
-    size_t lastSlash = imagePath.rfind('/');
-    if (lastSlash != std::string::npos) {
-        std::string filename = imagePath.substr(lastSlash + 1);
-        // Search in common image directories
-        std::vector<std::string> searchPaths = {
-            "images/" + filename,
-            "Images/" + filename,
-            "OEBPS/images/" + filename,
-            "OEBPS/Images/" + filename,
-            rootDir + "images/" + filename,
-            rootDir + "Images/" + filename,
-            filename
-        };
-        
-        for (const auto& path : searchPaths) {
-            if (zip.fileExists(path)) {
-                ESP_LOGI(TAG, "Found image at: %s (searched for: %s)", path.c_str(), imagePath.c_str());
-                return zip.extractBinary(path, outData);
+        finalPath = imagePath;
+    } else {
+        // Try with rootDir prefix
+        std::string fullPath = rootDir + imagePath;
+        if (zip.fileExists(fullPath)) {
+            finalPath = fullPath;
+        } else {
+            // Try without any prefix (image might be at root)
+            size_t lastSlash = imagePath.rfind('/');
+            if (lastSlash != std::string::npos) {
+                std::string filename = imagePath.substr(lastSlash + 1);
+                // Search in common image directories
+                std::vector<std::string> searchPaths = {
+                    "images/" + filename,
+                    "Images/" + filename,
+                    "OEBPS/images/" + filename,
+                    "OEBPS/Images/" + filename,
+                    rootDir + "images/" + filename,
+                    rootDir + "Images/" + filename,
+                    filename
+                };
+                
+                for (const auto& path : searchPaths) {
+                    if (zip.fileExists(path)) {
+                        finalPath = path;
+                        ESP_LOGI(TAG, "Found image at: %s (searched for: %s)", path.c_str(), imagePath.c_str());
+                        break;
+                    }
+                }
             }
         }
     }
     
-    ESP_LOGW(TAG, "Image not found: %s", imagePath.c_str());
-    return false;
+    if (finalPath.empty()) {
+        ESP_LOGW(TAG, "Image not found: %s", imagePath.c_str());
+        return false;
+    }
+
+    // Peek header to check dimensions before extracting full binary
+    uint8_t header[64]; // Enough for PNG and most JPEGs
+    size_t peekSize = zip.peekFile(finalPath, header, sizeof(header));
+    if (peekSize > 0) {
+        int w, h;
+        if (ImageHandler::getInstance().getDimensions(header, peekSize, w, h)) {
+            // If image is extremely large (e.g. > 4000x4000), skip it to avoid OOM or watchdog
+            // Note: ImageHandler will allow up to MAX_IMAGE_DIMENSION (1920) *after scaling*
+            // But we need to be careful about the extraction buffer too.
+            // ZipReader::extractBinary limits to 5MB.
+            
+            if (w > 4000 || h > 4000) {
+                ESP_LOGW(TAG, "Image too large to process: %dx%d (%s)", w, h, finalPath.c_str());
+                return false;
+            }
+        }
+    }
+    
+    return zip.extractBinary(finalPath, outData);
 }
 
 const EpubImage* EpubLoader::findImageAtOffset(size_t textOffset, size_t tolerance) const {

@@ -2,13 +2,13 @@ import os
 import sys
 import zipfile
 import shutil
-import os
 import re
-import sys
-import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional, Tuple
+from PIL import Image
+from io import BytesIO
+import argparse
 
 
 def rename_epub_by_metadata(epub_path_str: str) -> Optional[Path]:
@@ -153,19 +153,40 @@ def rename_epub_by_metadata(epub_path_str: str) -> Optional[Path]:
 
 
 # Extensions to strip (Images and Fonts)
-REMOVE_EXTS = {
-    # Images
-    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.tiff',
-    # Fonts
+IMAGE_EXTS = {
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff'
+    # Note: SVG not included as it's vector, harder to downscale
+}
+
+FONT_EXTS = {
     '.ttf', '.otf', '.woff', '.woff2', '.eot'
 }
 
+REMOVE_EXTS = IMAGE_EXTS | FONT_EXTS
 
+
+
+def get_image_format(ext):
+    ext = ext.lower()
+    if ext in ['.jpg', '.jpeg']:
+        return 'JPEG'
+    elif ext == '.png':
+        return 'PNG'
+    elif ext == '.gif':
+        return 'GIF'
+    elif ext == '.webp':
+        return 'WEBP'
+    elif ext == '.bmp':
+        return 'BMP'
+    elif ext == '.tiff':
+        return 'TIFF'
+    else:
+        return None
 
 def should_remove(filename):
     return os.path.splitext(filename)[1].lower() in REMOVE_EXTS
 
-def process_epub(epub_path):
+def process_epub(epub_path, mode='downscale'):
     print(f"Processing: {epub_path}")
     
     # No backup created
@@ -175,15 +196,24 @@ def process_epub(epub_path):
     try:
         with zipfile.ZipFile(epub_path, 'r') as zin, zipfile.ZipFile(temp_epub, 'w', zipfile.ZIP_DEFLATED) as zout:
             
-            # 1. Identify files to remove
+            # 1. Identify files to remove and downscale
             files_to_remove = set()
+            images_to_downscale = set()
             all_files = zin.namelist()
             
             for f in all_files:
-                if should_remove(f):
+                ext = os.path.splitext(f)[1].lower()
+                if ext in FONT_EXTS:
                     files_to_remove.add(f)
+                elif ext in IMAGE_EXTS:
+                    if mode == 'remove':
+                        files_to_remove.add(f)
+                    elif mode == 'downscale':
+                        images_to_downscale.add(f)
             
-            print(f"  Found {len(files_to_remove)} files to remove (images/fonts).")
+            print(f"  Found {len(files_to_remove)} files to remove (fonts{' and images' if mode=='remove' else ''}).")
+            if mode == 'downscale':
+                print(f"  Found {len(images_to_downscale)} images to downscale.")
             
             # 2. Copy files, filtering OPF content
             for item in zin.infolist():
@@ -192,7 +222,33 @@ def process_epub(epub_path):
                 
                 content = zin.read(item.filename)
                 
-                # If it's an OPF file, we should try to remove references to the deleted files
+                # Downscale images if needed
+                if item.filename in images_to_downscale:
+                    try:
+                        img = Image.open(BytesIO(content))
+                        width, height = img.size
+                        max_width, max_height = 960, 540
+                        if width > max_width or height > max_height:
+                            # Calculate new size maintaining aspect ratio
+                            ratio = min(max_width / width, max_height / height)
+                            new_width = int(width * ratio)
+                            new_height = int(height * ratio)
+                            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                            output = BytesIO()
+                            ext = os.path.splitext(item.filename)[1]
+                            format = get_image_format(ext)
+                            if format:
+                                img.save(output, format=format)
+                                content = output.getvalue()
+                                print(f"  Downscaled {item.filename} from {width}x{height} to {new_width}x{new_height}")
+                            else:
+                                print(f"  Warning: Unsupported image format for {item.filename}, keeping as is.")
+                        else:
+                            print(f"  Kept {item.filename} as is ({width}x{height})")
+                    except Exception as e:
+                        print(f"  Warning: Could not downscale {item.filename}: {e}, keeping as is.")
+                
+                # If it's an OPF file, remove references to deleted files
                 if item.filename.endswith('.opf'):
                     try:
                         text = content.decode('utf-8')
@@ -200,13 +256,9 @@ def process_epub(epub_path):
                         removed_count = 0
                         for line in text.splitlines():
                             # Check if this line references any removed file
-                            # Heuristic: check if the filename of a removed file appears in the line
-                            # and the line looks like a manifest item
                             drop_line = False
                             if '<item' in line:
                                 for removed_f in files_to_remove:
-                                    # We match on basename to handle relative paths in href
-                                    # e.g. removed_f = "OEBPS/images/img.jpg", href="images/img.jpg"
                                     if os.path.basename(removed_f) in line:
                                         drop_line = True
                                         break
@@ -236,24 +288,24 @@ def process_epub(epub_path):
             os.remove(temp_epub)
 
 def main():
-    target_dir = os.getcwd()
-    if len(sys.argv) > 1:
-        target_dir = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Process EPUB files: downscale images or remove them.")
+    parser.add_argument('target_dir', nargs='?', default=os.getcwd(), help="Directory containing EPUB files (default: current directory)")
+    parser.add_argument('--mode', choices=['downscale', 'remove'], default='downscale', help="Mode: 'downscale' to resize large images, 'remove' to remove images (default: downscale)")
+    
+    args = parser.parse_args()
+    target_dir = args.target_dir
+    mode = args.mode
         
     print(f"Scanning directory: {target_dir}")
+    print(f"Mode: {mode}")
     
     count = 0
-    # Only scan the top level directory, or recursively? 
-    # "to all the epub files in the folder it runs in" implies top level of that folder.
-    # But os.walk is safer if they have subfolders. Let's stick to os.listdir for "the folder it runs in" strictly, 
-    # or os.walk for robustness. The user said "in the folder it runs in", usually implies flat scan.
-    # I'll use os.listdir to be safe and simple.
     
     for filename in os.listdir(target_dir):
         if filename.lower().endswith('.epub'):
             full_path = os.path.join(target_dir, filename)
             if os.path.isfile(full_path):
-                process_epub(full_path)
+                process_epub(full_path, mode)
                 rename_epub_by_metadata(full_path)
                 count += 1
                 

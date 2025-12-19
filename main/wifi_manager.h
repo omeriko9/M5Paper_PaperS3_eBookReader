@@ -2,15 +2,17 @@
 #include <string>
 #include <vector>
 #include "esp_wifi.h"
+#include "esp_heap_caps.h"
 
 class WifiManager {
 public:
-    void init();
+    bool init(); // Returns false if init failed (e.g., out of memory)
     bool connect(); // Try to connect with stored creds
     void disconnect(); // Stop WiFi
     void startAP(); // Start Access Point for config
     bool isConnected();
     bool isInitialized() const { return s_initialized; }
+    bool hasInitFailed() const { return s_init_failed; }
     std::string getIpAddress();
     int getRssi();
     
@@ -24,4 +26,5 @@ public:
 
 private:
     bool s_initialized = false;
+    bool s_init_failed = false;
 };

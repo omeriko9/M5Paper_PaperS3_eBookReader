@@ -12,6 +12,7 @@
 #include "book_index.h"
 #include "gui.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "device_hal.h"
 #include "sdkconfig.h"
 
@@ -731,6 +732,7 @@ static esp_err_t jump_handler(httpd_req_t *req) {
 /* Handler for upload */
 static esp_err_t upload_post_handler(httpd_req_t *req)
 {
+    esp_task_wdt_add(NULL);
     // Update activity time at start of upload to prevent sleep
     WebServer::updateActivityTime();
     
@@ -739,6 +741,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     const char* filename_start = strstr(uri, "/upload/");
     if (!filename_start) {
         httpd_resp_send_500(req);
+        esp_task_wdt_delete(NULL);
         return ESP_FAIL;
     }
     filename_start += 8; // Skip "/upload/"
@@ -760,6 +763,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     if (!f) {
         ESP_LOGE(TAG, "Failed to open file for writing: %s (errno: %d)", safePath.c_str(), errno);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file");
+        esp_task_wdt_delete(NULL);
         return ESP_FAIL;
     }
 
@@ -768,6 +772,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
         fclose(f);
         ESP_LOGE(TAG, "Failed to allocate buffer");
         httpd_resp_send_500(req);
+        esp_task_wdt_delete(NULL);
         return ESP_FAIL;
     }
 
@@ -776,6 +781,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     int64_t lastLogTime = 0;
 
     while (remaining > 0) {
+        esp_task_wdt_reset();
         // Update activity time during upload to prevent sleep on large files
         WebServer::updateActivityTime();
 
@@ -794,6 +800,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             fclose(f);
             unlink(safePath.c_str());
             ESP_LOGE(TAG, "File upload failed during receive");
+            esp_task_wdt_delete(NULL);
             return ESP_FAIL;
         }
         size_t written = fwrite(buf, 1, received, f);
@@ -802,6 +809,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             fclose(f);
             ESP_LOGE(TAG, "File write failed");
             httpd_resp_send_500(req);
+            esp_task_wdt_delete(NULL);
             return ESP_FAIL;
         }
         remaining -= received;
@@ -812,6 +820,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     gui.refreshLibrary();
     
     httpd_resp_send_chunk(req, NULL, 0);
+    esp_task_wdt_delete(NULL);
     return ESP_OK;
 }
 
