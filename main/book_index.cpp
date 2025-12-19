@@ -363,7 +363,7 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
                     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
                     // Recalculate ID safely
                     id = getNextId(); 
-                    books.push_back({id, title, bookAuthor, fullPath, 0, 0, currentSize, false, false});
+                    books.push_back({id, title, bookAuthor, fullPath, 0, 0, currentSize, false, false, "", 1.0f});
                     ESP_LOGI(TAG, "Found new book: %s by %s", title.c_str(), bookAuthor.c_str());
                     foundNewBooks = true;
                     xSemaphoreGiveRecursive(mutex);
@@ -452,12 +452,20 @@ void BookIndex::load()
             bool isFavorite = false;
             if (parts.size() >= 9)
                 isFavorite = (atoi(parts[8].c_str()) == 1);
+            
+            std::string lastFont;
+            if (parts.size() >= 10)
+                lastFont = parts[9];
+            
+            float lastFontSize = 1.0f;
+            if (parts.size() >= 11)
+                lastFontSize = atof(parts[10].c_str());
 
             // Verify file exists
             struct stat st;
             if (stat(path.c_str(), &st) == 0)
             {
-                books.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite});
+                books.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite, lastFont, lastFontSize});
                 // log the book
                 ESP_LOGI(TAG, "Loaded book: %s by %s", title.c_str(), author.c_str());
             }
@@ -491,7 +499,7 @@ void BookIndex::save()
     for (const auto &book : books)
     {
         esp_task_wdt_reset();
-        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d\n", 
+        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f\n", 
             book.id, 
             sanitize(book.title).c_str(), 
             book.currentChapter, 
@@ -500,7 +508,9 @@ void BookIndex::save()
             (unsigned int)book.fileSize, 
             book.hasMetrics ? 1 : 0, 
             sanitize(book.author).c_str(), 
-            book.isFavorite ? 1 : 0);
+            book.isFavorite ? 1 : 0,
+            sanitize(book.lastFont).c_str(),
+            book.lastFontSize);
     }
     fclose(f);
 }
@@ -534,7 +544,7 @@ BookEntry BookIndex::getBook(int id)
         }
     }
     xSemaphoreGiveRecursive(mutex);
-    return {0, "", "", "", 0, 0, 0, false, false};
+    return {0, "", "", "", 0, 0, 0, false, false, "", 1.0f};
 }
 
 int BookIndex::getNextId()
@@ -562,7 +572,7 @@ std::string BookIndex::addBook(const std::string &title)
         snprintf(path, sizeof(path), "/spiffs/%d.epub", id);
     }
 
-    books.push_back({id, title, "", std::string(path), 0, 0, 0, false, false});
+    books.push_back({id, title, "", std::string(path), 0, 0, 0, false, false, "", 1.0f});
     save();
 
     xSemaphoreGiveRecursive(mutex);
@@ -678,6 +688,39 @@ bool BookIndex::isFavorite(int id)
             bool fav = book.isFavorite;
             xSemaphoreGiveRecursive(mutex);
             return fav;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
+    return false;
+}
+
+void BookIndex::setBookFont(int id, const std::string& fontName, float fontSize)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (auto& book : books) {
+        if (book.id == id) {
+            book.lastFont = fontName;
+            book.lastFontSize = fontSize;
+            save();
+            break;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
+}
+
+bool BookIndex::getBookFont(int id, std::string& fontName, float& fontSize)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (const auto& book : books) {
+        if (book.id == id) {
+            if (!book.lastFont.empty()) {
+                fontName = book.lastFont;
+                fontSize = book.lastFontSize;
+                xSemaphoreGiveRecursive(mutex);
+                return true;
+            }
+            xSemaphoreGiveRecursive(mutex);
+            return false;
         }
     }
     xSemaphoreGiveRecursive(mutex);

@@ -111,7 +111,7 @@ public:
     ImageDecodeResult decodeAndRender(
         const uint8_t* data, 
         size_t size,
-        M5Canvas* target,
+        LovyanGFX* target,
         int x, 
         int y,
         int maxWidth = 0,
@@ -197,7 +197,7 @@ private:
     // JPEG decode helpers
     ImageDecodeResult decodeJpeg(
         const uint8_t* data, size_t size,
-        M5Canvas* target, int x, int y,
+        LovyanGFX* target, int x, int y,
         int maxWidth, int maxHeight,
         ImageDisplayMode mode
     );
@@ -211,7 +211,7 @@ private:
     // PNG decode helpers
     ImageDecodeResult decodePng(
         const uint8_t* data, size_t size,
-        M5Canvas* target, int x, int y,
+        LovyanGFX* target, int x, int y,
         int maxWidth, int maxHeight,
         ImageDisplayMode mode
     );

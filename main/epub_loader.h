@@ -34,6 +34,7 @@ public:
     
     int getCurrentChapterIndex() const { return currentChapterIndex; }
     int getTotalChapters() const { return spine.size(); }
+    const std::vector<std::string>& getSpine() const { return spine; }
     
     bool jumpToChapter(int index);
 

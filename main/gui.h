@@ -6,9 +6,11 @@
 #include "book_index.h"
 #include "sdkconfig.h"
 #include "epub_loader.h"
+#include "gesture_detector.h"
+#include <map>
 
 enum class AppState {
-    MAIN_MENU,      // New main menu with 6 buttons
+    MAIN_MENU,      // Main menu with 6 buttons
     LIBRARY,
     READER,
     WIFI_CONFIG,
@@ -17,7 +19,11 @@ enum class AppState {
     WIFI_SCAN,
     WIFI_PASSWORD,
     FAVORITES,      // Favorites-only book list
-    IMAGE_VIEWER    // Full-screen image viewing mode
+    IMAGE_VIEWER,   // Full-screen image viewing mode
+    GAMES_MENU,     // Games selection menu
+    GAME_PLAYING,   // Active game
+    CHAPTER_MENU,   // In-book chapter jump menu
+    FONT_SELECTION  // Font selection screen (S3 only)
 };
 
 struct RenderRequest {
@@ -44,9 +50,14 @@ public:
     void setFontSize(float size);
     void setFont(const std::string& fontName);
     void setLineSpacing(float spacing);
-    float getFontSize() const { return fontSize; }
+    float getFontSize() const;  // Returns size for current font
+    float getFontSize(const std::string& fontName) const;  // Get size for specific font
     std::string getFont() const { return currentFont; }
     float getLineSpacing() const { return lineSpacing; }
+    
+    // Text boldness (0-3, uses grayscale shades)
+    void setTextBoldness(int level);
+    int getTextBoldness() const { return textBoldness; }
     
     void jumpTo(float percent);
     void jumpToChapter(int chapter);
@@ -123,8 +134,9 @@ private:
     // Library State
     int libraryPage = 0;
 
-    // Settings
-    float fontSize = 1.0f; // Scale factor
+    // Settings - Per-font sizes stored in map
+    std::map<std::string, float> fontSizes;  // Font name -> size
+    float fontSize = 1.0f; // Current font size
     float lineSpacing = 1.1f; // Line height multiplier (1.0 = tight, 2.0 = double spaced)
     std::string currentFont = "Default";
     std::string previousFont = "Default";
@@ -134,6 +146,14 @@ private:
     std::vector<uint8_t> fontDataArabic; // Cache for Arabic font
     bool wifiEnabled = true;
     bool showImages = true;
+    int textBoldness = 0;  // 0-3, controls grayscale intensity
+    
+    // SD card fonts (S3 only)
+    std::vector<std::string> sdCardFonts;  // List of .otf fonts on SD card
+    int fontSelectionPage = 0;
+    
+    // Gesture detection
+    GestureDetector gestureDetector;
     
     size_t lastPageChars = 0;
     int lastPageTotal = 1;
@@ -169,7 +189,7 @@ private:
     void drawStatusBar(LovyanGFX* target = nullptr);
     void drawFooter(LovyanGFX* target, size_t pageOffset, size_t charsOnPage);
     void drawSleepSymbol(const char* symbol);
-    void drawMainMenu();        // New main menu with 6 buttons
+    void drawMainMenu();        // Main menu with 6 buttons
     void drawLibrary(bool favoritesOnly = false);  // Book list with optional favorites filter
     void drawSearchBar(LovyanGFX* target);
     void drawKeyboard(LovyanGFX* target);
@@ -179,10 +199,15 @@ private:
     void drawWifiConfig();
     void drawSettings();
     void drawWifiScan();
+    void drawChapterMenu();     // In-book chapter jump menu
+    void drawGamesMenu();       // Games selection menu  
+    void drawGame();            // Current game rendering
+    void drawFontSelection();   // Font selection screen (S3 only)
     void drawWifiPassword();
     void drawImageViewer();   // Full-screen image display
     
     void handleTouch();
+    void handleGesture(const GestureEvent& event);  // Process detected gestures
     void handleButtonPress();   // Handle hardware button press (long press = shutdown)
     void processReaderTap(int x, int y, bool isDouble);
     void onMainMenuClick(int x, int y);  // Handle main menu clicks
@@ -192,6 +217,9 @@ private:
     void onKeyboardClick(int x, int y);
     void onSettingsClick(int x, int y);  // Handle standalone settings clicks
     void onImageViewerClick(int x, int y);  // Handle image viewer clicks
+    void onChapterMenuClick(int x, int y);  // Handle chapter menu clicks
+    void onGamesMenuClick(int x, int y);    // Handle games menu clicks
+    void onFontSelectionClick(int x, int y); // Handle font selection clicks
     
     // Image rendering helpers
     bool renderImageAtOffset(size_t offset, M5Canvas* target, int x, int y, int maxWidth, int maxHeight);
@@ -203,11 +231,15 @@ private:
     void loadFonts();
     void ensureHebrewFontLoaded();
     void ensureArabicFontLoaded();
+    void scanSDCardFonts();  // Scan SD card for .otf fonts
     void drawStringMixed(const std::string &text, int x, int y, M5Canvas *target = nullptr, float size = -1.0f, bool isProcessed = false, bool respectUserFont = true);
     
     void saveSettings();
     void loadSettings();
+    void saveLastBook();     // Save current book and page to NVS
+    bool loadLastBook();     // Load and open last book, returns success
     void goToSleep();
+    void showWallpaperAndSleep();  // Show random wallpaper before sleep (S3 only)
     
     size_t drawPageContent(bool draw);
     size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas* target = nullptr, volatile bool* abort = nullptr);
@@ -216,6 +248,10 @@ private:
     void computeBookMetrics();
     void computeBookMetricsLocked();
     void updateNextPrevCanvases();
+    
+    // UI color helpers for 16-shade grayscale
+    uint32_t getTextColor(int brightness = 0) const;  // Returns color based on brightness (0=black)
+    uint8_t getGrayShade(int level) const;  // Get grayscale value (0=white, 15=black)
 
     uint32_t lastActivityTime = 0;
     bool webServerEnabled = true;

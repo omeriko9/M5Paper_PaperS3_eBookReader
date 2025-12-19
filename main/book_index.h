@@ -15,6 +15,8 @@ struct BookEntry {
     size_t fileSize = 0; // For cache validation
     bool hasMetrics = false;
     bool isFavorite = false; // User-marked favorite
+    std::string lastFont;    // Last font used for this book
+    float lastFontSize = 1.0f;  // Last font size used
 };
 
 class BookIndex {
@@ -40,6 +42,10 @@ public:
     // Favorites management
     void setFavorite(int id, bool favorite);
     bool isFavorite(int id);
+    
+    // Book font settings
+    void setBookFont(int id, const std::string& fontName, float fontSize);
+    bool getBookFont(int id, std::string& fontName, float& fontSize);
 
     // Metrics persistence
     bool saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets);

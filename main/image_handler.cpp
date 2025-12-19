@@ -286,7 +286,7 @@ float ImageHandler::calculateScaleFactor(int srcW, int srcH, int maxW, int maxH)
 
 ImageDecodeResult ImageHandler::decodeAndRender(
     const uint8_t *data, size_t size,
-    M5Canvas *target, int x, int y,
+    LovyanGFX *target, int x, int y,
     int maxWidth, int maxHeight,
     ImageDisplayMode mode)
 {
@@ -371,14 +371,14 @@ ImageDecodeResult ImageHandler::decodeToDisplay(
 
 ImageDecodeResult ImageHandler::decodeJpeg(
     const uint8_t *data, size_t size,
-    M5Canvas *target, int x, int y,
+    LovyanGFX *target, int x, int y,
     int maxWidth, int maxHeight,
     ImageDisplayMode mode)
 {
     ImageDecodeResult result;
 
     // Get the graphics target - either canvas or main display
-    LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
+    LovyanGFX *gfx = target ? target : (LovyanGFX *)&M5.Display;
 
     if (target && target->width() == 0)
     {
@@ -559,14 +559,14 @@ ImageDecodeResult ImageHandler::decodeJpegToDisplay(
 
 ImageDecodeResult ImageHandler::decodePng(
     const uint8_t *data, size_t size,
-    M5Canvas *target, int x, int y,
+    LovyanGFX *target, int x, int y,
     int maxWidth, int maxHeight,
     ImageDisplayMode mode)
 {
     ImageDecodeResult result;
 
     // Get the graphics target - either canvas or main display
-    LovyanGFX *gfx = target ? (LovyanGFX *)target : (LovyanGFX *)&M5.Display;
+    LovyanGFX *gfx = target ? target : (LovyanGFX *)&M5.Display;
 
     if (target && target->width() == 0)
     {

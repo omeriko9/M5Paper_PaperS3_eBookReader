@@ -7,6 +7,8 @@
 #include "book_index.h"
 #include "device_hal.h"
 #include "image_handler.h"
+#include "gesture_detector.h"
+#include "game_manager.h"
 #include <vector>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -24,6 +26,7 @@
 #include <new>
 #include "sdkconfig.h"
 #include <ctime>
+#include <random>
 
 // Image placeholder character (U+E000 in UTF-8)
 static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
@@ -1180,6 +1183,18 @@ void GUI::update()
             break;
         case AppState::IMAGE_VIEWER:
             drawImageViewer();
+            break;
+        case AppState::GAMES_MENU:
+            drawGamesMenu();
+            break;
+        case AppState::GAME_PLAYING:
+            drawGame();
+            break;
+        case AppState::CHAPTER_MENU:
+            drawChapterMenu();
+            break;
+        case AppState::FONT_SELECTION:
+            drawFontSelection();
             break;
         }
         needsRedraw = false;
@@ -2589,7 +2604,7 @@ void GUI::drawMainMenu()
         {"WiFi", "Network", true},
         {"Settings", "Options", true},
         {"Favorites", "Starred", true},
-        {"", "", false} // Empty placeholder
+        {"More", "Games", true} // Games and extras
     };
 
     target->startWrite();
@@ -2605,13 +2620,6 @@ void GUI::drawMainMenu()
         // Draw button background
         uint16_t bgColor = TFT_WHITE;
         uint16_t borderColor = TFT_BLACK;
-
-        if (i == 5)
-        {
-            // Empty button - just draw a light border
-            target->drawRect(bx, by, btnW, btnH, TFT_LIGHTGREY);
-            continue;
-        }
 
         if (!buttons[i].enabled)
         {
@@ -2668,25 +2676,8 @@ void GUI::drawMainMenu()
 void GUI::goToSleep()
 {
     ESP_LOGI(TAG, "Entering goToSleep()...");
-    // Save progress
-    int chIdx = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
-    {
-        chIdx = epubLoader.getCurrentChapterIndex();
-        xSemaphoreGive(epubMutex);
-    }
-    bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
-    // Ensure we always remember the last-opened book for deep sleep wake restores
-    {
-        nvs_handle_t my_handle;
-        if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
-        {
-            nvs_set_i32(my_handle, "last_book_id", currentBook.id);
-            nvs_set_i32(my_handle, "last_state", (int)currentState);
-            nvs_commit(my_handle);
-            nvs_close(my_handle);
-        }
-    }
+    // Save progress using the centralized helper
+    saveLastBook();
 
     // Flush any pending display operations before sleeping
     M5.Display.waitDisplay();
@@ -3244,6 +3235,8 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
             pageHistory.clear();
             resetPageInfoCache();
             needsRedraw = true;
+            // Save progress on chapter change
+            saveLastBook();
         }
     }
     else
@@ -3355,6 +3348,8 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
                     pageHistory.clear();
                     resetPageInfoCache();
                     needsRedraw = true;
+                    // Save progress on chapter change
+                    saveLastBook();
                 }
             }
             else
@@ -3362,6 +3357,8 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
                 pageHistory.push_back(currentTextOffset);
                 currentTextOffset += charsOnPage;
                 needsRedraw = true;
+                // Save progress every page turn (for robust last book tracking)
+                saveLastBook();
             }
         }
     }
@@ -3434,11 +3431,54 @@ void GUI::onMainMenuClick(int x, int y)
                 needsRedraw = true;
                 break;
 
-            case 5: // Empty - do nothing
+            case 5: // More (Games menu)
+                currentState = AppState::GAMES_MENU;
+                needsRedraw = true;
                 break;
             }
             return;
         }
+    }
+}
+
+void GUI::handleGesture(const GestureEvent& event)
+{
+    // Handle swipe gestures in reader mode
+    if (currentState != AppState::READER)
+        return;
+    
+    int screenW = M5.Display.width();
+    int screenH = M5.Display.height();
+    
+    switch (event.type)
+    {
+    case GestureType::SWIPE_LEFT:
+        // Right-to-left swipe in middle area opens chapter menu
+        if (event.startY > STATUS_BAR_HEIGHT + 50 && event.startY < screenH - 100)
+        {
+            previousState = currentState;
+            currentState = AppState::CHAPTER_MENU;
+            needsRedraw = true;
+        }
+        break;
+        
+    case GestureType::SWIPE_UP:
+        // Swipe up from bottom opens settings
+        if (event.startY > screenH - 150)
+        {
+            previousState = currentState;
+            currentState = AppState::BOOK_SETTINGS;
+            needsRedraw = true;
+        }
+        break;
+        
+    case GestureType::SWIPE_RIGHT:
+    case GestureType::SWIPE_DOWN:
+        // Could add functionality later
+        break;
+        
+    default:
+        break;
     }
 }
 
@@ -3522,7 +3562,8 @@ void GUI::handleTouch()
                         chIdx = epubLoader.getCurrentChapterIndex();
                         xSemaphoreGive(epubMutex);
                     }
-                    bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
+                    // Save progress before exiting using centralized helper
+                    saveLastBook();
 
                     currentState = AppState::MAIN_MENU;
                     epubLoader.close();
@@ -3713,6 +3754,28 @@ void GUI::handleTouch()
                 onWifiPasswordClick(t.x, t.y);
                 justWokeUp = false;
             }
+            else if (currentState == AppState::GAMES_MENU)
+            {
+                onGamesMenuClick(t.x, t.y);
+                justWokeUp = false;
+            }
+            else if (currentState == AppState::GAME_PLAYING)
+            {
+                // Let game manager handle the touch
+                GameManager &gm = GameManager::getInstance();
+                if (gm.handleTouch(t.x, t.y))
+                {
+                    needsRedraw = true;
+                }
+                // Check if game wants to return to menu
+                if (gm.shouldReturnToMenu())
+                {
+                    gm.clearReturnFlag();
+                    currentState = AppState::GAMES_MENU;
+                    needsRedraw = true;
+                }
+                justWokeUp = false;
+            }
             else if (currentState == AppState::IMAGE_VIEWER)
             {
                 onImageViewerClick(t.x, t.y);
@@ -3859,7 +3922,18 @@ bool GUI::openBookById(int id)
     // Release mutex
     xSemaphoreGive(epubMutex);
 
-    if (isHebrew)
+    // Restore book-specific font settings if available
+    std::string bookFont;
+    float bookFontSize;
+    if (bookIndex.getBookFont(id, bookFont, bookFontSize))
+    {
+        if (!bookFont.empty())
+        {
+            setFont(bookFont);
+            fontSize = bookFontSize;
+        }
+    }
+    else if (isHebrew)
     {
         setFont("Hebrew");
     }
@@ -3867,14 +3941,8 @@ bool GUI::openBookById(int id)
     pageHistory.clear();
     needsRedraw = true;
 
-    // Save as last book
-    nvs_handle_t my_handle;
-    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
-    {
-        nvs_set_i32(my_handle, "last_book_id", currentBook.id);
-        nvs_commit(my_handle);
-        nvs_close(my_handle);
-    }
+    // Save as last book immediately
+    saveLastBook();
 
     return true;
 }
@@ -3906,6 +3974,24 @@ void GUI::saveSettings()
         nvs_set_i32(my_handle, "show_images", showImages ? 1 : 0);
         int32_t spacingInt = (int32_t)(lineSpacing * 10);
         nvs_set_i32(my_handle, "line_spacing", spacingInt);
+
+        // Save text boldness
+        nvs_set_i32(my_handle, "text_bold", textBoldness);
+
+        // Save per-font size settings
+        std::string fontSizeStr;
+        for (const auto &entry : fontSizes)
+        {
+            if (!fontSizeStr.empty())
+                fontSizeStr += ",";
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%s:%.1f", entry.first.c_str(), entry.second);
+            fontSizeStr += buf;
+        }
+        if (!fontSizeStr.empty())
+        {
+            nvs_set_str(my_handle, "font_sizes", fontSizeStr.c_str());
+        }
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         // Save M5PaperS3-specific settings
@@ -3979,9 +4065,31 @@ void GUI::setFontSize(float size)
     if (size > 5.0f)
         size = 5.0f;
     fontSize = size;
+    // Store size per font
+    fontSizes[currentFont] = size;
     saveSettings();
+    // Save book-specific font settings if in reader
+    if (currentState == AppState::READER && currentBook.id != 0)
+    {
+        bookIndex.setBookFont(currentBook.id, currentFont, fontSize);
+    }
     resetPageInfoCache();
     needsRedraw = true;
+}
+
+float GUI::getFontSize() const
+{
+    return fontSize;
+}
+
+float GUI::getFontSize(const std::string& fontName) const
+{
+    auto it = fontSizes.find(fontName);
+    if (it != fontSizes.end())
+    {
+        return it->second;
+    }
+    return 1.0f; // Default
 }
 
 void GUI::setLineSpacing(float spacing)
@@ -3996,12 +4104,34 @@ void GUI::setLineSpacing(float spacing)
     needsRedraw = true;
 }
 
+void GUI::setTextBoldness(int level)
+{
+    if (level < 0)
+        level = 0;
+    if (level > 3)
+        level = 3;
+    textBoldness = level;
+    saveSettings();
+    needsRedraw = true;
+}
+
 void GUI::setFont(const std::string &fontName)
 {
     if (currentFont == fontName)
         return;
     currentFont = fontName;
+    // Restore per-font size if available
+    auto it = fontSizes.find(fontName);
+    if (it != fontSizes.end())
+    {
+        fontSize = it->second;
+    }
     saveSettings();
+    // Save book-specific font settings if in reader
+    if (currentState == AppState::READER && currentBook.id != 0)
+    {
+        bookIndex.setBookFont(currentBook.id, currentFont, fontSize);
+    }
     fontChanged = true;
     needsRedraw = true;
 }
@@ -4061,8 +4191,121 @@ void GUI::loadSettings()
         }
 #endif
 
+        // Load text boldness setting
+        int32_t boldInt = 0;
+        if (nvs_get_i32(my_handle, "text_bold", &boldInt) == ESP_OK)
+        {
+            textBoldness = boldInt;
+        }
+
+        // Load per-font size settings
+        size_t fontsLen = 0;
+        if (nvs_get_str(my_handle, "font_sizes", NULL, &fontsLen) == ESP_OK && fontsLen > 1)
+        {
+            char *fontsStr = new char[fontsLen];
+            if (nvs_get_str(my_handle, "font_sizes", fontsStr, &fontsLen) == ESP_OK)
+            {
+                // Parse format: "fontName:size,fontName:size,..."
+                std::string data(fontsStr);
+                size_t pos = 0;
+                while (pos < data.length())
+                {
+                    size_t comma = data.find(',', pos);
+                    if (comma == std::string::npos)
+                        comma = data.length();
+                    std::string entry = data.substr(pos, comma - pos);
+                    size_t colon = entry.find(':');
+                    if (colon != std::string::npos)
+                    {
+                        std::string fn = entry.substr(0, colon);
+                        float sz = atof(entry.substr(colon + 1).c_str());
+                        if (!fn.empty() && sz > 0)
+                        {
+                            fontSizes[fn] = sz;
+                        }
+                    }
+                    pos = comma + 1;
+                }
+            }
+            delete[] fontsStr;
+        }
+
         nvs_close(my_handle);
     }
+}
+
+void GUI::saveLastBook()
+{
+    if (currentBook.id == 0)
+        return;
+
+    int chIdx = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
+        chIdx = epubLoader.getCurrentChapterIndex();
+        xSemaphoreGive(epubMutex);
+    }
+
+    // Save progress to book index
+    bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
+
+    // Save current font settings for this book
+    bookIndex.setBookFont(currentBook.id, currentFont, fontSize);
+
+    // Save last book ID and state to NVS
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
+    {
+        nvs_set_i32(my_handle, "last_book_id", currentBook.id);
+        nvs_set_i32(my_handle, "last_state", (int)currentState);
+        nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+
+    // Update last book info for main menu display
+    lastBookId = currentBook.id;
+    lastBookTitle = currentBook.title;
+    if (lastBookTitle.length() > 25)
+    {
+        size_t pos = 22;
+        while (pos > 0 && (lastBookTitle[pos] & 0xC0) == 0x80)
+            pos--;
+        lastBookTitle = lastBookTitle.substr(0, pos) + "...";
+    }
+}
+
+bool GUI::loadLastBook()
+{
+    nvs_handle_t my_handle;
+    int32_t lastId = -1;
+    if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
+    {
+        nvs_get_i32(my_handle, "last_book_id", &lastId);
+        nvs_close(my_handle);
+    }
+
+    if (lastId > 0)
+    {
+        return openBookById(lastId);
+    }
+    return false;
+}
+
+uint8_t GUI::getGrayShade(int level) const
+{
+    // level 0 = white, level 15 = black
+    // Return grayscale value (0-255, where 255=white, 0=black)
+    if (level < 0) level = 0;
+    if (level > 15) level = 15;
+    return 255 - (level * 17); // 0->255, 15->0
+}
+
+uint32_t GUI::getTextColor(int brightness) const
+{
+    // brightness: 0=black, 15=white
+    // Returns a color value suitable for e-paper display
+    uint8_t gray = getGrayShade(15 - brightness); // Invert so 0=white, 15=black
+    return M5.Display.color888(gray, gray, gray);
 }
 
 void GUI::loadFonts()
@@ -5193,4 +5436,556 @@ bool GUI::renderImageAtOffset(size_t offset, M5Canvas *target, int x, int y, int
 
     ESP_LOGI(TAG, "Rendered image at offset %zu: %dx%d", offset, result.scaledWidth, result.scaledHeight);
     return true;
+}
+
+// ============================================
+// GAMES MENU
+// ============================================
+
+void GUI::drawGamesMenu()
+{
+    M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
+    LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
+
+    target->fillScreen(TFT_WHITE);
+    drawStatusBar(target);
+
+    target->setFont(&lgfx::v1::fonts::Font2);
+    target->setTextColor(TFT_BLACK);
+
+    int screenW = target->width();
+    int screenH = target->height();
+
+    // Title
+    target->setTextDatum(textdatum_t::top_center);
+    target->setTextSize(2.5f);
+    target->drawString("Games", screenW / 2, STATUS_BAR_HEIGHT + 15);
+
+    // Game buttons
+    const int btnW = 200;
+    const int btnH = 60;
+    const int btnGap = 20;
+    const int startY = STATUS_BAR_HEIGHT + 70;
+    const int centerX = screenW / 2;
+
+    const char *gameNames[] = {"Minesweeper", "Sudoku", "Wordle"};
+
+    target->setTextSize(2.0f);
+    for (int i = 0; i < 3; i++)
+    {
+        int by = startY + i * (btnH + btnGap);
+        int bx = centerX - btnW / 2;
+
+        target->fillRect(bx, by, btnW, btnH, TFT_WHITE);
+        target->drawRect(bx, by, btnW, btnH, TFT_BLACK);
+        target->drawRect(bx + 1, by + 1, btnW - 2, btnH - 2, TFT_BLACK);
+
+        target->setTextDatum(textdatum_t::middle_center);
+        target->drawString(gameNames[i], centerX, by + btnH / 2);
+    }
+
+    // Back button
+    int backY = screenH - 70;
+    target->fillRect(centerX - 60, backY, 120, 50, TFT_LIGHTGREY);
+    target->drawRect(centerX - 60, backY, 120, 50, TFT_BLACK);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->drawString("Back", centerX, backY + 25);
+
+    if (sprite)
+    {
+        sprite->pushSprite(&M5.Display, 0, 0);
+    }
+    M5.Display.display();
+}
+
+void GUI::onGamesMenuClick(int x, int y)
+{
+    int screenW = M5.Display.width();
+    int screenH = M5.Display.height();
+
+    const int btnW = 200;
+    const int btnH = 60;
+    const int btnGap = 20;
+    const int startY = STATUS_BAR_HEIGHT + 70;
+    const int centerX = screenW / 2;
+
+    // Check game buttons
+    for (int i = 0; i < 3; i++)
+    {
+        int by = startY + i * (btnH + btnGap);
+        int bx = centerX - btnW / 2;
+
+        if (x >= bx && x < bx + btnW && y >= by && y < by + btnH)
+        {
+            GameManager &gm = GameManager::getInstance();
+            GameType gameType;
+            switch (i)
+            {
+            case 0:
+                gameType = GameType::MINESWEEPER;
+                break;
+            case 1:
+                gameType = GameType::SUDOKU;
+                break;
+            case 2:
+                gameType = GameType::WORDLE;
+                break;
+            default:
+                return;
+            }
+            gm.startGame(gameType);
+            currentState = AppState::GAME_PLAYING;
+            needsRedraw = true;
+            return;
+        }
+    }
+
+    // Check back button
+    int backY = screenH - 70;
+    if (x >= centerX - 60 && x < centerX + 60 && y >= backY && y < backY + 50)
+    {
+        currentState = AppState::MAIN_MENU;
+        needsRedraw = true;
+        return;
+    }
+
+    // Tap on status bar returns to main menu
+    if (y < STATUS_BAR_HEIGHT)
+    {
+        currentState = AppState::MAIN_MENU;
+        needsRedraw = true;
+    }
+}
+
+void GUI::drawGame()
+{
+    M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
+    LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
+
+    target->fillScreen(TFT_WHITE);
+
+    // Let game manager draw the current game
+    GameManager &gm = GameManager::getInstance();
+    gm.draw(target);
+
+    if (sprite)
+    {
+        sprite->pushSprite(&M5.Display, 0, 0);
+    }
+    M5.Display.display();
+}
+
+// ============================================
+// CHAPTER MENU (In-book chapter navigation)
+// ============================================
+
+void GUI::drawChapterMenu()
+{
+    M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
+    LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
+
+    target->fillScreen(TFT_WHITE);
+    drawStatusBar(target);
+
+    target->setFont(&lgfx::v1::fonts::Font2);
+    target->setTextColor(TFT_BLACK);
+
+    int screenW = target->width();
+    int screenH = target->height();
+
+    // Title
+    target->setTextDatum(textdatum_t::top_center);
+    target->setTextSize(2.0f);
+    target->drawString("Chapters", screenW / 2, STATUS_BAR_HEIGHT + 10);
+
+    // Get chapter list
+    int totalChapters = 0;
+    int currentChapter = 0;
+    std::vector<std::string> chapterNames;
+
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
+        totalChapters = epubLoader.getTotalChapters();
+        currentChapter = epubLoader.getCurrentChapterIndex();
+        // Try to get chapter titles (if available from spine)
+        const auto &spine = epubLoader.getSpine();
+        for (int i = 0; i < totalChapters && i < (int)spine.size(); i++)
+        {
+            std::string name = spine[i];
+            if (name.empty())
+            {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "Chapter %d", i + 1);
+                name = buf;
+            }
+            chapterNames.push_back(name);
+        }
+        xSemaphoreGive(epubMutex);
+    }
+
+    // Draw chapter list (scrollable)
+    const int lineHeight = 45;
+    const int startY = STATUS_BAR_HEIGHT + 50;
+    const int visibleLines = (screenH - startY - 60) / lineHeight;
+
+    // Calculate scroll offset to show current chapter
+    static int chapterScrollOffset = 0;
+    if (currentChapter < chapterScrollOffset)
+        chapterScrollOffset = currentChapter;
+    if (currentChapter >= chapterScrollOffset + visibleLines)
+        chapterScrollOffset = currentChapter - visibleLines + 1;
+
+    target->setTextSize(1.5f);
+    target->setTextDatum(textdatum_t::middle_left);
+
+    for (int i = 0; i < visibleLines && (chapterScrollOffset + i) < (int)chapterNames.size(); i++)
+    {
+        int idx = chapterScrollOffset + i;
+        int ty = startY + i * lineHeight + lineHeight / 2;
+
+        // Highlight current chapter
+        if (idx == currentChapter)
+        {
+            target->fillRect(10, startY + i * lineHeight, screenW - 20, lineHeight - 2, TFT_LIGHTGREY);
+        }
+
+        // Truncate long names
+        std::string name = chapterNames[idx];
+        if (name.length() > 35)
+        {
+            name = name.substr(0, 32) + "...";
+        }
+
+        target->drawString(name.c_str(), 20, ty);
+    }
+
+    // Back button
+    int backY = screenH - 55;
+    target->fillRect(screenW / 2 - 60, backY, 120, 45, TFT_LIGHTGREY);
+    target->drawRect(screenW / 2 - 60, backY, 120, 45, TFT_BLACK);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->setTextSize(1.8f);
+    target->drawString("Back", screenW / 2, backY + 22);
+
+    if (sprite)
+    {
+        sprite->pushSprite(&M5.Display, 0, 0);
+    }
+    M5.Display.display();
+}
+
+void GUI::onChapterMenuClick(int x, int y)
+{
+    int screenW = M5.Display.width();
+    int screenH = M5.Display.height();
+
+    // Back button
+    int backY = screenH - 55;
+    if (x >= screenW / 2 - 60 && x < screenW / 2 + 60 && y >= backY && y < backY + 45)
+    {
+        currentState = AppState::READER;
+        needsRedraw = true;
+        return;
+    }
+
+    // Status bar tap returns to reader
+    if (y < STATUS_BAR_HEIGHT)
+    {
+        currentState = AppState::READER;
+        needsRedraw = true;
+        return;
+    }
+
+    // Chapter selection
+    const int lineHeight = 45;
+    const int startY = STATUS_BAR_HEIGHT + 50;
+    const int visibleLines = (screenH - startY - 60) / lineHeight;
+
+    int totalChapters = 0;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
+        totalChapters = epubLoader.getTotalChapters();
+        xSemaphoreGive(epubMutex);
+    }
+
+    // Determine which chapter was clicked
+    if (y >= startY && y < startY + visibleLines * lineHeight)
+    {
+        int clickedLine = (y - startY) / lineHeight;
+        static int chapterScrollOffset = 0; // Should be synced with draw
+        int selectedChapter = chapterScrollOffset + clickedLine;
+
+        if (selectedChapter >= 0 && selectedChapter < totalChapters)
+        {
+            jumpToChapter(selectedChapter);
+            currentState = AppState::READER;
+            needsRedraw = true;
+        }
+    }
+}
+
+// ============================================
+// FONT SELECTION (SD Card fonts for S3)
+// ============================================
+
+void GUI::scanSDCardFonts()
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    sdCardFonts.clear();
+
+    DeviceHAL &hal = DeviceHAL::getInstance();
+    if (!hal.isSDCardMounted())
+        return;
+
+    std::string fontsPath = std::string(hal.getSDCardMountPoint()) + "/fonts";
+    DIR *dir = opendir(fontsPath.c_str());
+    if (!dir)
+    {
+        ESP_LOGW(TAG, "No fonts/ folder on SD card");
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (entry->d_type == DT_REG)
+        {
+            std::string fname = entry->d_name;
+            // Look for .otf or .ttf files
+            if (fname.length() > 4)
+            {
+                std::string ext = fname.substr(fname.length() - 4);
+                for (char &c : ext)
+                    c = tolower(c);
+                if (ext == ".otf" || ext == ".ttf")
+                {
+                    // Store font name without extension
+                    std::string fontName = fname.substr(0, fname.length() - 4);
+                    sdCardFonts.push_back(fontName);
+                    ESP_LOGI(TAG, "Found SD card font: %s", fontName.c_str());
+                }
+            }
+        }
+    }
+    closedir(dir);
+#endif
+}
+
+void GUI::drawFontSelection()
+{
+    M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
+    LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
+
+    target->fillScreen(TFT_WHITE);
+    drawStatusBar(target);
+
+    target->setFont(&lgfx::v1::fonts::Font2);
+    target->setTextColor(TFT_BLACK);
+
+    int screenW = target->width();
+    int screenH = target->height();
+
+    // Title
+    target->setTextDatum(textdatum_t::top_center);
+    target->setTextSize(2.0f);
+    target->drawString("Select Font", screenW / 2, STATUS_BAR_HEIGHT + 10);
+
+    // Built-in fonts
+    std::vector<std::string> allFonts = {"Default", "Hebrew", "Arabic", "Roboto"};
+
+    // Add SD card fonts (S3 only)
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    if (sdCardFonts.empty())
+    {
+        scanSDCardFonts();
+    }
+    for (const auto &f : sdCardFonts)
+    {
+        allFonts.push_back("SD:" + f);
+    }
+#endif
+
+    const int lineHeight = 50;
+    const int startY = STATUS_BAR_HEIGHT + 55;
+
+    target->setTextSize(1.8f);
+    target->setTextDatum(textdatum_t::middle_left);
+
+    for (size_t i = 0; i < allFonts.size() && (int)(startY + i * lineHeight) < screenH - 70; i++)
+    {
+        int ty = startY + i * lineHeight + lineHeight / 2;
+
+        // Highlight current font
+        if (allFonts[i] == currentFont ||
+            (allFonts[i].substr(0, 3) == "SD:" && currentFont == allFonts[i].substr(3)))
+        {
+            target->fillRect(10, startY + i * lineHeight, screenW - 20, lineHeight - 2, TFT_LIGHTGREY);
+        }
+
+        target->drawString(allFonts[i].c_str(), 20, ty);
+    }
+
+    // Back button
+    int backY = screenH - 55;
+    target->fillRect(screenW / 2 - 60, backY, 120, 45, TFT_LIGHTGREY);
+    target->drawRect(screenW / 2 - 60, backY, 120, 45, TFT_BLACK);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->drawString("Back", screenW / 2, backY + 22);
+
+    if (sprite)
+    {
+        sprite->pushSprite(&M5.Display, 0, 0);
+    }
+    M5.Display.display();
+}
+
+void GUI::onFontSelectionClick(int x, int y)
+{
+    int screenW = M5.Display.width();
+    int screenH = M5.Display.height();
+
+    // Back button
+    int backY = screenH - 55;
+    if (x >= screenW / 2 - 60 && x < screenW / 2 + 60 && y >= backY && y < backY + 45)
+    {
+        currentState = previousState;
+        needsRedraw = true;
+        return;
+    }
+
+    // Status bar tap returns
+    if (y < STATUS_BAR_HEIGHT)
+    {
+        currentState = previousState;
+        needsRedraw = true;
+        return;
+    }
+
+    // Font selection
+    std::vector<std::string> allFonts = {"Default", "Hebrew", "Arabic", "Roboto"};
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    for (const auto &f : sdCardFonts)
+    {
+        allFonts.push_back("SD:" + f);
+    }
+#endif
+
+    const int lineHeight = 50;
+    const int startY = STATUS_BAR_HEIGHT + 55;
+
+    if (y >= startY)
+    {
+        int clickedLine = (y - startY) / lineHeight;
+        if (clickedLine >= 0 && clickedLine < (int)allFonts.size())
+        {
+            std::string selectedFont = allFonts[clickedLine];
+            if (selectedFont.substr(0, 3) == "SD:")
+            {
+                selectedFont = selectedFont.substr(3); // Remove "SD:" prefix
+            }
+            setFont(selectedFont);
+            currentState = previousState;
+            needsRedraw = true;
+        }
+    }
+}
+
+// ============================================
+// WALLPAPER ON SLEEP
+// ============================================
+
+void GUI::showWallpaperAndSleep()
+{
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    DeviceHAL &hal = DeviceHAL::getInstance();
+    if (!hal.isSDCardMounted())
+    {
+        // No SD card, just sleep normally
+        enterDeepSleepShutdown();
+        return;
+    }
+
+    std::string wallpaperPath = std::string(hal.getSDCardMountPoint()) + "/wallpaper";
+    DIR *dir = opendir(wallpaperPath.c_str());
+    if (!dir)
+    {
+        ESP_LOGI(TAG, "No wallpaper/ folder on SD card");
+        enterDeepSleepShutdown();
+        return;
+    }
+
+    // Collect image files
+    std::vector<std::string> images;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (entry->d_type == DT_REG)
+        {
+            std::string fname = entry->d_name;
+            if (fname.length() > 4)
+            {
+                std::string ext = fname.substr(fname.length() - 4);
+                for (char &c : ext)
+                    c = tolower(c);
+                if (ext == ".jpg" || ext == ".png" || ext == ".bmp" || ext == "jpeg")
+                {
+                    images.push_back(wallpaperPath + "/" + fname);
+                }
+            }
+        }
+    }
+    closedir(dir);
+
+    if (images.empty())
+    {
+        ESP_LOGI(TAG, "No images in wallpaper/ folder");
+        enterDeepSleepShutdown();
+        return;
+    }
+
+    // Pick random image
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, images.size() - 1);
+    std::string imagePath = images[dis(gen)];
+
+    ESP_LOGI(TAG, "Showing wallpaper: %s", imagePath.c_str());
+
+    // Load and display the image
+    FILE *f = fopen(imagePath.c_str(), "rb");
+    if (f)
+    {
+        fseek(f, 0, SEEK_END);
+        size_t size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        std::vector<uint8_t> imageData(size);
+        fread(imageData.data(), 1, size, f);
+        fclose(f);
+
+        // Use ImageHandler to decode and display
+        ImageHandler &imgHandler = ImageHandler::getInstance();
+        M5.Display.fillScreen(TFT_WHITE);
+
+        ImageDecodeResult result = imgHandler.decodeAndRender(
+            imageData.data(),
+            imageData.size(),
+            &M5.Display,
+            0, 0,
+            M5.Display.width(),
+            M5.Display.height(),
+            ImageDisplayMode::BLOCK);
+
+        if (result.success)
+        {
+            M5.Display.display();
+            vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to let display update
+        }
+    }
+
+    enterDeepSleepShutdown();
+#else
+    // Non-S3 devices just sleep normally
+    enterDeepSleepShutdown();
+#endif
 }
