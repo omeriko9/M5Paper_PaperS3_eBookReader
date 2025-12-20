@@ -28,6 +28,14 @@ static inline uint32_t readLE32(const uint8_t *p) {
     return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 }
 
+static uint8_t* allocZipBuffer(size_t size) {
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) {
+        buf = (uint8_t*)heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    }
+    return buf;
+}
+
 bool ZipReader::open(const char* path) {
     close();
     filePath = path;
@@ -149,7 +157,7 @@ bool ZipReader::parseCentralDirectory() {
     }
 
     // Read the entire central directory in one go to avoid many small SPIFFS seeks
-    cdBuffer.reset((uint8_t*)heap_caps_malloc(cdSize, MALLOC_CAP_8BIT));
+    cdBuffer.reset(allocZipBuffer(cdSize));
     if (!cdBuffer) {
         ESP_LOGE(TAG, "Failed to allocate %u bytes for central directory", (unsigned)cdSize);
         fclose(f);
@@ -270,10 +278,10 @@ std::string ZipReader::extractFile(const std::string& filename) {
     constexpr size_t IN_CHUNK = 2048;
     constexpr size_t OUT_CHUNK = 4096;
     std::unique_ptr<uint8_t, decltype(&heap_caps_free)> inBuf(
-        (uint8_t*)heap_caps_malloc(IN_CHUNK, MALLOC_CAP_8BIT),
+        (uint8_t*)allocZipBuffer(IN_CHUNK),
         heap_caps_free);
     std::unique_ptr<uint8_t, decltype(&heap_caps_free)> outBuf(
-        (uint8_t*)heap_caps_malloc(OUT_CHUNK, MALLOC_CAP_8BIT),
+        (uint8_t*)allocZipBuffer(OUT_CHUNK),
         heap_caps_free);
     if (!inBuf || !outBuf) {
         ESP_LOGE(TAG, "OOM allocating IO buffers");
@@ -396,10 +404,10 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
     constexpr size_t IN_CHUNK = 2048;
     constexpr size_t OUT_CHUNK = 4096;
     std::unique_ptr<uint8_t, decltype(&heap_caps_free)> inBuf(
-        (uint8_t*)heap_caps_malloc(IN_CHUNK, MALLOC_CAP_8BIT),
+        (uint8_t*)allocZipBuffer(IN_CHUNK),
         heap_caps_free);
     std::unique_ptr<uint8_t, decltype(&heap_caps_free)> outBuf(
-        (uint8_t*)heap_caps_malloc(OUT_CHUNK, MALLOC_CAP_8BIT),
+        (uint8_t*)allocZipBuffer(OUT_CHUNK),
         heap_caps_free);
     if (!inBuf || !outBuf) {
         ESP_LOGE(TAG, "OOM allocating IO buffers");

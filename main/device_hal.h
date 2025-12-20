@@ -230,6 +230,15 @@ private:
     DeviceHAL();
     ~DeviceHAL() = default;
 
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    void ensureBuzzerTimer();
+    void playToneAsync(int frequency, int duration);
+    void stopTone();
+    static void buzzerStopTimerCb(void* arg);
+
+    esp_timer_handle_t m_buzzerStopTimer = nullptr;
+#endif
+
     bool m_initialized = false;
     bool m_buzzerEnabled = false;
     bool m_autoRotateEnabled = false;

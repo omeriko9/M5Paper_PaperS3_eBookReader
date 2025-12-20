@@ -180,6 +180,68 @@ bool DeviceHAL::isLandscape() const {
 
 // ==================== Buzzer ====================
 
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+void DeviceHAL::buzzerStopTimerCb(void* arg) {
+    auto* self = static_cast<DeviceHAL*>(arg);
+    if (self) {
+        self->stopTone();
+    }
+}
+
+void DeviceHAL::ensureBuzzerTimer() {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+    if (m_buzzerStopTimer) return;
+
+    const esp_timer_create_args_t timer_args = {
+        .callback = &DeviceHAL::buzzerStopTimerCb,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "buzzer_stop"
+    };
+
+    esp_err_t err = esp_timer_create(&timer_args, &m_buzzerStopTimer);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to create buzzer stop timer: %s", esp_err_to_name(err));
+        m_buzzerStopTimer = nullptr;
+    }
+#endif
+}
+
+void DeviceHAL::stopTone() {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+    // Stop tone by setting duty cycle to 0
+    ledc_set_duty(BUZZER_MODE, BUZZER_CHANNEL, 0);
+    ledc_update_duty(BUZZER_MODE, BUZZER_CHANNEL);
+#endif
+}
+
+void DeviceHAL::playToneAsync(int frequency, int duration) {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+    if (!m_buzzerEnabled) return;
+
+    ensureBuzzerTimer();
+    if (m_buzzerStopTimer) {
+        esp_timer_stop(m_buzzerStopTimer);
+    }
+
+    // Set frequency
+    ledc_set_freq(BUZZER_MODE, BUZZER_TIMER, frequency);
+
+    // Start tone (50% duty)
+    ledc_set_duty(BUZZER_MODE, BUZZER_CHANNEL, 512);
+    ledc_update_duty(BUZZER_MODE, BUZZER_CHANNEL);
+
+    // Schedule stop
+    if (m_buzzerStopTimer) {
+        esp_timer_start_once(m_buzzerStopTimer, (uint64_t)duration * 1000ULL);
+    }
+#else
+    (void)frequency;
+    (void)duration;
+#endif
+}
+#endif
+
 bool DeviceHAL::hasBuzzer() const {
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
     return true;
@@ -191,13 +253,20 @@ bool DeviceHAL::hasBuzzer() const {
 void DeviceHAL::playClickSound() {
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
     if (!m_buzzerEnabled) return;
-    playTone(CONFIG_EBOOK_S3_BUZZER_FREQUENCY, CONFIG_EBOOK_S3_BUZZER_DURATION_MS);
+    // Non-blocking click so UI responsiveness isn't impacted.
+    playToneAsync(CONFIG_EBOOK_S3_BUZZER_FREQUENCY, CONFIG_EBOOK_S3_BUZZER_DURATION_MS);
 #endif
 }
 
 void DeviceHAL::playTone(int frequency, int duration) {
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
     if (!m_buzzerEnabled) return;
+
+    // Cancel any pending async stop so the blocking tone controls start/stop.
+    ensureBuzzerTimer();
+    if (m_buzzerStopTimer) {
+        esp_timer_stop(m_buzzerStopTimer);
+    }
 
     // Set frequency
     ledc_set_freq(BUZZER_MODE, BUZZER_TIMER, frequency);
@@ -209,9 +278,7 @@ void DeviceHAL::playTone(int frequency, int duration) {
     // Wait for duration
     vTaskDelay(pdMS_TO_TICKS(duration));
     
-    // Stop tone
-    ledc_set_duty(BUZZER_MODE, BUZZER_CHANNEL, 0);
-    ledc_update_duty(BUZZER_MODE, BUZZER_CHANNEL);
+    stopTone();
 #else
     (void)frequency;
     (void)duration;

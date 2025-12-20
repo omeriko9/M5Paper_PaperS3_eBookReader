@@ -862,10 +862,25 @@ void GUI::metricsTaskLoop()
 void GUI::backgroundIndexerTaskLoop()
 {
     esp_task_wdt_add(NULL);
+    while (needsRedraw || bookOpenInProgress)
+    {
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     ESP_LOGI(TAG, "BgIndexer started");
+
+    auto waitForBookOpen = [this]()
+    {
+        while (bookOpenInProgress)
+        {
+            esp_task_wdt_reset();
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    };
 
     if (!bookIndexReady)
     {
+        waitForBookOpen();
         ESP_LOGI(TAG, "BgIndexer: Loading book index...");
         bookIndex.init(false, nullptr);
         bookIndexReady = true;
@@ -907,6 +922,7 @@ void GUI::backgroundIndexerTaskLoop()
     esp_task_wdt_reset();
 
     // Step 1: Scan for new books in background
+    waitForBookOpen();
     ESP_LOGI(TAG, "BgIndexer: Scanning for new books...");
     bool newBooksFound = bookIndex.scanForNewBooks([](int current, int total, const char *msg)
                                                    {
@@ -925,6 +941,10 @@ void GUI::backgroundIndexerTaskLoop()
     auto books = bookIndex.getBooks();
     for (const auto &book : books)
     {
+        if (bookOpenInProgress)
+        {
+            waitForBookOpen();
+        }
         if (!book.hasMetrics)
         {
             // Check if this book is currently being read (to avoid double calculation)
@@ -947,6 +967,11 @@ void GUI::backgroundIndexerTaskLoop()
             }
 
             ESP_LOGI(TAG, "BgIndexer: Processing book %d (%s)", book.id, book.title.c_str());
+
+            if (bookOpenInProgress)
+            {
+                waitForBookOpen();
+            }
 
             EpubLoader localLoader;
             // Note: We don't take epubMutex here because we are using a separate loader instance
@@ -985,6 +1010,14 @@ void GUI::backgroundIndexerTaskLoop()
                     if (currentState == AppState::READER && currentBook.id == book.id)
                     {
                         ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it", book.id);
+                        goto next_book;
+                    }
+
+                    if (bookOpenInProgress)
+                    {
+                        ESP_LOGI(TAG, "BgIndexer: Pausing for book open...");
+                        localLoader.close();
+                        waitForBookOpen();
                         goto next_book;
                     }
 
@@ -4176,16 +4209,19 @@ bool GUI::openBookById(int id)
 
     // Stop any background rendering
     abortRender = true;
+    bookOpenInProgress = true;
 
     // Lock mutex for the entire loading process
     if (!xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
+        bookOpenInProgress = false;
         return false;
     }
 
     if (!epubLoader.load(book.path.c_str()))
     {
         xSemaphoreGive(epubMutex);
+        bookOpenInProgress = false;
         return false;
     }
 
@@ -4230,6 +4266,7 @@ bool GUI::openBookById(int id)
 
     // Release mutex
     xSemaphoreGive(epubMutex);
+    bookOpenInProgress = false;
 
     // Restore book-specific font settings if available
     std::string bookFont;
@@ -4702,6 +4739,7 @@ bool GUI::loadLastBook()
     bookMetricsComputed = false;
 
     bool loaded = false;
+    bookOpenInProgress = true;
     if (xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
         loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
@@ -4752,6 +4790,8 @@ bool GUI::loadLastBook()
         }
         xSemaphoreGive(epubMutex);
     }
+
+    bookOpenInProgress = false;
 
     if (!loaded)
     {
