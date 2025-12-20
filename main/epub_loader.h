@@ -36,6 +36,9 @@ public:
     int getTotalChapters() const { return spine.size(); }
     const std::vector<std::string>& getSpine() const { return spine; }
     
+    // Get chapter titles from TOC (navMap)
+    const std::vector<std::string>& getChapterTitles() const { return chapterTitles; }
+    
     bool jumpToChapter(int index);
 
     void close();
@@ -81,6 +84,7 @@ private:
     bool isOpen = false;
     
     std::vector<std::string> spine; // List of HTML files in order
+    std::vector<std::string> chapterTitles; // Chapter titles from NCX/NAV
     std::string rootDir; // Directory where OPF is located
     std::string currentChapterDir; // Directory of current chapter file
     
@@ -98,6 +102,7 @@ private:
     // Helpers
     bool parseContainer();
     bool parseOPF(const std::string& opfPath);
+    void parseTOC(const std::string& tocPath, bool isNcx);  // Parse NCX or NAV TOC
     void loadChapter(int index);
     std::string readFileFromZip(const std::string& path);
     bool isChapterSkippable(int index);

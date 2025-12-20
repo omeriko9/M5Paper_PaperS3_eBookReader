@@ -132,6 +132,9 @@ void syncRtcFromNtp()
     stopSntpClient();
 }
 
+// Global flag for button-triggered sleep (accessed from main loop)
+volatile bool buttonSleepRequested = false;
+
 extern "C" void app_main(void)
 {
     esp_task_wdt_add(NULL);
@@ -516,13 +519,16 @@ extern "C" void app_main(void)
             // Button released
             if (buttonPressStart > 0 && !buttonLongPressHandled)
             {
-                // Short press - restart (existing behavior)
-                ESP_LOGI(TAG, "Short button press - Restarting...");
-                M5.Display.clear();
-                M5.Display.setCursor(0, 100);
-                M5.Display.println("Restarting...");
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-                esp_restart();
+                // Short press - put device to sleep (like idle timeout)
+                uint32_t pressDuration = (uint32_t)(esp_timer_get_time() / 1000) - buttonPressStart;
+                if (pressDuration > 50 && pressDuration < LONG_PRESS_MS) // Debounce: require >50ms press
+                {
+                    ESP_LOGI(TAG, "Short button press - entering sleep mode");
+                    // Trigger the same sleep path as idle timeout via GUI
+                    // We signal this by setting a flag that gui.update() will check
+                    extern volatile bool buttonSleepRequested;
+                    buttonSleepRequested = true;
+                }
             }
             buttonPressStart = 0;
             buttonLongPressHandled = false;

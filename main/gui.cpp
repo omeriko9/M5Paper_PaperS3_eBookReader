@@ -422,6 +422,26 @@ static std::string reverseHebrewWord(const std::string &text)
     return reversed;
 }
 
+static std::string swapMirroredChars(const std::string &text)
+{
+    std::string result = text;
+    for (size_t i = 0; i < result.length(); ++i)
+    {
+        switch (result[i])
+        {
+        case '(': result[i] = ')'; break;
+        case ')': result[i] = '('; break;
+        case '[': result[i] = ']'; break;
+        case ']': result[i] = '['; break;
+        case '{': result[i] = '}'; break;
+        case '}': result[i] = '{'; break;
+        case '<': result[i] = '>'; break;
+        case '>': result[i] = '<'; break;
+        }
+    }
+    return result;
+}
+
 static std::string processTextForDisplay(const std::string &text)
 {
     if (!isHebrew(text) && !isArabic(text))
@@ -507,10 +527,56 @@ static std::string processTextForDisplay(const std::string &text)
                 processedWord = reshapeArabic(processedWord);
             }
 
+            // Swap mirrored characters (parentheses, etc.)
+            processedWord = swapMirroredChars(processedWord);
+
             result += reverseHebrewWord(processedWord);
         }
         else
         {
+            // For non-Hebrew/Arabic words in an RTL context, we might still need to swap chars
+            // if they are part of the RTL flow (e.g. "(123)").
+            // But usually, English words are kept LTR.
+            // However, if the whole sentence is RTL, the parentheses around an English word
+            // might need swapping if they were reversed by the word order reversal?
+            // Actually, we reversed the word order.
+            // "Hello (World)" -> "(World) Hello"
+            // If we don't swap, it stays "(World) Hello".
+            // In RTL, we want ")World( olleH" (visually).
+            // Wait, `reverseHebrewWord` reverses the string.
+            // If we have "(text)", `reverseHebrewWord` makes it ")txet(".
+            // `swapMirroredChars` makes it "(txet)".
+            // So for Hebrew words, we swap THEN reverse.
+            // "(" -> ")" -> "(" (correct for RTL display of LTR string?)
+            // No.
+            // Visual string: "שלום (עולם)"
+            // Logical: "Shalom (Olam)"
+            // Reversed words: "(Olam)", " ", "Shalom"
+            // Reversed chars: ")malo(", " ", "molahS"
+            // Display: ")malo( molahS" -> looks like "(olam) Shalom" (if read RTL?)
+            // No, we are drawing LTR.
+            // We want to see: "molahS )malo(" (Shalom (Olam))
+            // So "(" should become ")" in the reversed string.
+            // `reverseHebrewWord` turns "(" into "(".
+            // So we need to swap it to ")" so it looks like ")" in the output?
+            // Wait.
+            // Logical: (
+            // Reversed: (
+            // Displayed LTR: (
+            // But in RTL context, open paren is on the right.
+            // If we draw "molahS )malo(", the ")" is on the left of "malo".
+            // That is the closing paren for "Olam".
+            // So "(" in logical text (right of Olam) should become ")" in visual text (left of Olam).
+            // So yes, we need to swap.
+            
+            // For English words in RTL sentence:
+            // They are NOT reversed by `reverseHebrewWord`.
+            // So "Hello" stays "Hello".
+            // If we have "Hebrew (English)", words: "(English)", "Hebrew".
+            // We want to see: "werbeH (English)"
+            // So English parens should NOT be swapped if the word is not reversed?
+            // This is complex. For now, let's just swap for Hebrew/Arabic words.
+            
             result += word;
         }
     }
@@ -1073,6 +1139,9 @@ void GUI::setWebServerEnabled(bool enabled)
     }
 }
 
+// External flag for button-triggered sleep
+extern volatile bool buttonSleepRequested;
+
 void GUI::setShowImages(bool enabled)
 {
     if (showImages == enabled)
@@ -1084,6 +1153,16 @@ void GUI::setShowImages(bool enabled)
 
 void GUI::update()
 {
+    // Check for button-triggered sleep request
+    if (buttonSleepRequested)
+    {
+        buttonSleepRequested = false;
+        ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
+        goToSleep();
+        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+        return;
+    }
+
     // Update gesture detector
     GestureEvent gesture = gestureDetector.update();
     if (gesture.type != GestureType::NONE)
@@ -2734,14 +2813,12 @@ void GUI::goToSleep()
     needsRedraw = true;
     lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 
-    // If the timer woke us, hand off to deep sleep so the next touch resumes straight into the last page.
+    // If the timer woke us, show wallpaper and enter deep sleep
     auto wakeReason = esp_sleep_get_wakeup_cause();
     if (wakeReason == ESP_SLEEP_WAKEUP_TIMER)
     {
-        ESP_LOGI(TAG, "Light sleep timer elapsed, entering deep sleep");
-        drawSleepSymbol("Zz");
-
-        enterDeepSleepWithTouchWake();
+        ESP_LOGI(TAG, "Light sleep timer elapsed, showing wallpaper and entering deep sleep");
+        showWallpaperAndSleep();
         return;
     }
 
@@ -3491,9 +3568,6 @@ void GUI::handleGesture(const GestureEvent& event)
     case GestureType::DOUBLE_TAP:
         if (currentState == AppState::READER)
         {
-#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-            deviceHAL.playClickSound();
-#endif
             processReaderTap(event.endX, event.endY, true); // true = double
         }
         else
@@ -3504,47 +3578,50 @@ void GUI::handleGesture(const GestureEvent& event)
         break;
 
     case GestureType::SWIPE_LEFT:
-        // Handle swipe gestures in reader mode
+        // Handle swipe gestures in reader mode - left swipe opens chapter menu
         if (currentState == AppState::READER)
         {
-            int dx = event.endX - event.startX;
-            int dy = event.endY - event.startY;
-            int absDx = abs(dx);
-            int absDy = abs(dy);
-            int minSwipe = screenW / 6;
-            if (minSwipe < GestureDetector::SWIPE_THRESHOLD)
-                minSwipe = GestureDetector::SWIPE_THRESHOLD;
-
-            if (absDx < minSwipe || absDx < absDy * 2)
+            // Swipe in middle area opens chapter menu
+            if (event.startY > STATUS_BAR_HEIGHT + 30 && event.startY < screenH - 80)
             {
-                break;
-            }
-            // Right-to-left swipe in middle area opens chapter menu
-            if (event.startY > STATUS_BAR_HEIGHT + 50 && event.startY < screenH - 100)
-            {
+                ESP_LOGI(TAG, "Swipe left detected - opening chapter menu");
+                // Play short beep for feedback
+                deviceHAL.playTone(1500, 50);
                 previousState = currentState;
                 currentState = AppState::CHAPTER_MENU;
+                chapterMenuScrollOffset = 0;
+                needsRedraw = true;
+            }
+        }
+        break;
+
+    case GestureType::SWIPE_UP:
+        // Swipe up from bottom area opens settings in reader mode
+        if (currentState == AppState::READER)
+        {
+            if (event.startY > screenH - 150)  // Must start from bottom 150px
+            {
+                ESP_LOGI(TAG, "Swipe up detected - opening book settings");
+                // Play short beep for feedback
+                deviceHAL.playTone(1500, 50);
+                previousState = currentState;
+                currentState = AppState::BOOK_SETTINGS;
                 needsRedraw = true;
             }
         }
         break;
         
-    // SWIPE_UP removed as per user request (conflicts with page turns or not desired)
-    /*
-    case GestureType::SWIPE_UP:
-        // Swipe up from bottom opens settings
-        if (event.startY > screenH - 150)
+    case GestureType::SWIPE_RIGHT:
+        // Swipe right in chapter menu returns to reader
+        if (currentState == AppState::CHAPTER_MENU)
         {
-            previousState = currentState;
-            currentState = AppState::BOOK_SETTINGS;
+            currentState = AppState::READER;
             needsRedraw = true;
         }
         break;
-    */
         
-    case GestureType::SWIPE_RIGHT:
     case GestureType::SWIPE_DOWN:
-        // Could add functionality later
+        // Could add functionality later (e.g., refresh page)
         break;
         
     default:
@@ -3554,11 +3631,6 @@ void GUI::handleGesture(const GestureEvent& event)
 
 void GUI::handleTap(int x, int y)
 {
-    // Play click sound on M5PaperS3
-#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    deviceHAL.playClickSound();
-#endif
-
     if (justWokeUp)
     {
         ESP_LOGI(TAG, "Processing wake-up tap at %d, %d", x, y);
@@ -3802,8 +3874,8 @@ void GUI::handleTouch()
 {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-    // Check pending click timeout
-    if (clickPending && (now - lastClickTime > 400)) // 400ms wait
+    // Check pending click timeout - reduced from 400ms to 150ms for faster response
+    if (clickPending && (now - lastClickTime > 150))
     {
         clickPending = false;
         // Execute Single Click (Page Turn)
@@ -3834,6 +3906,11 @@ void GUI::handleTouch()
 
         if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
+            // Play click sound immediately on touch for instant feedback
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+            deviceHAL.playClickSound();
+#endif
+
             // If gesture is in progress, don't process taps yet
             // UNLESS we are in a mode that requires instant response (non-Reader)
             bool instantResponse = (currentState != AppState::READER);
@@ -3847,11 +3924,6 @@ void GUI::handleTouch()
             {
                 gestureDetector.reset();
             }
-
-            // Play click sound on M5PaperS3
-#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-            deviceHAL.playClickSound();
-#endif
 
             if (justWokeUp)
             {
@@ -4279,9 +4351,37 @@ bool GUI::openBookById(int id)
             fontSize = bookFontSize;
         }
     }
-    else if (isHebrew)
+    else
     {
-        setFont("Hebrew");
+        // No saved font for this book - set default based on language
+        if (isHebrew)
+        {
+            setFont("Hebrew");
+            // Use Hebrew font's saved size or default 2.5
+            if (fontSizes.count("Hebrew") > 0)
+            {
+                fontSize = fontSizes["Hebrew"];
+            }
+            else
+            {
+                fontSize = 2.5f;
+                fontSizes["Hebrew"] = 2.5f;
+            }
+        }
+        else
+        {
+            // Default to Roboto with size 2.5 for new books
+            setFont("Roboto");
+            if (fontSizes.count("Roboto") > 0)
+            {
+                fontSize = fontSizes["Roboto"];
+            }
+            else
+            {
+                fontSize = 2.5f;
+                fontSizes["Roboto"] = 2.5f;
+            }
+        }
     }
 
     pageHistory.clear();
@@ -4750,25 +4850,38 @@ bool GUI::loadLastBook()
             // Auto-detect language
             std::string lang = epubLoader.getLanguage();
             bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
-            if (!lastFont.empty())
+            if (!lastFont.empty() && lastFontSize > 0.0f)
             {
-                if (lastFontSize > 0.0f)
-                {
-                    fontSizes[lastFont] = lastFontSize;
-                }
+                // Restore saved font and size
+                fontSizes[lastFont] = lastFontSize;
                 setFont(lastFont);
-                if (lastFontSize > 0.0f)
-                {
-                    fontSize = lastFontSize;
-                }
+                fontSize = lastFontSize;
             }
             else if (isHebrew)
             {
+                // Hebrew book without saved font - use Hebrew with size 2.5
                 setFont("Hebrew");
+                if (fontSizes.count("Hebrew") == 0)
+                {
+                    fontSizes["Hebrew"] = 2.5f;
+                }
+                fontSize = fontSizes["Hebrew"];
+            }
+            else
+            {
+                // Default to Roboto with size 2.5
+                setFont("Roboto");
+                if (fontSizes.count("Roboto") == 0)
+                {
+                    fontSizes["Roboto"] = 2.5f;
+                }
+                fontSize = fontSizes["Roboto"];
             }
 
-            // Restore progress
+            // Restore progress - currentTextOffset is the exact page position
             currentTextOffset = currentBook.currentOffset;
+            ESP_LOGI(TAG, "Restored book position: chapter=%d, offset=%zu", 
+                     currentBook.currentChapter, currentTextOffset);
             resetPageInfoCache();
 
             // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
@@ -6106,7 +6219,7 @@ void GUI::drawChapterMenu()
     target->setTextSize(2.0f);
     target->drawString("Chapters", screenW / 2, STATUS_BAR_HEIGHT + 10);
 
-    // Get chapter list
+    // Get chapter list with proper titles
     int totalChapters = 0;
     int currentChapter = 0;
     std::vector<std::string> chapterNames;
@@ -6115,13 +6228,19 @@ void GUI::drawChapterMenu()
     {
         totalChapters = epubLoader.getTotalChapters();
         currentChapter = epubLoader.getCurrentChapterIndex();
-        // Try to get chapter titles (if available from spine)
-        const auto &spine = epubLoader.getSpine();
-        for (int i = 0; i < totalChapters && i < (int)spine.size(); i++)
+        
+        // Get chapter titles from TOC
+        const auto& titles = epubLoader.getChapterTitles();
+        for (int i = 0; i < totalChapters; i++)
         {
-            std::string name = spine[i];
-            if (name.empty())
+            std::string name;
+            if (i < (int)titles.size() && !titles[i].empty())
             {
+                name = titles[i];
+            }
+            else
+            {
+                // Fallback to numbered chapter
                 char buf[32];
                 snprintf(buf, sizeof(buf), "Chapter %d", i + 1);
                 name = buf;
@@ -6163,7 +6282,8 @@ void GUI::drawChapterMenu()
             name = name.substr(0, 32) + "...";
         }
 
-        target->drawString(name.c_str(), 20, ty);
+        // Use drawStringMixed to support Hebrew/Arabic chapter titles
+        drawStringMixed(name, 20, ty, sprite, 1.5f, false, false);
     }
 
     // Back button
@@ -6404,94 +6524,117 @@ void GUI::showWallpaperAndSleep()
 {
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     DeviceHAL &hal = DeviceHAL::getInstance();
-    if (!hal.isSDCardMounted())
+    
+    bool showedWallpaper = false;
+    
+    if (hal.isSDCardMounted())
     {
-        // No SD card, just sleep normally
-        enterDeepSleepShutdown();
-        return;
-    }
-
-    std::string wallpaperPath = std::string(hal.getSDCardMountPoint()) + "/wallpaper";
-    DIR *dir = opendir(wallpaperPath.c_str());
-    if (!dir)
-    {
-        ESP_LOGI(TAG, "No wallpaper/ folder on SD card");
-        enterDeepSleepShutdown();
-        return;
-    }
-
-    // Collect image files
-    std::vector<std::string> images;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL)
-    {
-        if (entry->d_type == DT_REG)
+        std::string wallpaperPath = std::string(hal.getSDCardMountPoint()) + "/wallpaper";
+        DIR *dir = opendir(wallpaperPath.c_str());
+        if (dir)
         {
-            std::string fname = entry->d_name;
-            if (fname.length() > 4)
+            // Collect image files
+            std::vector<std::string> images;
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL)
             {
-                std::string ext = fname.substr(fname.length() - 4);
-                for (char &c : ext)
-                    c = tolower(c);
-                if (ext == ".jpg" || ext == ".png" || ext == ".bmp" || ext == "jpeg")
+                if (entry->d_type == DT_REG)
                 {
-                    images.push_back(wallpaperPath + "/" + fname);
+                    std::string fname = entry->d_name;
+                    if (fname.length() > 4)
+                    {
+                        std::string ext = fname.substr(fname.length() - 4);
+                        for (char &c : ext)
+                            c = tolower(c);
+                        if (ext == ".jpg" || ext == ".png" || ext == ".bmp")
+                        {
+                            images.push_back(wallpaperPath + "/" + fname);
+                        }
+                        // Also check 5-char extension for .jpeg
+                        if (fname.length() > 5)
+                        {
+                            std::string ext5 = fname.substr(fname.length() - 5);
+                            for (char &c : ext5)
+                                c = tolower(c);
+                            if (ext5 == ".jpeg")
+                            {
+                                images.push_back(wallpaperPath + "/" + fname);
+                            }
+                        }
+                    }
                 }
             }
+            closedir(dir);
+
+            if (!images.empty())
+            {
+                // Pick random image using time-based seed
+                uint32_t seed = (uint32_t)(esp_timer_get_time() / 1000);
+                std::mt19937 gen(seed);
+                std::uniform_int_distribution<> dis(0, images.size() - 1);
+                std::string imagePath = images[dis(gen)];
+
+                ESP_LOGI(TAG, "Showing wallpaper: %s", imagePath.c_str());
+
+                // Load and display the image
+                FILE *f = fopen(imagePath.c_str(), "rb");
+                if (f)
+                {
+                    fseek(f, 0, SEEK_END);
+                    size_t size = ftell(f);
+                    fseek(f, 0, SEEK_SET);
+
+                    if (size < 2 * 1024 * 1024) // Limit to 2MB images
+                    {
+                        std::vector<uint8_t> imageData(size);
+                        if (fread(imageData.data(), 1, size, f) == size)
+                        {
+                            // Use ImageHandler to decode and display
+                            ImageHandler &imgHandler = ImageHandler::getInstance();
+                            M5.Display.fillScreen(TFT_WHITE);
+
+                            ImageDecodeResult result = imgHandler.decodeAndRender(
+                                imageData.data(),
+                                imageData.size(),
+                                &M5.Display,
+                                0, 0,
+                                M5.Display.width(),
+                                M5.Display.height(),
+                                ImageDisplayMode::BLOCK);
+
+                            if (result.success)
+                            {
+                                M5.Display.display();
+                                M5.Display.waitDisplay();
+                                showedWallpaper = true;
+                            }
+                        }
+                    }
+                    fclose(f);
+                }
+            }
+            else
+            {
+                ESP_LOGI(TAG, "No images in wallpaper/ folder");
+            }
         }
-    }
-    closedir(dir);
-
-    if (images.empty())
-    {
-        ESP_LOGI(TAG, "No images in wallpaper/ folder");
-        enterDeepSleepShutdown();
-        return;
-    }
-
-    // Pick random image
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, images.size() - 1);
-    std::string imagePath = images[dis(gen)];
-
-    ESP_LOGI(TAG, "Showing wallpaper: %s", imagePath.c_str());
-
-    // Load and display the image
-    FILE *f = fopen(imagePath.c_str(), "rb");
-    if (f)
-    {
-        fseek(f, 0, SEEK_END);
-        size_t size = ftell(f);
-        fseek(f, 0, SEEK_SET);
-
-        std::vector<uint8_t> imageData(size);
-        fread(imageData.data(), 1, size, f);
-        fclose(f);
-
-        // Use ImageHandler to decode and display
-        ImageHandler &imgHandler = ImageHandler::getInstance();
-        M5.Display.fillScreen(TFT_WHITE);
-
-        ImageDecodeResult result = imgHandler.decodeAndRender(
-            imageData.data(),
-            imageData.size(),
-            &M5.Display,
-            0, 0,
-            M5.Display.width(),
-            M5.Display.height(),
-            ImageDisplayMode::BLOCK);
-
-        if (result.success)
+        else
         {
-            M5.Display.display();
-            vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to let display update
+            ESP_LOGI(TAG, "No wallpaper/ folder on SD card");
         }
     }
+    
+    if (!showedWallpaper)
+    {
+        // Show "Zz" sleep symbol if no wallpaper
+        drawSleepSymbol("Zz");
+    }
 
-    enterDeepSleepShutdown();
+    // Enter deep sleep with touch wake so user can resume reading
+    deviceHAL.enterDeepSleepWithTouchWake();
 #else
-    // Non-S3 devices just sleep normally
-    enterDeepSleepShutdown();
+    // Non-S3 devices: show sleep symbol and enter deep sleep with touch wake
+    drawSleepSymbol("Zz");
+    deviceHAL.enterDeepSleepWithTouchWake();
 #endif
 }

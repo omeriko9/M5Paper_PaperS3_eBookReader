@@ -16,6 +16,9 @@ static const char *TAG = "EPUB";
 static const int PAGE_SIZE = 800; // Characters per page (approx)
 static const size_t INVALID_CHAPTER_LENGTH = std::numeric_limits<size_t>::max();
 
+// Forward declarations
+static std::string decodeHtmlEntities(const std::string& str);
+
 struct SkipCheckContext {
     std::string buffer;
 };
@@ -149,6 +152,7 @@ void EpubLoader::close() {
         isOpen = false;
     }
     spine.clear();
+    chapterTitles.clear();
     chapterTextLengths.clear();
     currentChapterContent.clear();
     currentChapterContent.shrink_to_fit();
@@ -296,7 +300,38 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
         return a.id < b.id;
     });
     
-    // 2. Parse Spine
+    // 2. Find TOC (NCX for EPUB2 or NAV for EPUB3)
+    std::string tocPath;
+    bool isNcx = false;
+    
+    // Look for NCX file first (EPUB2 standard)
+    for (const auto& item : manifest) {
+        std::string hrefLower = item.href;
+        std::transform(hrefLower.begin(), hrefLower.end(), hrefLower.begin(), 
+                       [](unsigned char c){ return std::tolower(c); });
+        if (hrefLower.find(".ncx") != std::string::npos) {
+            tocPath = rootDir + item.href;
+            isNcx = true;
+            break;
+        }
+    }
+    
+    // If no NCX, look for NAV document (EPUB3)
+    if (tocPath.empty()) {
+        for (const auto& item : manifest) {
+            // NAV documents typically have "nav" in the id or properties="nav"
+            std::string idLower = item.id;
+            std::transform(idLower.begin(), idLower.end(), idLower.begin(), 
+                           [](unsigned char c){ return std::tolower(c); });
+            if (idLower.find("nav") != std::string::npos) {
+                tocPath = rootDir + item.href;
+                isNcx = false;
+                break;
+            }
+        }
+    }
+    
+    // 3. Parse Spine
     // <itemref idref="id" />
     pos = xml.find("<spine");
     if (pos == std::string::npos) return false;
@@ -324,7 +359,235 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
         pos = endTag;
     }
     
+    // 4. Parse TOC to get chapter titles
+    if (!tocPath.empty()) {
+        parseTOC(tocPath, isNcx);
+    }
+    
+    // If no titles from TOC, generate default titles
+    if (chapterTitles.size() < spine.size()) {
+        chapterTitles.resize(spine.size());
+        for (size_t i = 0; i < spine.size(); i++) {
+            if (chapterTitles[i].empty()) {
+                // Extract filename without extension
+                std::string filename = spine[i];
+                size_t lastSlash = filename.rfind('/');
+                if (lastSlash != std::string::npos) {
+                    filename = filename.substr(lastSlash + 1);
+                }
+                size_t lastDot = filename.rfind('.');
+                if (lastDot != std::string::npos) {
+                    filename = filename.substr(0, lastDot);
+                }
+                // Clean up common prefixes
+                if (filename.find("chapter") == 0 || filename.find("Chapter") == 0) {
+                    chapterTitles[i] = "Chapter " + std::to_string(i + 1);
+                } else if (filename.find("part") == 0 || filename.find("Part") == 0) {
+                    chapterTitles[i] = filename;
+                } else {
+                    // Use filename as-is but capitalize first letter
+                    if (!filename.empty() && filename[0] >= 'a' && filename[0] <= 'z') {
+                        filename[0] = filename[0] - 32;
+                    }
+                    chapterTitles[i] = filename;
+                }
+            }
+        }
+    }
+    
     return !spine.empty();
+}
+
+void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
+    std::string xml = readFileFromZip(tocPath);
+    if (xml.empty()) {
+        ESP_LOGW(TAG, "Failed to read TOC file: %s", tocPath.c_str());
+        return;
+    }
+    
+    chapterTitles.clear();
+    chapterTitles.resize(spine.size());
+    
+    // Create a map from content href to spine index
+    std::map<std::string, int> hrefToIndex;
+    for (size_t i = 0; i < spine.size(); i++) {
+        std::string href = spine[i];
+        // Remove fragment identifier if present (e.g., chapter1.html#section1)
+        size_t hashPos = href.find('#');
+        if (hashPos != std::string::npos) {
+            href = href.substr(0, hashPos);
+        }
+        hrefToIndex[href] = i;
+        
+        // Also add version without rootDir for matching
+        if (href.find(rootDir) == 0) {
+            hrefToIndex[href.substr(rootDir.length())] = i;
+        }
+    }
+    
+    if (isNcx) {
+        // Parse NCX format (EPUB2)
+        // <navPoint id="...">
+        //   <navLabel><text>Chapter Title</text></navLabel>
+        //   <content src="chapter1.html"/>
+        // </navPoint>
+        
+        size_t pos = 0;
+        while ((pos = xml.find("<navPoint", pos)) != std::string::npos) {
+            esp_task_wdt_reset();
+            
+            // Find the closing </navPoint> or next <navPoint>
+            size_t endNavPoint = xml.find("</navPoint>", pos);
+            size_t nextNavPoint = xml.find("<navPoint", pos + 9);
+            
+            // Get the section up to nested navPoint or end
+            size_t sectionEnd = (nextNavPoint != std::string::npos && nextNavPoint < endNavPoint) 
+                                ? nextNavPoint : endNavPoint;
+            if (sectionEnd == std::string::npos) break;
+            
+            std::string section = xml.substr(pos, sectionEnd - pos);
+            
+            // Extract title from <navLabel><text>...</text></navLabel>
+            std::string title;
+            size_t textStart = section.find("<text>");
+            if (textStart != std::string::npos) {
+                textStart += 6;
+                size_t textEnd = section.find("</text>", textStart);
+                if (textEnd != std::string::npos) {
+                    title = section.substr(textStart, textEnd - textStart);
+                    // Decode HTML entities
+                    title = decodeHtmlEntities(title);
+                    // Trim whitespace
+                    while (!title.empty() && (title.front() == ' ' || title.front() == '\n' || title.front() == '\r')) {
+                        title.erase(0, 1);
+                    }
+                    while (!title.empty() && (title.back() == ' ' || title.back() == '\n' || title.back() == '\r')) {
+                        title.pop_back();
+                    }
+                }
+            }
+            
+            // Extract content src
+            size_t srcStart = section.find("src=\"");
+            if (srcStart != std::string::npos) {
+                srcStart += 5;
+                size_t srcEnd = section.find("\"", srcStart);
+                if (srcEnd != std::string::npos) {
+                    std::string src = section.substr(srcStart, srcEnd - srcStart);
+                    src = decodeHtmlEntities(src);
+                    
+                    // Remove fragment
+                    size_t hashPos = src.find('#');
+                    if (hashPos != std::string::npos) {
+                        src = src.substr(0, hashPos);
+                    }
+                    
+                    // Try to find in spine
+                    std::string fullSrc = rootDir + src;
+                    auto it = hrefToIndex.find(fullSrc);
+                    if (it == hrefToIndex.end()) {
+                        it = hrefToIndex.find(src);
+                    }
+                    
+                    if (it != hrefToIndex.end() && !title.empty()) {
+                        chapterTitles[it->second] = title;
+                    }
+                }
+            }
+            
+            pos = sectionEnd;
+        }
+    } else {
+        // Parse NAV format (EPUB3)
+        // <nav epub:type="toc">
+        //   <ol>
+        //     <li><a href="chapter1.html">Chapter Title</a></li>
+        //   </ol>
+        // </nav>
+        
+        // Find the TOC nav section
+        size_t navStart = xml.find("epub:type=\"toc\"");
+        if (navStart == std::string::npos) {
+            navStart = xml.find("type=\"toc\"");
+        }
+        if (navStart == std::string::npos) {
+            // Just look for any nav with ol/li structure
+            navStart = xml.find("<nav");
+        }
+        
+        if (navStart != std::string::npos) {
+            size_t pos = navStart;
+            while ((pos = xml.find("<a ", pos)) != std::string::npos) {
+                esp_task_wdt_reset();
+                
+                size_t tagEnd = xml.find("</a>", pos);
+                if (tagEnd == std::string::npos) break;
+                
+                std::string aTag = xml.substr(pos, tagEnd - pos + 4);
+                
+                // Extract href
+                size_t hrefStart = aTag.find("href=\"");
+                if (hrefStart == std::string::npos) {
+                    pos = tagEnd;
+                    continue;
+                }
+                hrefStart += 6;
+                size_t hrefEnd = aTag.find("\"", hrefStart);
+                std::string href = aTag.substr(hrefStart, hrefEnd - hrefStart);
+                href = decodeHtmlEntities(href);
+                
+                // Remove fragment
+                size_t hashPos = href.find('#');
+                if (hashPos != std::string::npos) {
+                    href = href.substr(0, hashPos);
+                }
+                
+                // Extract title (text between > and </a>)
+                size_t titleStart = aTag.find('>');
+                if (titleStart != std::string::npos) {
+                    titleStart++;
+                    size_t titleEnd = aTag.find("</a>");
+                    if (titleEnd != std::string::npos) {
+                        std::string title = aTag.substr(titleStart, titleEnd - titleStart);
+                        // Remove any nested tags
+                        std::string cleanTitle;
+                        bool inTag = false;
+                        for (char c : title) {
+                            if (c == '<') inTag = true;
+                            else if (c == '>') inTag = false;
+                            else if (!inTag) cleanTitle += c;
+                        }
+                        title = decodeHtmlEntities(cleanTitle);
+                        
+                        // Trim
+                        while (!title.empty() && (title.front() == ' ' || title.front() == '\n')) {
+                            title.erase(0, 1);
+                        }
+                        while (!title.empty() && (title.back() == ' ' || title.back() == '\n')) {
+                            title.pop_back();
+                        }
+                        
+                        // Try to find in spine
+                        std::string fullHref = rootDir + href;
+                        auto it = hrefToIndex.find(fullHref);
+                        if (it == hrefToIndex.end()) {
+                            it = hrefToIndex.find(href);
+                        }
+                        
+                        if (it != hrefToIndex.end() && !title.empty()) {
+                            chapterTitles[it->second] = title;
+                        }
+                    }
+                }
+                
+                pos = tagEnd;
+            }
+        }
+    }
+    
+    ESP_LOGI(TAG, "Parsed TOC, found %d chapter titles", 
+             (int)std::count_if(chapterTitles.begin(), chapterTitles.end(), 
+                               [](const std::string& s) { return !s.empty(); }));
 }
 
 struct LoadChapterContext {

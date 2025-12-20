@@ -46,12 +46,12 @@ struct GestureEvent {
 
 class GestureDetector {
 public:
-    // Configuration
-    static constexpr int SWIPE_THRESHOLD = 50;       // Minimum distance for swipe
-    static constexpr int TAP_THRESHOLD = 15;         // Maximum movement for tap
-    static constexpr uint32_t LONG_PRESS_MS = 500;   // Time for long press
-    static constexpr uint32_t DOUBLE_TAP_MS = 300;   // Max time between taps
-    static constexpr float MIN_SWIPE_VELOCITY = 0.1f; // Pixels per ms
+    // Configuration - optimized for responsiveness
+    static constexpr int SWIPE_THRESHOLD = 40;       // Reduced from 50 for easier swipes
+    static constexpr int TAP_THRESHOLD = 20;         // Slightly increased for better tap detection
+    static constexpr uint32_t LONG_PRESS_MS = 400;   // Reduced from 500 for faster long-press
+    static constexpr uint32_t DOUBLE_TAP_MS = 200;   // Reduced from 300 for faster double-tap
+    static constexpr float MIN_SWIPE_VELOCITY = 0.08f; // Reduced from 0.1 for easier swipes
     
     // Zone boundaries (set during init based on screen size)
     int topZoneHeight = 44;     // Status bar
