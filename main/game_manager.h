@@ -117,18 +117,18 @@ private:
     void initMinesweeper();
     void updateMinesweeper();
     void drawMinesweeper(LovyanGFX* target = nullptr);
-    void handleMinesweeperTouch(int x, int y);
+    bool handleMinesweeperTouch(int x, int y);
     
     void initSudoku();
     void initSudokuWithDifficulty(int difficulty);
     void updateSudoku();
     void drawSudoku(LovyanGFX* target = nullptr);
-    void handleSudokuTouch(int x, int y);
+    bool handleSudokuTouch(int x, int y);
     
     void initWordle();
     void updateWordle();
     void drawWordle(LovyanGFX* target = nullptr);
-    void handleWordleTouch(int x, int y);
+    bool handleWordleTouch(int x, int y);
     
 public:
     // Minesweeper state
@@ -180,4 +180,12 @@ private:
     void drawButton(LovyanGFX* target, int x, int y, int w, int h, const char* label, 
                    uint16_t bgColor, uint16_t textColor);
     void drawHeader(LovyanGFX* target, const char* title);
+    void drawMinesweeperCell(LovyanGFX* target, int row, int col);
+    void drawMinesweeperInfo(LovyanGFX* target);
+    void drawMinesweeperGameOver(LovyanGFX* target);
+    void drawSudokuCell(LovyanGFX* target, int row, int col);
+    void drawSudokuDividers(LovyanGFX* target);
+    void drawWordleTile(LovyanGFX* target, int row, int col);
+    void drawWordleKey(LovyanGFX* target, char letter);
+    void drawWordleResult(LovyanGFX* target);
 };

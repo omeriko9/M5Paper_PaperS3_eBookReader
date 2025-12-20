@@ -139,14 +139,11 @@ bool GameManager::handleTouch(int x, int y) {
     
     switch (m_currentGame) {
         case GameType::MINESWEEPER:
-            handleMinesweeperTouch(x, y);
-            return true;
+            return handleMinesweeperTouch(x, y);
         case GameType::SUDOKU:
-            handleSudokuTouch(x, y);
-            return true;
+            return handleSudokuTouch(x, y);
         case GameType::WORDLE:
-            handleWordleTouch(x, y);
-            return true;
+            return handleWordleTouch(x, y);
         default:
             return false;
     }
@@ -242,6 +239,103 @@ static void revealCell(GameManager::MinesweeperState& state, int row, int col) {
 
 void GameManager::updateMinesweeper() {
     // No continuous update needed
+}
+
+void GameManager::drawMinesweeperCell(LovyanGFX* target, int row, int col) {
+    if (row < 0 || row >= m_minesweeper.GRID_HEIGHT || col < 0 || col >= m_minesweeper.GRID_WIDTH) {
+        return;
+    }
+
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    const int CELL_SIZE = 54;
+    const int GRID_START_X = 0;
+    const int GRID_START_Y = SCREEN_HEIGHT - (m_minesweeper.GRID_HEIGHT * CELL_SIZE);
+
+    int x = GRID_START_X + col * CELL_SIZE;
+    int y = GRID_START_Y + row * CELL_SIZE;
+
+    uint16_t cellBg = TFT_WHITE;
+    bool isRevealed = m_minesweeper.cellStates[row][col] == 1;
+    bool isFlagged = m_minesweeper.cellStates[row][col] == 2;
+    bool showMine = isRevealed || (m_minesweeper.gameLost && m_minesweeper.mines[row][col]);
+
+    if (isRevealed) {
+        if (m_minesweeper.mines[row][col]) {
+            cellBg = 0xF800; // Red
+        } else {
+            cellBg = GRAY_LIGHT;
+        }
+    } else if (isFlagged) {
+        cellBg = TFT_YELLOW;
+    }
+
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2, cellBg);
+    gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
+
+    if (showMine && m_minesweeper.mines[row][col]) {
+        gfx->fillCircle(x + CELL_SIZE/2, y + CELL_SIZE/2, 10, TFT_BLACK);
+        gfx->drawLine(x + CELL_SIZE/2 - 14, y + CELL_SIZE/2, x + CELL_SIZE/2 + 14, y + CELL_SIZE/2, TFT_BLACK);
+        gfx->drawLine(x + CELL_SIZE/2, y + CELL_SIZE/2 - 14, x + CELL_SIZE/2, y + CELL_SIZE/2 + 14, TFT_BLACK);
+    } else if (isRevealed && m_minesweeper.neighborCounts[row][col] > 0) {
+        char num[2] = {(char)('0' + m_minesweeper.neighborCounts[row][col]), 0};
+        gfx->setTextSize(1.8f);
+        uint16_t numColor = TFT_BLUE;
+        if (m_minesweeper.neighborCounts[row][col] == 2) numColor = TFT_DARKGREEN;
+        else if (m_minesweeper.neighborCounts[row][col] == 3) numColor = TFT_RED;
+        else if (m_minesweeper.neighborCounts[row][col] >= 4) numColor = TFT_MAROON;
+        gfx->setTextColor(numColor, cellBg);
+        gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
+    } else if (isFlagged) {
+        gfx->setTextSize(1.6f);
+        gfx->setTextColor(TFT_RED, TFT_YELLOW);
+        gfx->drawString("F", x + CELL_SIZE/2, y + CELL_SIZE/2);
+    }
+
+    gfx->setTextDatum(textdatum_t::top_left);
+}
+
+void GameManager::drawMinesweeperInfo(LovyanGFX* target) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    int headerY = STATUS_BAR_HEIGHT;
+    int infoY = headerY + HEADER_HEIGHT + 5;
+
+    gfx->fillRect(0, infoY, SCREEN_WIDTH, 40, TFT_WHITE);
+    gfx->setTextSize(1.3f);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+
+    int minesLeft = m_minesweeper.MINE_COUNT - m_minesweeper.flagCount;
+    char mineStr[32];
+    snprintf(mineStr, sizeof(mineStr), "Mines: %d", minesLeft);
+    gfx->setTextDatum(textdatum_t::middle_left);
+    gfx->drawString(mineStr, 15, infoY + 20);
+
+    const char* flagLabel = m_minesweeper.flagMode ? "[FLAG]" : "[DIG]";
+    uint16_t flagBg = m_minesweeper.flagMode ? TFT_YELLOW : GRAY_LIGHT;
+    drawButton(gfx, SCREEN_WIDTH - 100, infoY + 2, 90, 36, flagLabel, flagBg, TFT_BLACK);
+    gfx->setTextDatum(textdatum_t::top_left);
+}
+
+void GameManager::drawMinesweeperGameOver(LovyanGFX* target) {
+    if (!m_minesweeper.gameWon && !m_minesweeper.gameLost) {
+        return;
+    }
+
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    int headerY = STATUS_BAR_HEIGHT;
+    int infoY = headerY + HEADER_HEIGHT + 5;
+    const int CELL_SIZE = 54;
+    const int GRID_START_Y = SCREEN_HEIGHT - (m_minesweeper.GRID_HEIGHT * CELL_SIZE);
+    int msgY = (infoY + 50 + GRID_START_Y) / 2;
+    const char* msg = m_minesweeper.gameWon ? "YOU WIN!" : "GAME OVER";
+    gfx->setTextSize(2.2f);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->fillRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_WHITE);
+    gfx->drawRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_BLACK);
+    gfx->drawRect(SCREEN_WIDTH/2 - 99, msgY - 24, 198, 48, TFT_BLACK);
+    gfx->drawString(msg, SCREEN_WIDTH/2, msgY);
+    gfx->setTextDatum(textdatum_t::top_left);
 }
 
 void GameManager::drawMinesweeper(LovyanGFX* target) {
@@ -357,56 +451,59 @@ void GameManager::drawMinesweeper(LovyanGFX* target) {
     if (!target) M5.Display.display();
 }
 
-void GameManager::handleMinesweeperTouch(int x, int y) {
+bool GameManager::handleMinesweeperTouch(int x, int y) {
     const int CELL_SIZE = 54;
     const int GRID_START_X = 0;
     const int GRID_START_Y = SCREEN_HEIGHT - (m_minesweeper.GRID_HEIGHT * CELL_SIZE);
     int headerY = STATUS_BAR_HEIGHT;
     int infoY = headerY + HEADER_HEIGHT + 5;
-    
+
     // Back button
     if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
         stopGame();
         m_returnToMenu = true;
-        return;
+        return false;
     }
-    
+
     // Restart button
     if (x >= SCREEN_WIDTH - 80 && x <= SCREEN_WIDTH - 10 && y >= headerY + 5 && y <= headerY + 45) {
         initMinesweeper();
-        draw();
-        return;
+        return true;
     }
-    
+
     // Flag mode toggle
     if (x >= SCREEN_WIDTH - 100 && x <= SCREEN_WIDTH - 10 && y >= infoY + 2 && y <= infoY + 38) {
         m_minesweeper.flagMode = !m_minesweeper.flagMode;
-        draw();
-        return;
+        drawMinesweeperInfo(nullptr);
+        M5.Display.display();
+        return false;
     }
-    
+
     // Grid clicks
     if (y >= GRID_START_Y && y < SCREEN_HEIGHT) {
         int col = (x - GRID_START_X) / CELL_SIZE;
         int row = (y - GRID_START_Y) / CELL_SIZE;
-        
-        if (row >= 0 && row < m_minesweeper.GRID_HEIGHT && 
+
+        if (row >= 0 && row < m_minesweeper.GRID_HEIGHT &&
             col >= 0 && col < m_minesweeper.GRID_WIDTH) {
-            
+
             if (m_minesweeper.gameLost || m_minesweeper.gameWon) {
-                // Tap to restart after game over
                 initMinesweeper();
-                draw();
-                return;
+                return true;
             }
-            
+
+            int prevStates[GameManager::MinesweeperState::GRID_HEIGHT][GameManager::MinesweeperState::GRID_WIDTH];
+            memcpy(prevStates, m_minesweeper.cellStates, sizeof(prevStates));
+            bool prevLost = m_minesweeper.gameLost;
+            bool prevWon = m_minesweeper.gameWon;
+            int prevFlagCount = m_minesweeper.flagCount;
+            bool prevFlagMode = m_minesweeper.flagMode;
+
             if (!m_minesweeper.gameStarted) {
-                // First click - generate mines avoiding this cell
                 generateMines(m_minesweeper, row, col);
             }
-            
+
             if (m_minesweeper.flagMode) {
-                // Toggle flag
                 if (m_minesweeper.cellStates[row][col] == 0) {
                     m_minesweeper.cellStates[row][col] = 2; // Flag
                     m_minesweeper.flagCount++;
@@ -414,16 +511,34 @@ void GameManager::handleMinesweeperTouch(int x, int y) {
                     m_minesweeper.cellStates[row][col] = 0; // Unflag
                     m_minesweeper.flagCount--;
                 }
-                // Don't reveal flagged cells
             } else {
-                // Dig mode
                 if (m_minesweeper.cellStates[row][col] == 0) {
                     revealCell(m_minesweeper, row, col);
                 }
             }
-            draw();
+
+            bool showMinesChanged = (prevLost != m_minesweeper.gameLost);
+            for (int i = 0; i < m_minesweeper.GRID_HEIGHT; i++) {
+                for (int j = 0; j < m_minesweeper.GRID_WIDTH; j++) {
+                    if (showMinesChanged || prevStates[i][j] != m_minesweeper.cellStates[i][j]) {
+                        drawMinesweeperCell(nullptr, i, j);
+                    }
+                }
+            }
+
+            if (prevFlagCount != m_minesweeper.flagCount || prevFlagMode != m_minesweeper.flagMode) {
+                drawMinesweeperInfo(nullptr);
+            }
+
+            if (prevLost != m_minesweeper.gameLost || prevWon != m_minesweeper.gameWon) {
+                drawMinesweeperGameOver(nullptr);
+            }
+
+            M5.Display.display();
         }
     }
+
+    return false;
 }
 
 // ============================================================================
@@ -621,6 +736,75 @@ void GameManager::updateSudoku() {
     m_sudoku.gameWon = complete && !hasErrors;
 }
 
+void GameManager::drawSudokuCell(LovyanGFX* target, int row, int col) {
+    if (row < 0 || row >= 6 || col < 0 || col >= 6) {
+        return;
+    }
+
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    const int CELL_SIZE = 70;
+    const int BLOCK_SPACING = 6;
+    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
+    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
+
+    int xOffset = (col >= 3) ? BLOCK_SPACING : 0;
+    int yOffset = (row >= 2) ? ((row >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
+    int x = GRID_X + col * CELL_SIZE + xOffset;
+    int y = GRID_Y + row * CELL_SIZE + yOffset;
+
+    uint16_t bgColor = TFT_WHITE;
+    if (m_sudoku.selectedRow == row && m_sudoku.selectedCol == col) {
+        bgColor = 0x07FF; // Cyan for selected
+    } else if (m_sudoku.readonly[row][col]) {
+        bgColor = GRAY_LIGHT;
+    }
+
+    bool isError = !m_sudoku.readonly[row][col] &&
+                   m_sudoku.board[row][col] != 0 &&
+                   m_sudoku.board[row][col] != m_sudoku.solution[row][col];
+    if (isError) {
+        bgColor = 0xFD20; // Light red/orange for errors
+    }
+
+    gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
+    gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
+
+    if (m_sudoku.board[row][col] != 0) {
+        uint16_t textColor = m_sudoku.readonly[row][col] ? TFT_BLACK : TFT_BLUE;
+        if (isError) textColor = TFT_RED;
+        gfx->setTextColor(textColor, bgColor);
+        gfx->setTextDatum(textdatum_t::middle_center);
+        gfx->setTextSize(2.2f);
+        char num[2] = {(char)('0' + m_sudoku.board[row][col]), 0};
+        gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
+    }
+    gfx->setTextDatum(textdatum_t::top_left);
+}
+
+void GameManager::drawSudokuDividers(LovyanGFX* target) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    const int CELL_SIZE = 70;
+    const int BLOCK_SPACING = 6;
+    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
+    const int GRID_HEIGHT_PX = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
+    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
+
+    for (int i = 0; i <= 6; i += 3) {
+        int xOffset = (i >= 3) ? BLOCK_SPACING : 0;
+        int x = GRID_X + i * CELL_SIZE + xOffset;
+        if (i == 3) x -= BLOCK_SPACING/2;
+        gfx->fillRect(x - 2, GRID_Y, 4, GRID_HEIGHT_PX, TFT_BLACK);
+    }
+    for (int i = 0; i <= 6; i += 2) {
+        int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
+        int y = GRID_Y + i * CELL_SIZE + yOffset;
+        if (i == 2 || i == 4) y -= BLOCK_SPACING/2;
+        gfx->fillRect(GRID_X, y - 2, GRID_WIDTH_PX, 4, TFT_BLACK);
+    }
+}
+
 void GameManager::drawSudoku(LovyanGFX* target) {
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
     gfx->fillScreen(TFT_WHITE);
@@ -763,7 +947,7 @@ void GameManager::drawSudoku(LovyanGFX* target) {
     if (!target) M5.Display.display();
 }
 
-void GameManager::handleSudokuTouch(int x, int y) {
+bool GameManager::handleSudokuTouch(int x, int y) {
     const int CELL_SIZE = 70;
     const int BLOCK_SPACING = 6;
     const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
@@ -771,19 +955,21 @@ void GameManager::handleSudokuTouch(int x, int y) {
     const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
     const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
     int headerY = STATUS_BAR_HEIGHT;
+    int prevSelectedRow = m_sudoku.selectedRow;
+    int prevSelectedCol = m_sudoku.selectedCol;
+    bool prevGameWon = m_sudoku.gameWon;
     
     // Back button
     if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
         stopGame();
         m_returnToMenu = true;
-        return;
+        return false;
     }
     
     // New button
     if (x >= SCREEN_WIDTH - 80 && x <= SCREEN_WIDTH - 10 && y >= headerY + 5 && y <= headerY + 45) {
         initSudokuWithDifficulty(m_sudoku.difficulty);
-        draw();
-        return;
+        return true;
     }
     
     // Number buttons
@@ -800,8 +986,13 @@ void GameManager::handleSudokuTouch(int x, int y) {
                     m_sudoku.board[m_sudoku.selectedRow][m_sudoku.selectedCol] = i;
                     updateSudoku();
                 }
-                draw();
-                return;
+                if (prevGameWon != m_sudoku.gameWon) {
+                    return true;
+                }
+                drawSudokuCell(nullptr, m_sudoku.selectedRow, m_sudoku.selectedCol);
+                drawSudokuDividers(nullptr);
+                M5.Display.display();
+                return false;
             }
         }
     }
@@ -811,9 +1002,15 @@ void GameManager::handleSudokuTouch(int x, int y) {
     if (y >= actionY && y <= actionY + 45 && x >= startX && x <= startX + 100) {
         if (m_sudoku.selectedRow >= 0 && !m_sudoku.readonly[m_sudoku.selectedRow][m_sudoku.selectedCol]) {
             m_sudoku.board[m_sudoku.selectedRow][m_sudoku.selectedCol] = 0;
-            draw();
+            updateSudoku();
+            if (prevGameWon != m_sudoku.gameWon) {
+                return true;
+            }
+            drawSudokuCell(nullptr, m_sudoku.selectedRow, m_sudoku.selectedCol);
+            drawSudokuDividers(nullptr);
+            M5.Display.display();
         }
-        return;
+        return false;
     }
     
     // Difficulty buttons
@@ -826,8 +1023,7 @@ void GameManager::handleSudokuTouch(int x, int y) {
             int dx = diffStartX + (d-1) * (diffBtnW + 10);
             if (x >= dx && x <= dx + diffBtnW) {
                 initSudokuWithDifficulty(d);
-                draw();
-                return;
+                return true;
             }
         }
     }
@@ -864,9 +1060,18 @@ void GameManager::handleSudokuTouch(int x, int y) {
         // Select the cell (even readonly ones, just can't modify them)
         m_sudoku.selectedRow = row;
         m_sudoku.selectedCol = col;
-        draw();
-        return;
+        if (prevSelectedRow != m_sudoku.selectedRow || prevSelectedCol != m_sudoku.selectedCol) {
+            if (prevSelectedRow >= 0 && prevSelectedCol >= 0) {
+                drawSudokuCell(nullptr, prevSelectedRow, prevSelectedCol);
+            }
+            drawSudokuCell(nullptr, m_sudoku.selectedRow, m_sudoku.selectedCol);
+            drawSudokuDividers(nullptr);
+            M5.Display.display();
+        }
+        return false;
     }
+
+    return false;
 }
 
 // ============================================================================
@@ -896,6 +1101,122 @@ void GameManager::initWordle() {
 
 void GameManager::updateWordle() {
     // No continuous update needed
+}
+
+void GameManager::drawWordleTile(LovyanGFX* target, int row, int col) {
+    if (row < 0 || row >= 6 || col < 0 || col >= 5) {
+        return;
+    }
+
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    const int CELL_SIZE = 60;
+    const int GAP = 6;
+    const int GRID_WIDTH = 5 * CELL_SIZE + 4 * GAP;
+    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH) / 2;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 15;
+
+    int x = GRID_X + col * (CELL_SIZE + GAP);
+    int y = GRID_Y + row * (CELL_SIZE + GAP);
+
+    // Clear any prior highlight border
+    gfx->fillRect(x - 1, y - 1, CELL_SIZE + 2, CELL_SIZE + 2, TFT_WHITE);
+
+    uint16_t bgColor = TFT_WHITE;
+    char state = m_wordle.states[row][col];
+    if (state == 'g') bgColor = TFT_GREEN;
+    else if (state == 'y') bgColor = TFT_YELLOW;
+    else if (state == 'x') bgColor = GRAY_MEDIUM;
+
+    if (row == m_wordle.currentRow && state == 0) {
+        gfx->drawRect(x - 1, y - 1, CELL_SIZE + 2, CELL_SIZE + 2, TFT_BLUE);
+    }
+
+    gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
+    gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
+
+    if (m_wordle.guesses[row][col] != 0) {
+        gfx->setTextSize(2.2f);
+        gfx->setTextDatum(textdatum_t::middle_center);
+        gfx->setTextColor(TFT_BLACK, bgColor);
+        char letter[2] = {m_wordle.guesses[row][col], 0};
+        gfx->drawString(letter, x + CELL_SIZE/2, y + CELL_SIZE/2);
+    }
+    gfx->setTextDatum(textdatum_t::top_left);
+}
+
+void GameManager::drawWordleKey(LovyanGFX* target, char letter) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    const int CELL_SIZE = 60;
+    const int GAP = 6;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 15;
+    const int keyW = 46;
+    const int keyH = 50;
+    const int keyGap = 4;
+    const int keyY = GRID_Y + 6 * (CELL_SIZE + GAP) + 15;
+    const char* rows[] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
+
+    for (int r = 0; r < 3; r++) {
+        int rowLen = strlen(rows[r]);
+        int rowWidth = rowLen * keyW + (rowLen - 1) * keyGap;
+        int rowX = (SCREEN_WIDTH - rowWidth) / 2;
+
+        for (int c = 0; c < rowLen; c++) {
+            if (rows[r][c] != letter) {
+                continue;
+            }
+            int x = rowX + c * (keyW + keyGap);
+            int y = keyY + r * (keyH + keyGap);
+
+            char letterState = m_wordle.usedLetters[letter - 'A'];
+            uint16_t bgColor = GRAY_LIGHT;
+            if (letterState == 'g') bgColor = TFT_GREEN;
+            else if (letterState == 'y') bgColor = TFT_YELLOW;
+            else if (letterState == 'x') bgColor = GRAY_DARK;
+
+            gfx->fillRect(x, y, keyW, keyH, bgColor);
+            gfx->drawRect(x, y, keyW, keyH, TFT_BLACK);
+
+            uint16_t textColor = (letterState == 'x') ? TFT_WHITE : TFT_BLACK;
+            gfx->setTextSize(1.5f);
+            gfx->setTextDatum(textdatum_t::middle_center);
+            gfx->setTextColor(textColor, bgColor);
+            char str[2] = {letter, 0};
+            gfx->drawString(str, x + keyW/2, y + keyH/2);
+            gfx->setTextDatum(textdatum_t::top_left);
+            return;
+        }
+    }
+}
+
+void GameManager::drawWordleResult(LovyanGFX* target) {
+    if (!m_wordle.gameWon && !m_wordle.gameLost) {
+        return;
+    }
+
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    const int CELL_SIZE = 60;
+    const int GAP = 6;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 15;
+    int msgY = GRID_Y + 3 * (CELL_SIZE + GAP);
+
+    if (m_wordle.gameWon) {
+        gfx->setTextDatum(textdatum_t::middle_center);
+        gfx->setTextSize(2.0f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+        gfx->fillRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_BLACK);
+        gfx->drawString("YOU WIN!", SCREEN_WIDTH/2, msgY);
+    } else if (m_wordle.gameLost) {
+        gfx->setTextDatum(textdatum_t::middle_center);
+        gfx->setTextSize(1.6f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "Answer: %s", m_wordle.answer);
+        gfx->fillRect(SCREEN_WIDTH/2 - 110, msgY - 25, 220, 50, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 110, msgY - 25, 220, 50, TFT_BLACK);
+        gfx->drawString(msg, SCREEN_WIDTH/2, msgY);
+    }
+    gfx->setTextDatum(textdatum_t::top_left);
 }
 
 void GameManager::drawWordle(LovyanGFX* target) {
@@ -1023,7 +1344,7 @@ void GameManager::drawWordle(LovyanGFX* target) {
     if (!target) M5.Display.display();
 }
 
-void GameManager::handleWordleTouch(int x, int y) {
+bool GameManager::handleWordleTouch(int x, int y) {
     const int CELL_SIZE = 60;
     const int GAP = 6;
     const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 15;
@@ -1033,21 +1354,19 @@ void GameManager::handleWordleTouch(int x, int y) {
     if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
         stopGame();
         m_returnToMenu = true;
-        return;
+        return false;
     }
     
     // New button
     if (x >= SCREEN_WIDTH - 80 && x <= SCREEN_WIDTH - 10 && y >= headerY + 5 && y <= headerY + 45) {
         initWordle();
-        draw();
-        return;
+        return true;
     }
     
     if (m_wordle.gameWon || m_wordle.gameLost) {
         // Tap anywhere to restart
         initWordle();
-        draw();
-        return;
+        return true;
     }
     
     // Keyboard handling
@@ -1069,11 +1388,14 @@ void GameManager::handleWordleTouch(int x, int y) {
             if (x >= kx && x <= kx + keyW && y >= ky && y <= ky + keyH) {
                 // Letter pressed
                 if (m_wordle.currentCol < 5) {
-                    m_wordle.guesses[m_wordle.currentRow][m_wordle.currentCol] = rows[r][c];
+                    int row = m_wordle.currentRow;
+                    int col = m_wordle.currentCol;
+                    m_wordle.guesses[row][col] = rows[r][c];
                     m_wordle.currentCol++;
-                    draw();
+                    drawWordleTile(nullptr, row, col);
+                    M5.Display.display();
                 }
-                return;
+                return false;
             }
         }
     }
@@ -1085,10 +1407,11 @@ void GameManager::handleWordleTouch(int x, int y) {
     if (x >= SCREEN_WIDTH/2 - 140 && x <= SCREEN_WIDTH/2 - 40 && 
         y >= specialY && y <= specialY + 45) {
         if (m_wordle.currentCol == 5) {
+            int row = m_wordle.currentRow;
             // Check the guess
             char guess[6];
             for (int i = 0; i < 5; i++) {
-                guess[i] = m_wordle.guesses[m_wordle.currentRow][i];
+                guess[i] = m_wordle.guesses[row][i];
             }
             guess[5] = '\0';
             
@@ -1100,22 +1423,22 @@ void GameManager::handleWordleTouch(int x, int y) {
             for (int i = 0; i < 5; i++) {
                 char c = guess[i];
                 if (c == m_wordle.answer[i]) {
-                    m_wordle.states[m_wordle.currentRow][i] = 'g';
+                    m_wordle.states[row][i] = 'g';
                     m_wordle.usedLetters[c - 'A'] = 'g';
                     answerCopy[i] = '*'; // Mark as used
                 } else {
                     correct = false;
-                    m_wordle.states[m_wordle.currentRow][i] = 'x'; // Default to gray
+                    m_wordle.states[row][i] = 'x'; // Default to gray
                 }
             }
             
             // Second pass: mark yellow (wrong position but in word)
             for (int i = 0; i < 5; i++) {
-                if (m_wordle.states[m_wordle.currentRow][i] != 'g') {
+                if (m_wordle.states[row][i] != 'g') {
                     char c = guess[i];
                     for (int j = 0; j < 5; j++) {
                         if (answerCopy[j] == c) {
-                            m_wordle.states[m_wordle.currentRow][i] = 'y';
+                            m_wordle.states[row][i] = 'y';
                             answerCopy[j] = '*'; // Mark as used
                             if (m_wordle.usedLetters[c - 'A'] != 'g') {
                                 m_wordle.usedLetters[c - 'A'] = 'y';
@@ -1124,7 +1447,7 @@ void GameManager::handleWordleTouch(int x, int y) {
                         }
                     }
                     // If still gray, mark letter as used/gray
-                    if (m_wordle.states[m_wordle.currentRow][i] == 'x') {
+                    if (m_wordle.states[row][i] == 'x') {
                         if (m_wordle.usedLetters[c - 'A'] == 0) {
                             m_wordle.usedLetters[c - 'A'] = 'x';
                         }
@@ -1140,9 +1463,30 @@ void GameManager::handleWordleTouch(int x, int y) {
                 m_wordle.currentRow++;
                 m_wordle.currentCol = 0;
             }
-            draw();
+            for (int i = 0; i < 5; i++) {
+                drawWordleTile(nullptr, row, i);
+            }
+
+            bool usedLetters[26] = {};
+            for (int i = 0; i < 5; i++) {
+                char c = guess[i];
+                if (c >= 'A' && c <= 'Z' && !usedLetters[c - 'A']) {
+                    drawWordleKey(nullptr, c);
+                    usedLetters[c - 'A'] = true;
+                }
+            }
+
+            if (!m_wordle.gameWon && !m_wordle.gameLost) {
+                for (int i = 0; i < 5; i++) {
+                    drawWordleTile(nullptr, m_wordle.currentRow, i);
+                }
+            } else {
+                drawWordleResult(nullptr);
+            }
+
+            M5.Display.display();
         }
-        return;
+        return false;
     }
     
     // Delete button
@@ -1151,8 +1495,11 @@ void GameManager::handleWordleTouch(int x, int y) {
         if (m_wordle.currentCol > 0) {
             m_wordle.currentCol--;
             m_wordle.guesses[m_wordle.currentRow][m_wordle.currentCol] = 0;
-            draw();
+            drawWordleTile(nullptr, m_wordle.currentRow, m_wordle.currentCol);
+            M5.Display.display();
         }
-        return;
+        return false;
     }
+
+    return false;
 }

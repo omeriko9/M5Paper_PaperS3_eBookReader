@@ -161,6 +161,14 @@ private:
     size_t totalBookChars = 0;
     std::vector<size_t> chapterPrefixSums;
     bool bookMetricsComputed = false;
+    int chapterMenuScrollOffset = 0;
+    bool bookIndexReady = false;
+    bool pendingBookIndexSync = false;
+    int pendingBookId = 0;
+    int pendingBookChapter = 0;
+    size_t pendingBookOffset = 0;
+    std::string pendingBookFont;
+    float pendingBookFontSize = 1.0f;
 
     // Double click detection
     uint32_t lastClickTime = 0;

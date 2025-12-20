@@ -615,9 +615,7 @@ void GUI::init(bool isWakeFromSleep)
 
     // Play startup sound
     deviceHAL.playStartupSound();
-
-    // Initialize book index (loads from disk, scanning is backgrounded)
-    bookIndex.init(isWakeFromSleep, nullptr);
+    bookIndexReady = false;
 
     resetPageInfoCache();
 
@@ -690,112 +688,7 @@ void GUI::init(bool isWakeFromSleep)
     // Disable WiFi power save to prevent packet loss during uploads
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    // Load last book info for main menu display
-    {
-        nvs_handle_t my_handle;
-        int32_t lastId = -1;
-        int32_t lastState = (int)AppState::MAIN_MENU;
-        if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
-        {
-            nvs_get_i32(my_handle, "last_book_id", &lastId);
-            nvs_get_i32(my_handle, "last_state", &lastState);
-            nvs_close(my_handle);
-        }
-
-        // Store last book info for main menu "Last Book" button
-        if (lastId != -1)
-        {
-            lastBookId = lastId;
-            BookEntry lastBook = bookIndex.getBook(lastId);
-            if (lastBook.id != 0)
-            {
-                lastBookTitle = lastBook.title;
-                // Truncate title if too long
-                if (lastBookTitle.length() > 25)
-                {
-                    size_t pos = 22;
-                    while (pos > 0 && (lastBookTitle[pos] & 0xC0) == 0x80)
-                        pos--;
-                    lastBookTitle = lastBookTitle.substr(0, pos) + "...";
-                }
-            }
-        }
-
-        // Only restore READER state if we were reading (for deep sleep wake)
-        if (lastId != -1 && lastState == (int)AppState::READER)
-        {
-            currentBook = bookIndex.getBook(lastId);
-            // Pass the saved chapter index to load() to skip heuristics and jump directly
-            totalBookChars = 0;
-            chapterPrefixSums.clear();
-            bookMetricsComputed = false;
-
-            bool loaded = false;
-            if (currentBook.id != 0 && xSemaphoreTake(epubMutex, portMAX_DELAY))
-            {
-                loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
-                if (loaded)
-                {
-                    currentState = AppState::READER;
-
-                    // Auto-detect language
-                    std::string lang = epubLoader.getLanguage();
-                    bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
-                    if (isHebrew)
-                    {
-                        setFont("Hebrew");
-                    }
-                    // Restore progress
-                    currentTextOffset = currentBook.currentOffset;
-                    resetPageInfoCache();
-
-                    // No need to loop nextChapter() anymore because we loaded the correct chapter directly
-
-                    // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
-                    isRTLDocument = isHebrew;
-
-                    if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
-                    {
-                        bookMetricsComputed = true;
-                        ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
-                    }
-                    else
-                    {
-                        if (metricsTaskHandle != nullptr)
-                            vTaskDelete(metricsTaskHandle);
-                        metricsTaskTargetBookId = currentBook.id;
-                        xTaskCreate([](void *arg)
-                                    { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
-                    }
-                }
-                xSemaphoreGive(epubMutex);
-            }
-
-            if (loaded)
-            {
-                pageHistory.clear();
-                needsRedraw = true; // Force redraw to clear sleep symbol
-
-                // Spawn background indexer
-                if (backgroundIndexerTaskHandle == nullptr)
-                {
-                    // If it's ESP32S3, we can pin to core 1 to avoid contention with rendering on core 0
-#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
-                    xTaskCreatePinnedToCore([](void *arg)
-                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle,
-                                            1);
-#else
-                    xTaskCreatePinnedToCore([](void *arg)
-                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle, 1);
-#endif
-                }
-                return;
-            }
-        }
-    }
-
-    M5.Display.fillScreen(TFT_WHITE);
-    needsRedraw = true;
+    bool loadedLastBook = loadLastBook();
 
     if (backgroundIndexerTaskHandle == nullptr)
     {
@@ -808,6 +701,14 @@ void GUI::init(bool isWakeFromSleep)
                                 { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle, 1);
 #endif
     }
+
+    if (loadedLastBook)
+    {
+        return;
+    }
+
+    M5.Display.fillScreen(TFT_WHITE);
+    needsRedraw = true;
 }
 
 void GUI::renderTaskLoop()
@@ -962,6 +863,45 @@ void GUI::backgroundIndexerTaskLoop()
 {
     esp_task_wdt_add(NULL);
     ESP_LOGI(TAG, "BgIndexer started");
+
+    if (!bookIndexReady)
+    {
+        ESP_LOGI(TAG, "BgIndexer: Loading book index...");
+        bookIndex.init(false, nullptr);
+        bookIndexReady = true;
+
+        if (pendingBookIndexSync && pendingBookId > 0)
+        {
+            bookIndex.updateProgress(pendingBookId, pendingBookChapter, pendingBookOffset);
+            if (!pendingBookFont.empty())
+            {
+                bookIndex.setBookFont(pendingBookId, pendingBookFont, pendingBookFontSize);
+            }
+            pendingBookIndexSync = false;
+        }
+
+        if (lastBookId > 0)
+        {
+            BookEntry lastBook = bookIndex.getBook(lastBookId);
+            if (lastBook.id != 0 && !lastBook.title.empty())
+            {
+                lastBookTitle = lastBook.title;
+                if (lastBookTitle.length() > 25)
+                {
+                    size_t pos = 22;
+                    while (pos > 0 && (lastBookTitle[pos] & 0xC0) == 0x80)
+                        pos--;
+                    lastBookTitle = lastBookTitle.substr(0, pos) + "...";
+                }
+            }
+        }
+
+        if (currentState == AppState::MAIN_MENU || currentState == AppState::LIBRARY || currentState == AppState::FAVORITES)
+        {
+            needsRedraw = true;
+        }
+    }
+
     // Wait a bit for system to settle and user to potentially start reading
     vTaskDelay(pdMS_TO_TICKS(3000));
     esp_task_wdt_reset();
@@ -1767,6 +1707,18 @@ void GUI::drawLibrary(bool favoritesOnly)
     target->setTextColor(TFT_BLACK);
     const float itemSize = 1.8f;
     target->setTextSize(itemSize);
+
+    if (!bookIndexReady)
+    {
+        target->setCursor(20, LIBRARY_LIST_START_Y);
+        target->println("Loading books...");
+        if (sprite)
+        {
+            sprite->pushSprite(&M5.Display, 0, 0);
+        }
+        M5.Display.display();
+        return;
+    }
 
     // Get filtered books based on search and favorites
     // Use favoritesOnly parameter if this is FAVORITES state, otherwise use showFavoritesOnly toggle
@@ -3448,7 +3400,10 @@ void GUI::onMainMenuClick(int x, int y)
             case 0: // Last Book
                 if (lastBookId > 0)
                 {
-                    openBookById(lastBookId);
+                    if (bookIndexReady)
+                        openBookById(lastBookId);
+                    else
+                        loadLastBook();
                 }
                 break;
 
@@ -3503,6 +3458,9 @@ void GUI::handleGesture(const GestureEvent& event)
     case GestureType::DOUBLE_TAP:
         if (currentState == AppState::READER)
         {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+            deviceHAL.playClickSound();
+#endif
             processReaderTap(event.endX, event.endY, true); // true = double
         }
         else
@@ -3516,6 +3474,18 @@ void GUI::handleGesture(const GestureEvent& event)
         // Handle swipe gestures in reader mode
         if (currentState == AppState::READER)
         {
+            int dx = event.endX - event.startX;
+            int dy = event.endY - event.startY;
+            int absDx = abs(dx);
+            int absDy = abs(dy);
+            int minSwipe = screenW / 6;
+            if (minSwipe < GestureDetector::SWIPE_THRESHOLD)
+                minSwipe = GestureDetector::SWIPE_THRESHOLD;
+
+            if (absDx < minSwipe || absDx < absDy * 2)
+            {
+                break;
+            }
             // Right-to-left swipe in middle area opens chapter menu
             if (event.startY > STATUS_BAR_HEIGHT + 50 && event.startY < screenH - 100)
             {
@@ -4107,6 +4077,11 @@ void GUI::handleTouch()
                 }
                 justWokeUp = false;
             }
+            else if (currentState == AppState::CHAPTER_MENU)
+            {
+                onChapterMenuClick(t.x, t.y);
+                justWokeUp = false;
+            }
             else if (currentState == AppState::IMAGE_VIEWER)
             {
                 onImageViewerClick(t.x, t.y);
@@ -4188,6 +4163,9 @@ void GUI::jumpToChapter(int chapter)
 
 bool GUI::openBookById(int id)
 {
+    if (!bookIndexReady)
+        return false;
+
     BookEntry book = bookIndex.getBook(id);
     if (book.id == 0)
         return false;
@@ -4587,11 +4565,23 @@ void GUI::saveLastBook()
         xSemaphoreGive(epubMutex);
     }
 
-    // Save progress to book index
-    bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
+    if (bookIndexReady)
+    {
+        // Save progress to book index
+        bookIndex.updateProgress(currentBook.id, chIdx, currentTextOffset);
 
-    // Save current font settings for this book
-    bookIndex.setBookFont(currentBook.id, currentFont, fontSize);
+        // Save current font settings for this book
+        bookIndex.setBookFont(currentBook.id, currentFont, fontSize);
+    }
+    else
+    {
+        pendingBookIndexSync = true;
+        pendingBookId = currentBook.id;
+        pendingBookChapter = chIdx;
+        pendingBookOffset = currentTextOffset;
+        pendingBookFont = currentFont;
+        pendingBookFontSize = fontSize;
+    }
 
     // Save last book ID and state to NVS
     nvs_handle_t my_handle;
@@ -4599,6 +4589,12 @@ void GUI::saveLastBook()
     {
         nvs_set_i32(my_handle, "last_book_id", currentBook.id);
         nvs_set_i32(my_handle, "last_state", (int)currentState);
+        nvs_set_str(my_handle, "last_book_path", currentBook.path.c_str());
+        nvs_set_str(my_handle, "last_book_title", currentBook.title.c_str());
+        nvs_set_i32(my_handle, "last_book_chapter", chIdx);
+        nvs_set_u32(my_handle, "last_book_offset", (uint32_t)currentTextOffset);
+        nvs_set_str(my_handle, "last_book_font", currentFont.c_str());
+        nvs_set_i32(my_handle, "last_book_font_size", (int32_t)(fontSize * 10));
         nvs_commit(my_handle);
         nvs_close(my_handle);
     }
@@ -4619,17 +4615,152 @@ bool GUI::loadLastBook()
 {
     nvs_handle_t my_handle;
     int32_t lastId = -1;
+    int32_t lastChapter = 0;
+    uint32_t lastOffset = 0;
+    std::string lastPath;
+    std::string lastTitle;
+    std::string lastFont;
+    float lastFontSize = 0.0f;
     if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
     {
         nvs_get_i32(my_handle, "last_book_id", &lastId);
+        nvs_get_i32(my_handle, "last_book_chapter", &lastChapter);
+        nvs_get_u32(my_handle, "last_book_offset", &lastOffset);
+
+        size_t pathLen = 0;
+        if (nvs_get_str(my_handle, "last_book_path", NULL, &pathLen) == ESP_OK && pathLen > 1)
+        {
+            char *pathBuf = new char[pathLen];
+            if (nvs_get_str(my_handle, "last_book_path", pathBuf, &pathLen) == ESP_OK)
+            {
+                lastPath = pathBuf;
+            }
+            delete[] pathBuf;
+        }
+
+        size_t titleLen = 0;
+        if (nvs_get_str(my_handle, "last_book_title", NULL, &titleLen) == ESP_OK && titleLen > 1)
+        {
+            char *titleBuf = new char[titleLen];
+            if (nvs_get_str(my_handle, "last_book_title", titleBuf, &titleLen) == ESP_OK)
+            {
+                lastTitle = titleBuf;
+            }
+            delete[] titleBuf;
+        }
+
+        size_t fontLen = 0;
+        if (nvs_get_str(my_handle, "last_book_font", NULL, &fontLen) == ESP_OK && fontLen > 1)
+        {
+            char *fontBuf = new char[fontLen];
+            if (nvs_get_str(my_handle, "last_book_font", fontBuf, &fontLen) == ESP_OK)
+            {
+                lastFont = fontBuf;
+            }
+            delete[] fontBuf;
+        }
+
+        int32_t fontSizeInt = 0;
+        if (nvs_get_i32(my_handle, "last_book_font_size", &fontSizeInt) == ESP_OK)
+        {
+            lastFontSize = fontSizeInt / 10.0f;
+        }
         nvs_close(my_handle);
     }
 
     if (lastId > 0)
     {
-        return openBookById(lastId);
+        lastBookId = lastId;
+        if (!lastTitle.empty())
+        {
+            lastBookTitle = lastTitle;
+            if (lastBookTitle.length() > 25)
+            {
+                size_t pos = 22;
+                while (pos > 0 && (lastBookTitle[pos] & 0xC0) == 0x80)
+                    pos--;
+                lastBookTitle = lastBookTitle.substr(0, pos) + "...";
+            }
+        }
     }
-    return false;
+
+    if (lastPath.empty() && lastId > 0)
+    {
+        char fallback[32];
+        snprintf(fallback, sizeof(fallback), "/spiffs/%ld.epub", lastId);
+        lastPath = fallback;
+    }
+
+    if (lastId <= 0 || lastPath.empty())
+    {
+        return false;
+    }
+
+    currentBook = {lastId, lastTitle, "", lastPath, lastChapter, lastOffset, 0, false, false, "", 1.0f};
+    totalBookChars = 0;
+    chapterPrefixSums.clear();
+    bookMetricsComputed = false;
+
+    bool loaded = false;
+    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    {
+        loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
+        if (loaded)
+        {
+            currentState = AppState::READER;
+
+            // Auto-detect language
+            std::string lang = epubLoader.getLanguage();
+            bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
+            if (!lastFont.empty())
+            {
+                if (lastFontSize > 0.0f)
+                {
+                    fontSizes[lastFont] = lastFontSize;
+                }
+                setFont(lastFont);
+                if (lastFontSize > 0.0f)
+                {
+                    fontSize = lastFontSize;
+                }
+            }
+            else if (isHebrew)
+            {
+                setFont("Hebrew");
+            }
+
+            // Restore progress
+            currentTextOffset = currentBook.currentOffset;
+            resetPageInfoCache();
+
+            // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
+            isRTLDocument = isHebrew;
+
+            if (bookIndexReady && bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
+            {
+                bookMetricsComputed = true;
+                ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
+            }
+            else
+            {
+                if (metricsTaskHandle != nullptr)
+                    vTaskDelete(metricsTaskHandle);
+                metricsTaskTargetBookId = currentBook.id;
+                xTaskCreate([](void *arg)
+                            { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+            }
+        }
+        xSemaphoreGive(epubMutex);
+    }
+
+    if (!loaded)
+    {
+        return false;
+    }
+
+    pageHistory.clear();
+    needsRedraw = true;
+    return true;
 }
 
 uint8_t GUI::getGrayShade(int level) const
@@ -5406,6 +5537,11 @@ void GUI::onLibraryClick(int x, int y)
         return;
     }
 
+    if (!bookIndexReady)
+    {
+        return;
+    }
+
     // Note: Status bar click is now handled in handleTouch to go back to main menu
 
     // Check search bar area
@@ -5961,18 +6097,17 @@ void GUI::drawChapterMenu()
     const int visibleLines = (screenH - startY - 60) / lineHeight;
 
     // Calculate scroll offset to show current chapter
-    static int chapterScrollOffset = 0;
-    if (currentChapter < chapterScrollOffset)
-        chapterScrollOffset = currentChapter;
-    if (currentChapter >= chapterScrollOffset + visibleLines)
-        chapterScrollOffset = currentChapter - visibleLines + 1;
+    if (currentChapter < chapterMenuScrollOffset)
+        chapterMenuScrollOffset = currentChapter;
+    if (currentChapter >= chapterMenuScrollOffset + visibleLines)
+        chapterMenuScrollOffset = currentChapter - visibleLines + 1;
 
     target->setTextSize(1.5f);
     target->setTextDatum(textdatum_t::middle_left);
 
-    for (int i = 0; i < visibleLines && (chapterScrollOffset + i) < (int)chapterNames.size(); i++)
+    for (int i = 0; i < visibleLines && (chapterMenuScrollOffset + i) < (int)chapterNames.size(); i++)
     {
-        int idx = chapterScrollOffset + i;
+        int idx = chapterMenuScrollOffset + i;
         int ty = startY + i * lineHeight + lineHeight / 2;
 
         // Highlight current chapter
@@ -6044,13 +6179,12 @@ void GUI::onChapterMenuClick(int x, int y)
     if (y >= startY && y < startY + visibleLines * lineHeight)
     {
         int clickedLine = (y - startY) / lineHeight;
-        static int chapterScrollOffset = 0; // Should be synced with draw
-        int selectedChapter = chapterScrollOffset + clickedLine;
+        int selectedChapter = chapterMenuScrollOffset + clickedLine;
 
         if (selectedChapter >= 0 && selectedChapter < totalChapters)
         {
-            jumpToChapter(selectedChapter);
             currentState = AppState::READER;
+            jumpToChapter(selectedChapter);
             needsRedraw = true;
         }
     }
