@@ -138,6 +138,7 @@ private:
     std::map<std::string, float> fontSizes;  // Font name -> size
     float fontSize = 1.0f; // Current font size
     float lineSpacing = 1.1f; // Line height multiplier (1.0 = tight, 2.0 = double spaced)
+    int lightSleepMinutes = 5; // Time before deep sleep (minutes)
     std::string currentFont = "Default";
     std::string previousFont = "Default";
     bool fontChanged = false;
@@ -207,6 +208,7 @@ private:
     void drawImageViewer();   // Full-screen image display
     
     void handleTouch();
+    void handleTap(int x, int y);
     void handleGesture(const GestureEvent& event);  // Process detected gestures
     void handleButtonPress();   // Handle hardware button press (long press = shutdown)
     void processReaderTap(int x, int y, bool isDouble);

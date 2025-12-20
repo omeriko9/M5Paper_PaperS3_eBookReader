@@ -38,7 +38,9 @@ bool BookIndex::scanForNewBooks(ProgressCallback callback)
     if (hal.isSDCardMounted()) {
         const char* sdPath = hal.getSDCardMountPoint();
         if (sdPath) {
-            foundNewBooks |= scanDirectory(sdPath, callback);
+            // Scan /sdcard/books instead of root
+            std::string booksPath = std::string(sdPath) + "/books";
+            foundNewBooks |= scanDirectory(booksPath.c_str(), callback);
         }
     }
     
@@ -258,7 +260,7 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     {
         esp_task_wdt_reset();
         // Yield to let UI task run
-        vTaskDelay(1);
+        vTaskDelay(10);
         
         if (entry->d_type == DT_REG)
         { // Regular file
@@ -340,6 +342,7 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
 
                 if (!found)
                 {
+                    vTaskDelay(5);
                     // New book found. Load metadata first (slow, no lock)
                     int id = getNextId(); // This needs lock? Yes, usually. But we can guess or take lock briefly.
                     // Actually getNextId iterates books.

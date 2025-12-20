@@ -116,17 +116,17 @@ private:
     // Game-specific state
     void initMinesweeper();
     void updateMinesweeper();
-    void drawMinesweeper();
+    void drawMinesweeper(LovyanGFX* target = nullptr);
     void handleMinesweeperTouch(int x, int y);
     
     void initSudoku();
     void updateSudoku();
-    void drawSudoku();
+    void drawSudoku(LovyanGFX* target = nullptr);
     void handleSudokuTouch(int x, int y);
     
     void initWordle();
     void updateWordle();
-    void drawWordle();
+    void drawWordle(LovyanGFX* target = nullptr);
     void handleWordleTouch(int x, int y);
     
 public:
@@ -174,7 +174,7 @@ private:
     WordleState m_wordle;
     
     // Common drawing helpers
-    void drawButton(int x, int y, int w, int h, const char* label, 
+    void drawButton(LovyanGFX* target, int x, int y, int w, int h, const char* label, 
                    uint16_t bgColor, uint16_t textColor);
-    void drawHeader(const char* title);
+    void drawHeader(LovyanGFX* target, const char* title);
 };

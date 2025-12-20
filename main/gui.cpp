@@ -604,8 +604,14 @@ void GUI::init(bool isWakeFromSleep)
     loadSettings();
     loadFonts();
 
+    // Initialize gesture detector
+    gestureDetector.init(M5.Display.width(), M5.Display.height());
+
     // Initialize image handler
     ImageHandler::getInstance().init();
+
+    // Initialize gesture detector
+    gestureDetector.init(M5.Display.width(), M5.Display.height());
 
     // Play startup sound
     deviceHAL.playStartupSound();
@@ -1105,6 +1111,15 @@ void GUI::setShowImages(bool enabled)
 
 void GUI::update()
 {
+    // Update gesture detector
+    GestureEvent gesture = gestureDetector.update();
+    if (gesture.type != GestureType::NONE)
+    {
+        handleGesture(gesture);
+        // If a gesture occurred, cancel any pending click to avoid double-action
+        clickPending = false;
+    }
+
     handleTouch();
 
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1119,12 +1134,8 @@ void GUI::update()
     }
 
     // Unified Sleep and WebServer Logic
-    uint32_t idleTimeout = 5 * 60 * 1000; // Default 5 minutes for Library and other states
-    if (currentState == AppState::READER || currentState == AppState::SETTINGS)
-    {
-        idleTimeout = 60 * 1000; // 60 seconds for reader/settings
-    }
-
+    uint32_t idleTimeout = lightSleepMinutes * 60 * 1000; // Use user setting
+    
     if (now - lastActivityTime > idleTimeout && !recentHttpActivity)
     {
         if (currentState == AppState::LIBRARY && webServerEnabled)
@@ -2902,18 +2913,17 @@ void GUI::drawSettings()
     target->drawString(status.c_str(), layout.padding + 160, row4CenterY + yOffset);
     target->setTextSize(bodyTextSize);
 
-    // --- Favorite Row ---
+    // --- Sleep Delay ---
     int row5CenterY = layout.row5Y + layout.rowHeight / 2;
-    target->drawString("Favorite", layout.padding, row5CenterY + yOffset);
-
-    // Favorite toggle button with star
-    int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
-    bool isFav = bookIndex.isFavorite(currentBook.id);
-    uint16_t favFill = isFav ? TFT_YELLOW : TFT_WHITE;
-    uint16_t favText = isFav ? TFT_WHITE : TFT_BLACK;
-    const char *favLabel = isFav ? "- Remove" : "+ Add";
-    drawButton(layout.toggleButtonX, favButtonY, layout.toggleButtonW, layout.fontButtonH,
-               favLabel, favFill, favText);
+    target->drawString("Sleep Delay", layout.padding, row5CenterY + yOffset);
+    char sleepBuf[16];
+    snprintf(sleepBuf, sizeof(sleepBuf), "%d min", lightSleepMinutes);
+    target->setTextDatum(textdatum_t::middle_right);
+    target->drawString(sleepBuf, fontValueRight, row5CenterY + yOffset);
+    target->setTextDatum(textdatum_t::middle_left);
+    int sleepButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    drawButton(layout.fontMinusX, sleepButtonY, layout.fontButtonW, layout.fontButtonH, "-", TFT_WHITE, TFT_BLACK);
+    drawButton(layout.fontPlusX, sleepButtonY, layout.fontButtonW, layout.fontButtonH, "+", TFT_WHITE, TFT_BLACK);
 
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
@@ -3000,17 +3010,34 @@ void GUI::drawStandaloneSettings()
     int row3Y = startY + rowHeight * 2;
     int row3CenterY = row3Y + rowHeight / 2;
     target->drawString("WiFi", padding, row3CenterY);
-
+    
     btnY = row3Y + (rowHeight - buttonH) / 2;
     uint16_t wifiFill = wifiEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t wifiText = wifiEnabled ? TFT_WHITE : TFT_BLACK;
-    drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
-                       wifiEnabled ? "ON" : "OFF", wifiFill, wifiText);
+    drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH, 
+                      wifiEnabled ? "ON" : "OFF", wifiFill, wifiText);
 
-    // --- WiFi Status ---
+    // --- Sleep Delay ---
     int row4Y = startY + rowHeight * 3;
     int row4CenterY = row4Y + rowHeight / 2;
-    target->drawString("WiFi Status", padding, row4CenterY);
+    target->drawString("Sleep Delay", padding, row4CenterY);
+    
+    char sleepBuf[16];
+    snprintf(sleepBuf, sizeof(sleepBuf), "%d min", lightSleepMinutes);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->drawString(sleepBuf, screenW - padding - buttonW - 50, row4CenterY);
+    target->setTextDatum(textdatum_t::middle_left);
+    
+    btnY = row4Y + (rowHeight - buttonH) / 2;
+    fontMinusX = screenW - padding - buttonW * 2 - 10;
+    fontPlusX = screenW - padding - buttonW;
+    drawSettingsButton(fontMinusX, btnY, buttonW, buttonH, "-", TFT_WHITE, TFT_BLACK);
+    drawSettingsButton(fontPlusX, btnY, buttonW, buttonH, "+", TFT_WHITE, TFT_BLACK);
+
+    // --- WiFi Status ---
+    int row5Y = startY + rowHeight * 4;
+    int row5CenterY = row5Y + rowHeight / 2;
+    target->drawString("WiFi Status", padding, row5CenterY);
 
     std::string status = wifiEnabled ? "Connecting..." : "WiFi is OFF";
     if (wifiEnabled && wifiManager.isConnected())
@@ -3020,27 +3047,27 @@ void GUI::drawStandaloneSettings()
     }
     target->setTextSize(1.4f);
     target->setTextDatum(textdatum_t::middle_left);
-    target->drawString(status.c_str(), padding + 180, row4CenterY);
+    target->drawString(status.c_str(), padding + 180, row5CenterY);
     target->setTextSize(1.8f);
 
     // --- Buzzer (M5PaperS3 only) ---
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-    int row5Y = startY + rowHeight * 4;
-    int row5CenterY = row5Y + rowHeight / 2;
-    target->drawString("Buzzer", padding, row5CenterY);
+    int row6Y = startY + rowHeight * 5;
+    int row6CenterY = row6Y + rowHeight / 2;
+    target->drawString("Buzzer", padding, row6CenterY);
 
-    btnY = row5Y + (rowHeight - buttonH) / 2;
+    btnY = row6Y + (rowHeight - buttonH) / 2;
     uint16_t buzzerFill = buzzerEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t buzzerText = buzzerEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
                        buzzerEnabled ? "ON" : "OFF", buzzerFill, buzzerText);
 
     // --- Auto Rotate ---
-    int row6Y = startY + rowHeight * 5;
-    int row6CenterY = row6Y + rowHeight / 2;
-    target->drawString("Auto Rotate", padding, row6CenterY);
+    int row7Y = startY + rowHeight * 6;
+    int row7CenterY = row7Y + rowHeight / 2;
+    target->drawString("Auto Rotate", padding, row7CenterY);
 
-    btnY = row6Y + (rowHeight - buttonH) / 2;
+    btnY = row7Y + (rowHeight - buttonH) / 2;
     uint16_t rotateFill = autoRotateEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t rotateText = autoRotateEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
@@ -3137,10 +3164,31 @@ void GUI::onSettingsClick(int x, int y)
         return;
     }
 
+    // Sleep Delay buttons
+    int row4Y = startY + rowHeight * 3;
+    btnY = row4Y + (rowHeight - buttonH) / 2;
+    if (y >= btnY && y <= btnY + buttonH)
+    {
+        if (x >= fontMinusX && x < fontMinusX + buttonW)
+        {
+            if (lightSleepMinutes > 1) lightSleepMinutes--;
+            saveSettings();
+            needsRedraw = true;
+            return;
+        }
+        if (x >= fontPlusX && x < fontPlusX + buttonW)
+        {
+            if (lightSleepMinutes < 60) lightSleepMinutes++;
+            saveSettings();
+            needsRedraw = true;
+            return;
+        }
+    }
+
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     // Buzzer Toggle
-    int row5Y = startY + rowHeight * 4;
-    btnY = row5Y + (rowHeight - buttonH) / 2;
+    int row6Y = startY + rowHeight * 5;
+    btnY = row6Y + (rowHeight - buttonH) / 2;
     if (y >= btnY && y <= btnY + buttonH && x >= screenW - padding - buttonW && x < screenW - padding)
     {
         setBuzzerEnabled(!buzzerEnabled);
@@ -3149,8 +3197,8 @@ void GUI::onSettingsClick(int x, int y)
     }
 
     // Auto Rotate Toggle
-    int row6Y = startY + rowHeight * 5;
-    btnY = row6Y + (rowHeight - buttonH) / 2;
+    int row7Y = startY + rowHeight * 6;
+    btnY = row7Y + (rowHeight - buttonH) / 2;
     if (y >= btnY && y <= btnY + buttonH && x >= screenW - padding - buttonW && x < screenW - padding)
     {
         setAutoRotateEnabled(!autoRotateEnabled);
@@ -3443,25 +3491,43 @@ void GUI::onMainMenuClick(int x, int y)
 
 void GUI::handleGesture(const GestureEvent& event)
 {
-    // Handle swipe gestures in reader mode
-    if (currentState != AppState::READER)
-        return;
-    
     int screenW = M5.Display.width();
     int screenH = M5.Display.height();
     
     switch (event.type)
     {
-    case GestureType::SWIPE_LEFT:
-        // Right-to-left swipe in middle area opens chapter menu
-        if (event.startY > STATUS_BAR_HEIGHT + 50 && event.startY < screenH - 100)
+    case GestureType::TAP:
+        handleTap(event.endX, event.endY);
+        break;
+
+    case GestureType::DOUBLE_TAP:
+        if (currentState == AppState::READER)
         {
-            previousState = currentState;
-            currentState = AppState::CHAPTER_MENU;
-            needsRedraw = true;
+            processReaderTap(event.endX, event.endY, true); // true = double
+        }
+        else
+        {
+            // For other modes, treat double tap as a tap
+            handleTap(event.endX, event.endY);
+        }
+        break;
+
+    case GestureType::SWIPE_LEFT:
+        // Handle swipe gestures in reader mode
+        if (currentState == AppState::READER)
+        {
+            // Right-to-left swipe in middle area opens chapter menu
+            if (event.startY > STATUS_BAR_HEIGHT + 50 && event.startY < screenH - 100)
+            {
+                previousState = currentState;
+                currentState = AppState::CHAPTER_MENU;
+                needsRedraw = true;
+            }
         }
         break;
         
+    // SWIPE_UP removed as per user request (conflicts with page turns or not desired)
+    /*
     case GestureType::SWIPE_UP:
         // Swipe up from bottom opens settings
         if (event.startY > screenH - 150)
@@ -3471,6 +3537,7 @@ void GUI::handleGesture(const GestureEvent& event)
             needsRedraw = true;
         }
         break;
+    */
         
     case GestureType::SWIPE_RIGHT:
     case GestureType::SWIPE_DOWN:
@@ -3479,6 +3546,252 @@ void GUI::handleGesture(const GestureEvent& event)
         
     default:
         break;
+    }
+}
+
+void GUI::handleTap(int x, int y)
+{
+    // Play click sound on M5PaperS3
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+    deviceHAL.playClickSound();
+#endif
+
+    if (justWokeUp)
+    {
+        ESP_LOGI(TAG, "Processing wake-up tap at %d, %d", x, y);
+    }
+
+    // Handle main menu
+    if (currentState == AppState::MAIN_MENU)
+    {
+        onMainMenuClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::LIBRARY || currentState == AppState::FAVORITES)
+    {
+        // Status bar tap returns to main menu
+        if (y < STATUS_BAR_HEIGHT)
+        {
+            currentState = AppState::MAIN_MENU;
+            searchQuery.clear();
+            showFavoritesOnly = false;
+            libraryPage = 0;
+            needsRedraw = true;
+            justWokeUp = false;
+            return;
+        }
+        onLibraryClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::READER)
+    {
+        // Top tap (status bar) to return to main menu
+        if (y < STATUS_BAR_HEIGHT)
+        {
+            clickPending = false; // Cancel any pending
+            // Save progress before exiting
+            int chIdx = 0;
+            if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+            {
+                chIdx = epubLoader.getCurrentChapterIndex();
+                xSemaphoreGive(epubMutex);
+            }
+            // Save progress before exiting using centralized helper
+            saveLastBook();
+
+            currentState = AppState::MAIN_MENU;
+            epubLoader.close();
+            bookMetricsComputed = false;
+            totalBookChars = 0;
+            chapterPrefixSums.clear();
+            needsRedraw = true;
+            justWokeUp = false;
+            return;
+        }
+
+        // Bottom status bar area (footer) -> Book Settings overlay
+        int footerY = M5.Display.height() - 50;
+        if (y > footerY)
+        {
+            clickPending = false; // Cancel any pending
+            previousState = currentState;
+            currentState = AppState::BOOK_SETTINGS;
+            needsRedraw = true;
+            justWokeUp = false;
+            return;
+        }
+
+        // Middle area - Page Turn
+        // Single tap (GestureDetector handles double tap separation)
+        processReaderTap(x, y, false); 
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::BOOK_SETTINGS)
+    {
+        // In-book settings overlay (half-page)
+        SettingsLayout layout = computeSettingsLayout();
+
+        // Close if clicked outside the panel (upper half)
+        if (y < layout.panelTop)
+        {
+            currentState = previousState;
+            needsRedraw = true;
+            if (settingsCanvasCreated)
+            {
+                settingsCanvas.deleteSprite();
+                settingsCanvasCreated = false;
+            }
+            return;
+        }
+
+        int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
+        int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
+        int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
+        int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
+        int closeButtonY = layout.closeY;
+
+        // Font Size [-]
+        if (y >= fontButtonY && y <= fontButtonY + layout.fontButtonH && x >= layout.fontMinusX && x <= layout.fontMinusX + layout.fontButtonW)
+        {
+            setFontSize(fontSize - 0.1f);
+            settingsNeedsUnderlayRefresh = true;
+        }
+        // Font Size [+]
+        else if (y >= fontButtonY && y <= fontButtonY + layout.fontButtonH && x >= layout.fontPlusX && x <= layout.fontPlusX + layout.fontButtonW)
+        {
+            setFontSize(fontSize + 0.1f);
+            settingsNeedsUnderlayRefresh = true;
+        }
+        // Font Change
+        else if (y >= changeButtonY && y <= changeButtonY + layout.fontButtonH && x >= layout.changeButtonX && x <= layout.changeButtonX + layout.changeButtonW)
+        {
+            if (currentFont == "Default")
+                setFont("Hebrew");
+            else if (currentFont == "Hebrew")
+                setFont("Arabic");
+            else if (currentFont == "Arabic")
+                setFont("Roboto");
+            else
+                setFont("Default");
+            settingsNeedsUnderlayRefresh = true;
+        }
+        // WiFi Toggle
+        else if (y >= toggleButtonY && y <= toggleButtonY + layout.fontButtonH && x >= layout.toggleButtonX && x <= layout.toggleButtonX + layout.toggleButtonW)
+        {
+            wifiEnabled = !wifiEnabled;
+            saveSettings();
+
+            if (wifiEnabled)
+            {
+                if (!wifiManager.isInitialized())
+                {
+                    wifiManager.init();
+                }
+                wifiManager.connect();
+                webServer.init("/spiffs");
+            }
+            else
+            {
+                webServer.stop();
+                wifiManager.disconnect();
+                wifiConnected = false;
+            }
+            needsRedraw = true;
+        }
+        // Sleep Delay [-]
+        else if (y >= layout.row5Y && y <= layout.row5Y + layout.rowHeight && x >= layout.fontMinusX && x <= layout.fontMinusX + layout.fontButtonW)
+        {
+            if (lightSleepMinutes > 1) lightSleepMinutes--;
+            saveSettings();
+            settingsNeedsUnderlayRefresh = true;
+        }
+        // Sleep Delay [+]
+        else if (y >= layout.row5Y && y <= layout.row5Y + layout.rowHeight && x >= layout.fontPlusX && x <= layout.fontPlusX + layout.fontButtonW)
+        {
+            if (lightSleepMinutes < 60) lightSleepMinutes++;
+            saveSettings();
+            settingsNeedsUnderlayRefresh = true;
+        }
+        // Close
+        else if (y >= closeButtonY && y <= closeButtonY + layout.closeButtonH && x >= closeX && x <= closeX + layout.closeButtonW)
+        {
+            currentState = previousState;
+            needsRedraw = true;
+            if (settingsCanvasCreated)
+            {
+                settingsCanvas.deleteSprite();
+                settingsCanvasCreated = false;
+            }
+        }
+    }
+    else if (currentState == AppState::SETTINGS)
+    {
+        // Standalone settings (from main menu)
+        // Status bar tap returns to main menu
+        if (y < STATUS_BAR_HEIGHT)
+        {
+            currentState = AppState::MAIN_MENU;
+            needsRedraw = true;
+            justWokeUp = false;
+            return;
+        }
+        onSettingsClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::WIFI_SCAN)
+    {
+        // Status bar tap returns to main menu
+        if (y < STATUS_BAR_HEIGHT)
+        {
+            currentState = AppState::MAIN_MENU;
+            needsRedraw = true;
+            justWokeUp = false;
+            return;
+        }
+        onWifiScanClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::WIFI_PASSWORD)
+    {
+        onWifiPasswordClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::GAMES_MENU)
+    {
+        onGamesMenuClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::GAME_PLAYING)
+    {
+        // Let game manager handle the touch
+        GameManager &gm = GameManager::getInstance();
+        if (gm.handleTouch(x, y))
+        {
+            needsRedraw = true;
+        }
+        // Check if game wants to return to menu
+        if (gm.shouldReturnToMenu())
+        {
+            gm.clearReturnFlag();
+            currentState = AppState::GAMES_MENU;
+            needsRedraw = true;
+        }
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::IMAGE_VIEWER)
+    {
+        onImageViewerClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::CHAPTER_MENU)
+    {
+        onChapterMenuClick(x, y);
+        justWokeUp = false;
+    }
+    else if (currentState == AppState::FONT_SELECTION)
+    {
+        onFontSelectionClick(x, y);
+        justWokeUp = false;
     }
 }
 
@@ -3515,8 +3828,23 @@ void GUI::handleTouch()
     {
         lastActivityTime = now;
         auto t = M5.Touch.getDetail(0);
+
         if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
+            // If gesture is in progress, don't process taps yet
+            // UNLESS we are in a mode that requires instant response (non-Reader)
+            bool instantResponse = (currentState != AppState::READER);
+
+            if (gestureDetector.isGestureInProgress() && !instantResponse)
+            {
+                return;
+            }
+
+            if (instantResponse)
+            {
+                gestureDetector.reset();
+            }
+
             // Play click sound on M5PaperS3
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
             deviceHAL.playClickSound();
@@ -3699,26 +4027,29 @@ void GUI::handleTouch()
                     }
                     needsRedraw = true;
                 }
-                // Favorite Toggle
-                else
+                // Sleep Delay [-]
+                else if (t.y >= layout.row5Y && t.y <= layout.row5Y + layout.rowHeight && t.x >= layout.fontMinusX && t.x <= layout.fontMinusX + layout.fontButtonW)
                 {
-                    int favButtonY = layout.row5Y + (layout.rowHeight - layout.fontButtonH) / 2;
-                    if (t.y >= favButtonY && t.y <= favButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
+                    if (lightSleepMinutes > 1) lightSleepMinutes--;
+                    saveSettings();
+                    settingsNeedsUnderlayRefresh = true;
+                }
+                // Sleep Delay [+]
+                else if (t.y >= layout.row5Y && t.y <= layout.row5Y + layout.rowHeight && t.x >= layout.fontPlusX && t.x <= layout.fontPlusX + layout.fontButtonW)
+                {
+                    if (lightSleepMinutes < 60) lightSleepMinutes++;
+                    saveSettings();
+                    settingsNeedsUnderlayRefresh = true;
+                }
+                // Close
+                else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
+                {
+                    currentState = previousState;
+                    needsRedraw = true;
+                    if (settingsCanvasCreated)
                     {
-                        bool currentFav = bookIndex.isFavorite(currentBook.id);
-                        bookIndex.setFavorite(currentBook.id, !currentFav);
-                        needsRedraw = true;
-                    }
-                    // Close
-                    else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
-                    {
-                        currentState = previousState;
-                        needsRedraw = true;
-                        if (settingsCanvasCreated)
-                        {
-                            settingsCanvas.deleteSprite();
-                            settingsCanvasCreated = false;
-                        }
+                        settingsCanvas.deleteSprite();
+                        settingsCanvasCreated = false;
                     }
                 }
             }
@@ -3993,6 +4324,9 @@ void GUI::saveSettings()
             nvs_set_str(my_handle, "font_sizes", fontSizeStr.c_str());
         }
 
+        // Save light sleep duration
+        nvs_set_i32(my_handle, "sleep_min", lightSleepMinutes);
+
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         // Save M5PaperS3-specific settings
         nvs_set_i32(my_handle, "buzzer_en", buzzerEnabled ? 1 : 0);
@@ -4196,6 +4530,13 @@ void GUI::loadSettings()
         if (nvs_get_i32(my_handle, "text_bold", &boldInt) == ESP_OK)
         {
             textBoldness = boldInt;
+        }
+
+        // Load light sleep duration
+        int32_t sleepMin = 5;
+        if (nvs_get_i32(my_handle, "sleep_min", &sleepMin) == ESP_OK)
+        {
+            lightSleepMinutes = sleepMin;
         }
 
         // Load per-font size settings
@@ -5559,20 +5900,9 @@ void GUI::onGamesMenuClick(int x, int y)
 
 void GUI::drawGame()
 {
-    M5Canvas *sprite = (canvasNext.width() > 0) ? &canvasNext : nullptr;
-    LovyanGFX *target = sprite ? (LovyanGFX *)sprite : (LovyanGFX *)&M5.Display;
-
-    target->fillScreen(TFT_WHITE);
-
-    // Let game manager draw the current game
+    // GameManager draws directly to display
     GameManager &gm = GameManager::getInstance();
-    gm.draw(target);
-
-    if (sprite)
-    {
-        sprite->pushSprite(&M5.Display, 0, 0);
-    }
-    M5.Display.display();
+    gm.draw(nullptr);
 }
 
 // ============================================
@@ -5805,10 +6135,10 @@ void GUI::drawFontSelection()
     }
 #endif
 
-    const int lineHeight = 50;
+    const int lineHeight = 70;
     const int startY = STATUS_BAR_HEIGHT + 55;
 
-    target->setTextSize(1.8f);
+    target->setTextSize(2.5f);
     target->setTextDatum(textdatum_t::middle_left);
 
     for (size_t i = 0; i < allFonts.size() && (int)(startY + i * lineHeight) < screenH - 70; i++)

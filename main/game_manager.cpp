@@ -33,31 +33,33 @@ void GameManager::init() {
     ESP_LOGI(TAG, "GameManager initialized");
 }
 
-void GameManager::drawButton(int x, int y, int w, int h, const char* label,
+void GameManager::drawButton(LovyanGFX* target, int x, int y, int w, int h, const char* label,
                              uint16_t bgColor, uint16_t textColor) {
-    M5.Display.fillRect(x, y, w, h, bgColor);
-    M5.Display.drawRect(x, y, w, h, TFT_BLACK);
-    M5.Display.setTextColor(textColor, bgColor);
-    M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawString(label, x + w/2, y + h/2);
-    M5.Display.setTextDatum(textdatum_t::top_left);
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    gfx->fillRect(x, y, w, h, bgColor);
+    gfx->drawRect(x, y, w, h, TFT_BLACK);
+    gfx->setTextColor(textColor, bgColor);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->drawString(label, x + w/2, y + h/2);
+    gfx->setTextDatum(textdatum_t::top_left);
 }
 
-void GameManager::drawHeader(const char* title) {
-    M5.Display.fillRect(0, STATUS_BAR_HEIGHT, SCREEN_WIDTH, 60, GRAY_LIGHT);
-    M5.Display.drawLine(0, STATUS_BAR_HEIGHT + 59, SCREEN_WIDTH, STATUS_BAR_HEIGHT + 59, TFT_BLACK);
-    M5.Display.setTextColor(TFT_BLACK, GRAY_LIGHT);
-    M5.Display.setTextSize(2.5f);
-    M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawString(title, SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 30);
-    M5.Display.setTextDatum(textdatum_t::top_left);
+void GameManager::drawHeader(LovyanGFX* target, const char* title) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    gfx->fillRect(0, STATUS_BAR_HEIGHT, SCREEN_WIDTH, 60, GRAY_LIGHT);
+    gfx->drawLine(0, STATUS_BAR_HEIGHT + 59, SCREEN_WIDTH, STATUS_BAR_HEIGHT + 59, TFT_BLACK);
+    gfx->setTextColor(TFT_BLACK, GRAY_LIGHT);
+    gfx->setTextSize(2.5f);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->drawString(title, SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 30);
+    gfx->setTextDatum(textdatum_t::top_left);
 }
 
 void GameManager::drawGamesMenu() {
     M5.Display.fillScreen(TFT_WHITE);
     
     // Header
-    drawHeader("Games");
+    drawHeader(nullptr, "Games");
     
     M5.Display.setTextSize(1.8f);
     
@@ -69,7 +71,7 @@ void GameManager::drawGamesMenu() {
     int btnX = (SCREEN_WIDTH - btnWidth) / 2;
     
     // Minesweeper
-    drawButton(btnX, startY, btnWidth, btnHeight, "Minesweeper", GRAY_LIGHT, TFT_BLACK);
+    drawButton(nullptr, btnX, startY, btnWidth, btnHeight, "Minesweeper", GRAY_LIGHT, TFT_BLACK);
     M5.Display.setTextSize(1.2f);
     M5.Display.setTextColor(GRAY_DARK, GRAY_LIGHT);
     M5.Display.setTextDatum(textdatum_t::middle_center);
@@ -77,14 +79,14 @@ void GameManager::drawGamesMenu() {
     
     // Sudoku
     startY += btnHeight + btnGap;
-    drawButton(btnX, startY, btnWidth, btnHeight, "Sudoku", GRAY_LIGHT, TFT_BLACK);
+    drawButton(nullptr, btnX, startY, btnWidth, btnHeight, "Sudoku", GRAY_LIGHT, TFT_BLACK);
     M5.Display.setTextSize(1.2f);
     M5.Display.setTextColor(GRAY_DARK, GRAY_LIGHT);
     M5.Display.drawString("6x6 number puzzle", btnX + btnWidth/2, startY + btnHeight - 20);
     
     // Wordle
     startY += btnHeight + btnGap;
-    drawButton(btnX, startY, btnWidth, btnHeight, "Wordle", GRAY_LIGHT, TFT_BLACK);
+    drawButton(nullptr, btnX, startY, btnWidth, btnHeight, "Wordle", GRAY_LIGHT, TFT_BLACK);
     M5.Display.setTextSize(1.2f);
     M5.Display.setTextColor(GRAY_DARK, GRAY_LIGHT);
     M5.Display.drawString("5-letter word guessing game", btnX + btnWidth/2, startY + btnHeight - 20);
@@ -92,7 +94,7 @@ void GameManager::drawGamesMenu() {
     M5.Display.setTextDatum(textdatum_t::top_left);
     
     // Back button
-    drawButton(20, SCREEN_HEIGHT - 70, 150, 50, "Back", TFT_WHITE, TFT_BLACK);
+    drawButton(nullptr, 20, SCREEN_HEIGHT - 70, 150, 50, "Back", TFT_WHITE, TFT_BLACK);
     
     M5.Display.display();
 }
@@ -179,19 +181,17 @@ void GameManager::update() {
 }
 
 void GameManager::draw(LovyanGFX* target) {
-    // For now, games draw directly to M5.Display
-    // Future enhancement: use target parameter
-    (void)target;
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
     
     switch (m_currentGame) {
         case GameType::MINESWEEPER:
-            drawMinesweeper();
+            drawMinesweeper(gfx);
             break;
         case GameType::SUDOKU:
-            drawSudoku();
+            drawSudoku(gfx);
             break;
         case GameType::WORDLE:
-            drawWordle();
+            drawWordle(gfx);
             break;
         default:
             drawGamesMenu();
@@ -309,16 +309,17 @@ void GameManager::updateMinesweeper() {
     // No continuous update needed
 }
 
-void GameManager::drawMinesweeper() {
-    M5.Display.fillScreen(TFT_WHITE);
+void GameManager::drawMinesweeper(LovyanGFX* target) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    gfx->fillScreen(TFT_WHITE);
     
     // Header with restart button
-    M5.Display.setTextSize(2.0f);
-    M5.Display.setTextColor(TFT_BLACK);
-    M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawString("RESTART", SCREEN_WIDTH/2, 25);
-    int textW = M5.Display.textWidth("RESTART");
-    M5.Display.drawLine(SCREEN_WIDTH/2 - textW/2, 45, SCREEN_WIDTH/2 + textW/2, 45, TFT_BLACK);
+    gfx->setTextSize(2.0f);
+    gfx->setTextColor(TFT_BLACK);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->drawString("RESTART", SCREEN_WIDTH/2, 25);
+    int textW = gfx->textWidth("RESTART");
+    gfx->drawLine(SCREEN_WIDTH/2 - textW/2, 45, SCREEN_WIDTH/2 + textW/2, 45, TFT_BLACK);
     
     // Grid
     const int CELL_SIZE = 54;
@@ -330,7 +331,7 @@ void GameManager::drawMinesweeper() {
             int x = GRID_START_X + j * CELL_SIZE;
             int y = GRID_START_Y + i * CELL_SIZE;
             
-            M5.Display.drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
+            gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
             
             bool showMine = m_minesweeper.cellStates[i][j] == 1 || 
                            (m_minesweeper.gameLost && m_minesweeper.mines[i][j]);
@@ -339,23 +340,23 @@ void GameManager::drawMinesweeper() {
                 if (m_minesweeper.mines[i][j]) {
                     // Mine
                     if (m_minesweeper.gameLost) {
-                        M5.Display.fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, TFT_RED);
+                        gfx->fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, TFT_RED);
                     }
-                    M5.Display.fillCircle(x + CELL_SIZE/2, y + CELL_SIZE/2, 8, TFT_BLACK);
+                    gfx->fillCircle(x + CELL_SIZE/2, y + CELL_SIZE/2, 8, TFT_BLACK);
                 } else {
                     // Revealed empty
-                    M5.Display.fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, GRAY_LIGHT);
+                    gfx->fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, GRAY_LIGHT);
                     if (m_minesweeper.neighborCounts[i][j] > 0) {
                         char num[2] = {(char)('0' + m_minesweeper.neighborCounts[i][j]), 0};
-                        M5.Display.setTextSize(2.5f);
-                        M5.Display.drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
+                        gfx->setTextSize(2.5f);
+                        gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
                     }
                 }
             } else if (m_minesweeper.cellStates[i][j] == 2) {
                 // Flagged
-                M5.Display.fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, TFT_YELLOW);
-                M5.Display.setTextSize(2.0f);
-                M5.Display.drawString("F", x + CELL_SIZE/2, y + CELL_SIZE/2);
+                gfx->fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, TFT_YELLOW);
+                gfx->setTextSize(2.0f);
+                gfx->drawString("F", x + CELL_SIZE/2, y + CELL_SIZE/2);
             }
         }
     }
@@ -363,17 +364,17 @@ void GameManager::drawMinesweeper() {
     // Game over message
     if (m_minesweeper.gameWon || m_minesweeper.gameLost) {
         const char* msg = m_minesweeper.gameWon ? "YOU WIN!" : "GAME OVER";
-        M5.Display.setTextSize(3.0f);
-        M5.Display.fillRect(SCREEN_WIDTH/2 - 120, GRID_START_Y/2 - 30, 240, 60, TFT_WHITE);
-        M5.Display.drawRect(SCREEN_WIDTH/2 - 120, GRID_START_Y/2 - 30, 240, 60, TFT_BLACK);
-        M5.Display.drawString(msg, SCREEN_WIDTH/2, GRID_START_Y/2);
+        gfx->setTextSize(3.0f);
+        gfx->fillRect(SCREEN_WIDTH/2 - 120, GRID_START_Y/2 - 30, 240, 60, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 120, GRID_START_Y/2 - 30, 240, 60, TFT_BLACK);
+        gfx->drawString(msg, SCREEN_WIDTH/2, GRID_START_Y/2);
     }
     
     // Back button
-    drawButton(20, 60, 100, 40, "Back", TFT_WHITE, TFT_BLACK);
+    drawButton(gfx, 20, 60, 100, 40, "Back", TFT_WHITE, TFT_BLACK);
     
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    M5.Display.display();
+    gfx->setTextDatum(textdatum_t::top_left);
+    if (!target) M5.Display.display();
 }
 
 void GameManager::handleMinesweeperTouch(int x, int y) {
@@ -464,9 +465,10 @@ void GameManager::updateSudoku() {
     m_sudoku.gameWon = complete;
 }
 
-void GameManager::drawSudoku() {
-    M5.Display.fillScreen(TFT_WHITE);
-    drawHeader("Sudoku");
+void GameManager::drawSudoku(LovyanGFX* target) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    gfx->fillScreen(TFT_WHITE);
+    drawHeader(gfx, "Sudoku");
     
     const int CELL_SIZE = 80;
     const int BLOCK_SPACING = 10;
@@ -475,8 +477,8 @@ void GameManager::drawSudoku() {
     const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH) / 2;
     const int GRID_Y = STATUS_BAR_HEIGHT + 80;
     
-    M5.Display.setTextSize(3.0f);
-    M5.Display.setTextDatum(textdatum_t::middle_center);
+    gfx->setTextSize(3.0f);
+    gfx->setTextDatum(textdatum_t::middle_center);
     
     for (int i = 0; i < 6; i++) {
         for (int j = 0; j < 6; j++) {
@@ -494,14 +496,14 @@ void GameManager::drawSudoku() {
                 bgColor = GRAY_LIGHT;
             }
             
-            M5.Display.fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
-            M5.Display.drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
+            gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
+            gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
             
             // Number
             if (m_sudoku.board[i][j] != 0) {
-                M5.Display.setTextColor(m_sudoku.readonly[i][j] ? TFT_BLACK : TFT_BLUE, bgColor);
+                gfx->setTextColor(m_sudoku.readonly[i][j] ? TFT_BLACK : TFT_BLUE, bgColor);
                 char num[2] = {(char)('0' + m_sudoku.board[i][j]), 0};
-                M5.Display.drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
+                gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
             }
         }
     }
@@ -512,30 +514,30 @@ void GameManager::drawSudoku() {
     int btnGap = 10;
     int startX = (SCREEN_WIDTH - (6 * btnSize + 5 * btnGap)) / 2;
     
-    M5.Display.setTextSize(2.5f);
+    gfx->setTextSize(2.5f);
     for (int i = 1; i <= 6; i++) {
         int x = startX + (i-1) * (btnSize + btnGap);
-        drawButton(x, btnY, btnSize, btnSize, nullptr, GRAY_LIGHT, TFT_BLACK);
+        drawButton(gfx, x, btnY, btnSize, btnSize, nullptr, GRAY_LIGHT, TFT_BLACK);
         char num[2] = {(char)('0' + i), 0};
-        M5.Display.setTextColor(TFT_BLACK, GRAY_LIGHT);
-        M5.Display.drawString(num, x + btnSize/2, btnY + btnSize/2);
+        gfx->setTextColor(TFT_BLACK, GRAY_LIGHT);
+        gfx->drawString(num, x + btnSize/2, btnY + btnSize/2);
     }
     
     // Clear button
-    drawButton(startX, btnY + btnSize + 20, 150, 50, "Clear", TFT_WHITE, TFT_BLACK);
+    drawButton(gfx, startX, btnY + btnSize + 20, 150, 50, "Clear", TFT_WHITE, TFT_BLACK);
     
     // Back button
-    drawButton(20, SCREEN_HEIGHT - 70, 100, 50, "Back", TFT_WHITE, TFT_BLACK);
+    drawButton(gfx, 20, SCREEN_HEIGHT - 70, 100, 50, "Back", TFT_WHITE, TFT_BLACK);
     
     // Win message
     if (m_sudoku.gameWon) {
-        M5.Display.setTextSize(3.0f);
-        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-        M5.Display.drawString("COMPLETE!", SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
+        gfx->setTextSize(3.0f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+        gfx->drawString("COMPLETE!", SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
     }
     
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    M5.Display.display();
+    gfx->setTextDatum(textdatum_t::top_left);
+    if (!target) M5.Display.display();
 }
 
 void GameManager::handleSudokuTouch(int x, int y) {
@@ -643,9 +645,10 @@ void GameManager::updateWordle() {
     // No continuous update needed
 }
 
-void GameManager::drawWordle() {
-    M5.Display.fillScreen(TFT_WHITE);
-    drawHeader("Wordle");
+void GameManager::drawWordle(LovyanGFX* target) {
+    LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
+    gfx->fillScreen(TFT_WHITE);
+    drawHeader(gfx, "Wordle");
     
     const int CELL_SIZE = 80;
     const int GAP = 8;
@@ -653,8 +656,8 @@ void GameManager::drawWordle() {
     const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH) / 2;
     const int GRID_Y = STATUS_BAR_HEIGHT + 80;
     
-    M5.Display.setTextSize(3.0f);
-    M5.Display.setTextDatum(textdatum_t::middle_center);
+    gfx->setTextSize(3.0f);
+    gfx->setTextDatum(textdatum_t::middle_center);
     
     // Draw guesses grid
     for (int row = 0; row < 6; row++) {
@@ -668,13 +671,13 @@ void GameManager::drawWordle() {
             else if (state == 'y') bgColor = TFT_YELLOW;
             else if (state == 'x') bgColor = GRAY_MEDIUM;
             
-            M5.Display.fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
-            M5.Display.drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
+            gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
+            gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
             
             if (m_wordle.guesses[row][col] != 0) {
-                M5.Display.setTextColor(TFT_BLACK, bgColor);
+                gfx->setTextColor(TFT_BLACK, bgColor);
                 char letter[2] = {m_wordle.guesses[row][col], 0};
-                M5.Display.drawString(letter, x + CELL_SIZE/2, y + CELL_SIZE/2);
+                gfx->drawString(letter, x + CELL_SIZE/2, y + CELL_SIZE/2);
             }
         }
     }
@@ -686,7 +689,7 @@ void GameManager::drawWordle() {
     int keyGap = 4;
     int keyY = GRID_Y + 6 * (CELL_SIZE + GAP) + 20;
     
-    M5.Display.setTextSize(1.8f);
+    gfx->setTextSize(1.8f);
     
     for (int r = 0; r < 3; r++) {
         int rowLen = strlen(rows[r]);
@@ -705,38 +708,38 @@ void GameManager::drawWordle() {
             else if (letterState == 'y') bgColor = TFT_YELLOW;
             else if (letterState == 'x') bgColor = GRAY_DARK;
             
-            M5.Display.fillRect(x, y, keyW, keyH, bgColor);
-            M5.Display.drawRect(x, y, keyW, keyH, TFT_BLACK);
+            gfx->fillRect(x, y, keyW, keyH, bgColor);
+            gfx->drawRect(x, y, keyW, keyH, TFT_BLACK);
             
-            M5.Display.setTextColor(TFT_BLACK, bgColor);
+            gfx->setTextColor(TFT_BLACK, bgColor);
             char str[2] = {letter, 0};
-            M5.Display.drawString(str, x + keyW/2, y + keyH/2);
+            gfx->drawString(str, x + keyW/2, y + keyH/2);
         }
     }
     
     // Special keys: Enter and Backspace
     int specialY = keyY + 3 * (keyH + keyGap);
-    drawButton(SCREEN_WIDTH/2 - 160, specialY, 120, 50, "ENTER", GRAY_LIGHT, TFT_BLACK);
-    drawButton(SCREEN_WIDTH/2 + 40, specialY, 120, 50, "DEL", GRAY_LIGHT, TFT_BLACK);
+    drawButton(gfx, SCREEN_WIDTH/2 - 160, specialY, 120, 50, "ENTER", GRAY_LIGHT, TFT_BLACK);
+    drawButton(gfx, SCREEN_WIDTH/2 + 40, specialY, 120, 50, "DEL", GRAY_LIGHT, TFT_BLACK);
     
     // Back button
-    drawButton(20, SCREEN_HEIGHT - 60, 100, 45, "Back", TFT_WHITE, TFT_BLACK);
+    drawButton(gfx, 20, SCREEN_HEIGHT - 60, 100, 45, "Back", TFT_WHITE, TFT_BLACK);
     
     // Win/Lose message
     if (m_wordle.gameWon) {
-        M5.Display.setTextSize(2.5f);
-        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-        M5.Display.drawString("YOU WIN!", SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
+        gfx->setTextSize(2.5f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+        gfx->drawString("YOU WIN!", SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
     } else if (m_wordle.gameLost) {
-        M5.Display.setTextSize(2.0f);
-        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        gfx->setTextSize(2.0f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
         char msg[32];
         snprintf(msg, sizeof(msg), "Answer: %s", m_wordle.answer);
-        M5.Display.drawString(msg, SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
+        gfx->drawString(msg, SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
     }
     
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    M5.Display.display();
+    gfx->setTextDatum(textdatum_t::top_left);
+    if (!target) M5.Display.display();
 }
 
 void GameManager::handleWordleTouch(int x, int y) {
