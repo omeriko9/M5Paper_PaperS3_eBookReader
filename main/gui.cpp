@@ -1348,7 +1348,7 @@ void GUI::drawStatusBar(LovyanGFX *target)
 
         // Truncate title to fit
         std::string title = currentBook.title;
-        gfx->setTextSize(1.2f); // Slightly smaller for title
+        gfx->setTextSize(1.0f); // Smaller for title to fit more text
 
         bool isHeb = isHebrew(title);
         bool isAra = isArabic(title);
@@ -2707,7 +2707,7 @@ void GUI::drawMainMenu()
 
         // Draw label (larger font)
         target->setTextDatum(textdatum_t::middle_center);
-        target->setTextSize(2.5f);
+        target->setTextSize(2.0f);
         target->setTextColor(buttons[i].enabled ? TFT_BLACK : TFT_DARKGREY, bgColor);
 
         int textY = by + btnH / 2;
@@ -2755,19 +2755,26 @@ void GUI::goToSleep()
     saveLastBook();
 
     // Flush any pending display operations before sleeping
+    esp_task_wdt_reset();
     M5.Display.waitDisplay();
 
-    // Turn off WiFi to save power while sleeping
-    wifi_mode_t mode = WIFI_MODE_NULL;
     bool shouldReconnect = false;
-    if (esp_wifi_get_mode(&mode) == ESP_OK)
+    // Turn off WiFi to save power while sleeping
+    if (wifiManager.isInitialized())
     {
-        shouldReconnect = (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA);
+        wifi_mode_t mode = WIFI_MODE_NULL;
+        shouldReconnect = false;
+        if (esp_wifi_get_mode(&mode) == ESP_OK)
+        {
+            shouldReconnect = (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA);
+        }
+        esp_wifi_stop();
     }
-    esp_wifi_stop();
+    esp_task_wdt_reset();
 
     // Light sleep with touch wakeup handled by M5.Power. Also arm a timer so we can fall through to deep sleep.
     drawSleepSymbol("z");
+    esp_task_wdt_reset();
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     // M5PaperS3 specific: 5 minutes light sleep with GPIO 48 wake-up
@@ -2776,10 +2783,18 @@ void GUI::goToSleep()
     esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_TO_DEEP_SLEEP_US);
     gpio_wakeup_enable((gpio_num_t)48, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
+    
+    ESP_LOGI(TAG, "Starting light sleep (S3)...");
+    fflush(stdout);
+    
     esp_light_sleep_start();
+    
+    ESP_LOGI(TAG, "Woke from light sleep (S3)");
     gpio_wakeup_disable((gpio_num_t)48);
 #else
+    ESP_LOGI(TAG, "Starting light sleep (M5Paper)...");
     M5.Power.lightSleep(LIGHT_SLEEP_TO_DEEP_SLEEP_US, true);
+    ESP_LOGI(TAG, "Woke from light sleep (M5Paper)");
 #endif
 
     // Restore display state after wake from light sleep
@@ -3510,10 +3525,7 @@ void GUI::onMainMenuClick(int x, int y)
             case 0: // Last Book
                 if (lastBookId > 0)
                 {
-                    if (bookIndexReady)
-                        openBookById(lastBookId);
-                    else
-                        loadLastBook();
+                    loadLastBook();
                 }
                 break;
 
@@ -4826,6 +4838,16 @@ bool GUI::loadLastBook()
         char fallback[32];
         snprintf(fallback, sizeof(fallback), "/spiffs/%ld.epub", lastId);
         lastPath = fallback;
+    }
+
+    // Try to sync ID with bookIndex if available
+    if (bookIndexReady && !lastPath.empty()) {
+        int realId = bookIndex.getBookIdByPath(lastPath);
+        if (realId > 0 && realId != lastId) {
+            ESP_LOGI(TAG, "Updating last book ID from %ld to %d based on path", lastId, realId);
+            lastId = realId;
+            lastBookId = realId;
+        }
     }
 
     if (lastId <= 0 || lastPath.empty())

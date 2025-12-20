@@ -550,6 +550,21 @@ BookEntry BookIndex::getBook(int id)
     return {0, "", "", "", 0, 0, 0, false, false, "", 1.0f};
 }
 
+int BookIndex::getBookIdByPath(const std::string& path)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (const auto &book : books)
+    {
+        if (book.path == path) {
+            int id = book.id;
+            xSemaphoreGiveRecursive(mutex);
+            return id;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
+    return 0;
+}
+
 int BookIndex::getNextId()
 {
     // Private helper, assumes mutex held

@@ -37,6 +37,7 @@ public:
     std::vector<BookEntry> getBooks();
     std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);
     BookEntry getBook(int id);
+    int getBookIdByPath(const std::string& path);
     bool scanDirectory(const char* basePath, ProgressCallback callback = nullptr);
     
     // Favorites management
