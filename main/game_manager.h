@@ -120,6 +120,7 @@ private:
     void handleMinesweeperTouch(int x, int y);
     
     void initSudoku();
+    void initSudokuWithDifficulty(int difficulty);
     void updateSudoku();
     void drawSudoku(LovyanGFX* target = nullptr);
     void handleSudokuTouch(int x, int y);
@@ -142,6 +143,8 @@ public:
         bool gameLost = false;
         bool gameStarted = false;
         int revealedCount = 0;
+        bool flagMode = false;  // Toggle between dig and flag mode
+        int flagCount = 0;      // Number of flags placed
     };
     
     // Sudoku state
@@ -153,7 +156,7 @@ public:
         bool gameWon = false;
         int selectedRow = -1;
         int selectedCol = -1;
-        bool showingKeyboard = false;
+        int difficulty = 2;  // 1=Easy, 2=Medium, 3=Hard
     };
     
     // Wordle state  

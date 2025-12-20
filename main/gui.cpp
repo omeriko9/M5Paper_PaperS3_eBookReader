@@ -4289,7 +4289,7 @@ void GUI::refreshLibrary()
     if (backgroundIndexerTaskHandle == nullptr)
     {
         xTaskCreate([](void *arg)
-                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle);
+                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096*2, this, 0, &backgroundIndexerTaskHandle);
     }
 }
 
@@ -5900,7 +5900,9 @@ void GUI::onGamesMenuClick(int x, int y)
 
 void GUI::drawGame()
 {
-    // GameManager draws directly to display
+    // Draw status bar first, then let GameManager draw the game
+    drawStatusBar(nullptr);
+    
     GameManager &gm = GameManager::getInstance();
     gm.draw(nullptr);
 }

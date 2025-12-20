@@ -12,6 +12,7 @@ static const char* TAG = "GameMgr";
 static constexpr int SCREEN_WIDTH = 540;
 static constexpr int SCREEN_HEIGHT = 960;
 static constexpr int STATUS_BAR_HEIGHT = 44;
+static constexpr int HEADER_HEIGHT = 50;
 
 // Grayscale colors for better UI
 static constexpr uint16_t GRAY_LIGHT = 0xDEF7;    // Light gray
@@ -38,100 +39,34 @@ void GameManager::drawButton(LovyanGFX* target, int x, int y, int w, int h, cons
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
     gfx->fillRect(x, y, w, h, bgColor);
     gfx->drawRect(x, y, w, h, TFT_BLACK);
-    gfx->setTextColor(textColor, bgColor);
-    gfx->setTextDatum(textdatum_t::middle_center);
-    gfx->drawString(label, x + w/2, y + h/2);
-    gfx->setTextDatum(textdatum_t::top_left);
+    if (label) {
+        gfx->setTextColor(textColor, bgColor);
+        gfx->setTextDatum(textdatum_t::middle_center);
+        gfx->drawString(label, x + w/2, y + h/2);
+        gfx->setTextDatum(textdatum_t::top_left);
+    }
 }
 
 void GameManager::drawHeader(LovyanGFX* target, const char* title) {
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
-    gfx->fillRect(0, STATUS_BAR_HEIGHT, SCREEN_WIDTH, 60, GRAY_LIGHT);
-    gfx->drawLine(0, STATUS_BAR_HEIGHT + 59, SCREEN_WIDTH, STATUS_BAR_HEIGHT + 59, TFT_BLACK);
+    int headerY = STATUS_BAR_HEIGHT;
+    gfx->fillRect(0, headerY, SCREEN_WIDTH, HEADER_HEIGHT, GRAY_LIGHT);
+    gfx->drawLine(0, headerY + HEADER_HEIGHT - 1, SCREEN_WIDTH, headerY + HEADER_HEIGHT - 1, TFT_BLACK);
     gfx->setTextColor(TFT_BLACK, GRAY_LIGHT);
-    gfx->setTextSize(2.5f);
+    gfx->setTextSize(1.8f);
     gfx->setTextDatum(textdatum_t::middle_center);
-    gfx->drawString(title, SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 30);
+    gfx->drawString(title, SCREEN_WIDTH/2, headerY + HEADER_HEIGHT/2);
     gfx->setTextDatum(textdatum_t::top_left);
 }
 
 void GameManager::drawGamesMenu() {
-    M5.Display.fillScreen(TFT_WHITE);
-    
-    // Header
-    drawHeader(nullptr, "Games");
-    
-    M5.Display.setTextSize(1.8f);
-    
-    // Game buttons - centered vertically
-    int btnWidth = 400;
-    int btnHeight = 100;
-    int btnGap = 30;
-    int startY = STATUS_BAR_HEIGHT + 100;
-    int btnX = (SCREEN_WIDTH - btnWidth) / 2;
-    
-    // Minesweeper
-    drawButton(nullptr, btnX, startY, btnWidth, btnHeight, "Minesweeper", GRAY_LIGHT, TFT_BLACK);
-    M5.Display.setTextSize(1.2f);
-    M5.Display.setTextColor(GRAY_DARK, GRAY_LIGHT);
-    M5.Display.setTextDatum(textdatum_t::middle_center);
-    M5.Display.drawString("Classic mine-sweeping puzzle", btnX + btnWidth/2, startY + btnHeight - 20);
-    
-    // Sudoku
-    startY += btnHeight + btnGap;
-    drawButton(nullptr, btnX, startY, btnWidth, btnHeight, "Sudoku", GRAY_LIGHT, TFT_BLACK);
-    M5.Display.setTextSize(1.2f);
-    M5.Display.setTextColor(GRAY_DARK, GRAY_LIGHT);
-    M5.Display.drawString("6x6 number puzzle", btnX + btnWidth/2, startY + btnHeight - 20);
-    
-    // Wordle
-    startY += btnHeight + btnGap;
-    drawButton(nullptr, btnX, startY, btnWidth, btnHeight, "Wordle", GRAY_LIGHT, TFT_BLACK);
-    M5.Display.setTextSize(1.2f);
-    M5.Display.setTextColor(GRAY_DARK, GRAY_LIGHT);
-    M5.Display.drawString("5-letter word guessing game", btnX + btnWidth/2, startY + btnHeight - 20);
-    
-    M5.Display.setTextDatum(textdatum_t::top_left);
-    
-    // Back button
-    drawButton(nullptr, 20, SCREEN_HEIGHT - 70, 150, 50, "Back", TFT_WHITE, TFT_BLACK);
-    
-    M5.Display.display();
+    // This is now handled by GUI::drawGamesMenu()
+    // This function is kept for backward compatibility but should not be called
 }
 
 bool GameManager::handleMenuTouch(int x, int y) {
-    int btnWidth = 400;
-    int btnHeight = 100;
-    int btnGap = 30;
-    int startY = STATUS_BAR_HEIGHT + 100;
-    int btnX = (SCREEN_WIDTH - btnWidth) / 2;
-    
-    // Minesweeper
-    if (x >= btnX && x <= btnX + btnWidth && y >= startY && y <= startY + btnHeight) {
-        startGame(GameType::MINESWEEPER);
-        return true;
-    }
-    
-    // Sudoku
-    startY += btnHeight + btnGap;
-    if (x >= btnX && x <= btnX + btnWidth && y >= startY && y <= startY + btnHeight) {
-        startGame(GameType::SUDOKU);
-        return true;
-    }
-    
-    // Wordle
-    startY += btnHeight + btnGap;
-    if (x >= btnX && x <= btnX + btnWidth && y >= startY && y <= startY + btnHeight) {
-        startGame(GameType::WORDLE);
-        return true;
-    }
-    
-    // Back button
-    if (x >= 20 && x <= 170 && y >= SCREEN_HEIGHT - 70 && y <= SCREEN_HEIGHT - 20) {
-        m_returnToMenu = true;
-        return true;
-    }
-    
+    // This is now handled by GUI::onGamesMenuClick()
+    // Return false as GUI handles the menu
     return false;
 }
 
@@ -159,7 +94,6 @@ void GameManager::startGame(GameType type) {
 void GameManager::stopGame() {
     m_currentGame = GameType::NONE;
     m_state = GameState::MENU;
-    drawGamesMenu();
 }
 
 void GameManager::update() {
@@ -194,14 +128,13 @@ void GameManager::draw(LovyanGFX* target) {
             drawWordle(gfx);
             break;
         default:
-            drawGamesMenu();
             break;
     }
 }
 
 bool GameManager::handleTouch(int x, int y) {
     if (m_currentGame == GameType::NONE) {
-        return handleMenuTouch(x, y);
+        return false;
     }
     
     switch (m_currentGame) {
@@ -226,6 +159,8 @@ bool GameManager::handleTouch(int x, int y) {
 void GameManager::initMinesweeper() {
     memset(&m_minesweeper, 0, sizeof(m_minesweeper));
     m_minesweeper.gameStarted = false;
+    m_minesweeper.flagMode = false;
+    m_minesweeper.flagCount = 0;
     ESP_LOGI(TAG, "Minesweeper initialized");
 }
 
@@ -313,49 +248,94 @@ void GameManager::drawMinesweeper(LovyanGFX* target) {
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
     gfx->fillScreen(TFT_WHITE);
     
-    // Header with restart button
-    gfx->setTextSize(2.0f);
-    gfx->setTextColor(TFT_BLACK);
+    // Header area below status bar
+    int headerY = STATUS_BAR_HEIGHT;
+    gfx->fillRect(0, headerY, SCREEN_WIDTH, HEADER_HEIGHT, GRAY_LIGHT);
+    gfx->drawLine(0, headerY + HEADER_HEIGHT - 1, SCREEN_WIDTH, headerY + HEADER_HEIGHT - 1, TFT_BLACK);
+    
+    // Back button
+    gfx->setTextSize(1.4f);
+    drawButton(gfx, 10, headerY + 5, 70, 40, "Back", TFT_WHITE, TFT_BLACK);
+    
+    // Title
+    gfx->setTextColor(TFT_BLACK, GRAY_LIGHT);
     gfx->setTextDatum(textdatum_t::middle_center);
-    gfx->drawString("RESTART", SCREEN_WIDTH/2, 25);
-    int textW = gfx->textWidth("RESTART");
-    gfx->drawLine(SCREEN_WIDTH/2 - textW/2, 45, SCREEN_WIDTH/2 + textW/2, 45, TFT_BLACK);
+    gfx->setTextSize(1.5f);
+    gfx->drawString("Minesweeper", SCREEN_WIDTH/2, headerY + HEADER_HEIGHT/2);
+    
+    // Restart button
+    drawButton(gfx, SCREEN_WIDTH - 80, headerY + 5, 70, 40, "New", TFT_WHITE, TFT_BLACK);
+    
+    // Info bar: mines left and flag mode toggle
+    int infoY = headerY + HEADER_HEIGHT + 5;
+    gfx->setTextSize(1.3f);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+    
+    // Mines remaining
+    int minesLeft = m_minesweeper.MINE_COUNT - m_minesweeper.flagCount;
+    char mineStr[32];
+    snprintf(mineStr, sizeof(mineStr), "Mines: %d", minesLeft);
+    gfx->setTextDatum(textdatum_t::middle_left);
+    gfx->drawString(mineStr, 15, infoY + 20);
+    
+    // Flag mode toggle button
+    const char* flagLabel = m_minesweeper.flagMode ? "[FLAG]" : "[DIG]";
+    uint16_t flagBg = m_minesweeper.flagMode ? TFT_YELLOW : GRAY_LIGHT;
+    gfx->setTextSize(1.3f);
+    drawButton(gfx, SCREEN_WIDTH - 100, infoY + 2, 90, 36, flagLabel, flagBg, TFT_BLACK);
     
     // Grid
     const int CELL_SIZE = 54;
     const int GRID_START_X = 0;
     const int GRID_START_Y = SCREEN_HEIGHT - (m_minesweeper.GRID_HEIGHT * CELL_SIZE);
     
+    gfx->setTextDatum(textdatum_t::middle_center);
+    
     for (int i = 0; i < m_minesweeper.GRID_HEIGHT; i++) {
         for (int j = 0; j < m_minesweeper.GRID_WIDTH; j++) {
             int x = GRID_START_X + j * CELL_SIZE;
             int y = GRID_START_Y + i * CELL_SIZE;
             
+            uint16_t cellBg = TFT_WHITE;
+            bool isRevealed = m_minesweeper.cellStates[i][j] == 1;
+            bool isFlagged = m_minesweeper.cellStates[i][j] == 2;
+            bool showMine = isRevealed || (m_minesweeper.gameLost && m_minesweeper.mines[i][j]);
+            
+            if (isRevealed) {
+                if (m_minesweeper.mines[i][j]) {
+                    // Hit a mine - red background
+                    cellBg = 0xF800; // Red
+                } else {
+                    cellBg = GRAY_LIGHT;
+                }
+            } else if (isFlagged) {
+                cellBg = TFT_YELLOW;
+            }
+            
+            gfx->fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2, cellBg);
             gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
             
-            bool showMine = m_minesweeper.cellStates[i][j] == 1 || 
-                           (m_minesweeper.gameLost && m_minesweeper.mines[i][j]);
-            
-            if (showMine) {
-                if (m_minesweeper.mines[i][j]) {
-                    // Mine
-                    if (m_minesweeper.gameLost) {
-                        gfx->fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, TFT_RED);
-                    }
-                    gfx->fillCircle(x + CELL_SIZE/2, y + CELL_SIZE/2, 8, TFT_BLACK);
-                } else {
-                    // Revealed empty
-                    gfx->fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, GRAY_LIGHT);
-                    if (m_minesweeper.neighborCounts[i][j] > 0) {
-                        char num[2] = {(char)('0' + m_minesweeper.neighborCounts[i][j]), 0};
-                        gfx->setTextSize(2.5f);
-                        gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
-                    }
-                }
-            } else if (m_minesweeper.cellStates[i][j] == 2) {
-                // Flagged
-                gfx->fillRect(x+1, y+1, CELL_SIZE-2, CELL_SIZE-2, TFT_YELLOW);
-                gfx->setTextSize(2.0f);
+            if (showMine && m_minesweeper.mines[i][j]) {
+                // Draw mine
+                gfx->fillCircle(x + CELL_SIZE/2, y + CELL_SIZE/2, 10, TFT_BLACK);
+                // Spikes
+                gfx->drawLine(x + CELL_SIZE/2 - 14, y + CELL_SIZE/2, x + CELL_SIZE/2 + 14, y + CELL_SIZE/2, TFT_BLACK);
+                gfx->drawLine(x + CELL_SIZE/2, y + CELL_SIZE/2 - 14, x + CELL_SIZE/2, y + CELL_SIZE/2 + 14, TFT_BLACK);
+            } else if (isRevealed && m_minesweeper.neighborCounts[i][j] > 0) {
+                // Draw number
+                char num[2] = {(char)('0' + m_minesweeper.neighborCounts[i][j]), 0};
+                gfx->setTextSize(1.8f);
+                // Color code numbers
+                uint16_t numColor = TFT_BLUE;
+                if (m_minesweeper.neighborCounts[i][j] == 2) numColor = TFT_DARKGREEN;
+                else if (m_minesweeper.neighborCounts[i][j] == 3) numColor = TFT_RED;
+                else if (m_minesweeper.neighborCounts[i][j] >= 4) numColor = TFT_MAROON;
+                gfx->setTextColor(numColor, cellBg);
+                gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
+            } else if (isFlagged) {
+                // Draw flag
+                gfx->setTextSize(1.6f);
+                gfx->setTextColor(TFT_RED, TFT_YELLOW);
                 gfx->drawString("F", x + CELL_SIZE/2, y + CELL_SIZE/2);
             }
         }
@@ -363,15 +343,15 @@ void GameManager::drawMinesweeper(LovyanGFX* target) {
     
     // Game over message
     if (m_minesweeper.gameWon || m_minesweeper.gameLost) {
+        int msgY = (infoY + 50 + GRID_START_Y) / 2;
         const char* msg = m_minesweeper.gameWon ? "YOU WIN!" : "GAME OVER";
-        gfx->setTextSize(3.0f);
-        gfx->fillRect(SCREEN_WIDTH/2 - 120, GRID_START_Y/2 - 30, 240, 60, TFT_WHITE);
-        gfx->drawRect(SCREEN_WIDTH/2 - 120, GRID_START_Y/2 - 30, 240, 60, TFT_BLACK);
-        gfx->drawString(msg, SCREEN_WIDTH/2, GRID_START_Y/2);
+        gfx->setTextSize(2.2f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+        gfx->fillRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_BLACK);
+        gfx->drawRect(SCREEN_WIDTH/2 - 99, msgY - 24, 198, 48, TFT_BLACK);
+        gfx->drawString(msg, SCREEN_WIDTH/2, msgY);
     }
-    
-    // Back button
-    drawButton(gfx, 20, 60, 100, 40, "Back", TFT_WHITE, TFT_BLACK);
     
     gfx->setTextDatum(textdatum_t::top_left);
     if (!target) M5.Display.display();
@@ -381,36 +361,67 @@ void GameManager::handleMinesweeperTouch(int x, int y) {
     const int CELL_SIZE = 54;
     const int GRID_START_X = 0;
     const int GRID_START_Y = SCREEN_HEIGHT - (m_minesweeper.GRID_HEIGHT * CELL_SIZE);
+    int headerY = STATUS_BAR_HEIGHT;
+    int infoY = headerY + HEADER_HEIGHT + 5;
     
     // Back button
-    if (x >= 20 && x <= 120 && y >= 60 && y <= 100) {
+    if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
         stopGame();
+        m_returnToMenu = true;
         return;
     }
     
-    // Restart button (header area)
-    if (y < 60 && x > SCREEN_WIDTH/2 - 80 && x < SCREEN_WIDTH/2 + 80) {
+    // Restart button
+    if (x >= SCREEN_WIDTH - 80 && x <= SCREEN_WIDTH - 10 && y >= headerY + 5 && y <= headerY + 45) {
         initMinesweeper();
         draw();
         return;
     }
     
+    // Flag mode toggle
+    if (x >= SCREEN_WIDTH - 100 && x <= SCREEN_WIDTH - 10 && y >= infoY + 2 && y <= infoY + 38) {
+        m_minesweeper.flagMode = !m_minesweeper.flagMode;
+        draw();
+        return;
+    }
+    
     // Grid clicks
-    if (y >= GRID_START_Y) {
+    if (y >= GRID_START_Y && y < SCREEN_HEIGHT) {
         int col = (x - GRID_START_X) / CELL_SIZE;
         int row = (y - GRID_START_Y) / CELL_SIZE;
         
         if (row >= 0 && row < m_minesweeper.GRID_HEIGHT && 
             col >= 0 && col < m_minesweeper.GRID_WIDTH) {
             
+            if (m_minesweeper.gameLost || m_minesweeper.gameWon) {
+                // Tap to restart after game over
+                initMinesweeper();
+                draw();
+                return;
+            }
+            
             if (!m_minesweeper.gameStarted) {
+                // First click - generate mines avoiding this cell
                 generateMines(m_minesweeper, row, col);
             }
             
-            if (!m_minesweeper.gameLost && !m_minesweeper.gameWon) {
-                revealCell(m_minesweeper, row, col);
-                draw();
+            if (m_minesweeper.flagMode) {
+                // Toggle flag
+                if (m_minesweeper.cellStates[row][col] == 0) {
+                    m_minesweeper.cellStates[row][col] = 2; // Flag
+                    m_minesweeper.flagCount++;
+                } else if (m_minesweeper.cellStates[row][col] == 2) {
+                    m_minesweeper.cellStates[row][col] = 0; // Unflag
+                    m_minesweeper.flagCount--;
+                }
+                // Don't reveal flagged cells
+            } else {
+                // Dig mode
+                if (m_minesweeper.cellStates[row][col] == 0) {
+                    revealCell(m_minesweeper, row, col);
+                }
             }
+            draw();
         }
     }
 }
@@ -419,69 +430,236 @@ void GameManager::handleMinesweeperTouch(int x, int y) {
 // Sudoku Implementation
 // ============================================================================
 
+// Predefined puzzles for different difficulties
+// Format: {puzzle, solution}
+static const int SUDOKU_EASY_PUZZLES[][2][6][6] = {
+    // Easy puzzle 1 - many given numbers
+    {
+        {
+            {1, 2, 0, 4, 5, 0},
+            {4, 5, 6, 1, 0, 3},
+            {2, 0, 1, 6, 4, 5},
+            {5, 6, 4, 0, 1, 2},
+            {0, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 0}
+        },
+        {
+            {1, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 3},
+            {2, 3, 1, 6, 4, 5},
+            {5, 6, 4, 3, 1, 2},
+            {3, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 1}
+        }
+    },
+    // Easy puzzle 2
+    {
+        {
+            {0, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 0},
+            {2, 3, 0, 6, 4, 5},
+            {5, 6, 4, 3, 0, 2},
+            {3, 1, 2, 0, 6, 4},
+            {6, 0, 5, 2, 3, 1}
+        },
+        {
+            {1, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 3},
+            {2, 3, 1, 6, 4, 5},
+            {5, 6, 4, 3, 1, 2},
+            {3, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 1}
+        }
+    }
+};
+
+static const int SUDOKU_MEDIUM_PUZZLES[][2][6][6] = {
+    // Medium puzzle 1
+    {
+        {
+            {1, 0, 3, 0, 5, 6},
+            {4, 5, 0, 1, 0, 3},
+            {0, 3, 1, 6, 4, 0},
+            {0, 6, 4, 0, 1, 2},
+            {3, 0, 2, 5, 6, 0},
+            {6, 4, 0, 2, 0, 1}
+        },
+        {
+            {1, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 3},
+            {2, 3, 1, 6, 4, 5},
+            {5, 6, 4, 3, 1, 2},
+            {3, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 1}
+        }
+    },
+    // Medium puzzle 2
+    {
+        {
+            {0, 2, 0, 4, 0, 6},
+            {4, 0, 6, 0, 2, 0},
+            {0, 3, 0, 6, 0, 5},
+            {5, 0, 4, 0, 1, 0},
+            {0, 1, 0, 5, 0, 4},
+            {6, 0, 5, 0, 3, 0}
+        },
+        {
+            {1, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 3},
+            {2, 3, 1, 6, 4, 5},
+            {5, 6, 4, 3, 1, 2},
+            {3, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 1}
+        }
+    }
+};
+
+static const int SUDOKU_HARD_PUZZLES[][2][6][6] = {
+    // Hard puzzle 1 - fewer given numbers
+    {
+        {
+            {0, 0, 3, 0, 5, 0},
+            {4, 0, 0, 1, 0, 0},
+            {0, 3, 0, 0, 4, 0},
+            {0, 6, 0, 0, 1, 0},
+            {0, 0, 2, 0, 0, 4},
+            {0, 4, 0, 2, 0, 0}
+        },
+        {
+            {1, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 3},
+            {2, 3, 1, 6, 4, 5},
+            {5, 6, 4, 3, 1, 2},
+            {3, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 1}
+        }
+    },
+    // Hard puzzle 2
+    {
+        {
+            {1, 0, 0, 0, 0, 6},
+            {0, 5, 0, 0, 2, 0},
+            {0, 0, 1, 6, 0, 0},
+            {0, 0, 4, 3, 0, 0},
+            {0, 1, 0, 0, 6, 0},
+            {6, 0, 0, 0, 0, 1}
+        },
+        {
+            {1, 2, 3, 4, 5, 6},
+            {4, 5, 6, 1, 2, 3},
+            {2, 3, 1, 6, 4, 5},
+            {5, 6, 4, 3, 1, 2},
+            {3, 1, 2, 5, 6, 4},
+            {6, 4, 5, 2, 3, 1}
+        }
+    }
+};
+
 void GameManager::initSudoku() {
+    // If difficulty not set, default to medium
+    if (m_sudoku.difficulty == 0) {
+        m_sudoku.difficulty = 2; // Medium
+    }
+    initSudokuWithDifficulty(m_sudoku.difficulty);
+}
+
+void GameManager::initSudokuWithDifficulty(int difficulty) {
     memset(&m_sudoku, 0, sizeof(m_sudoku));
+    m_sudoku.difficulty = difficulty;
+    m_sudoku.selectedRow = -1;
+    m_sudoku.selectedCol = -1;
     
-    // Simple predefined puzzle
-    int puzzle[6][6] = {
-        {1, 0, 3, 0, 5, 6},
-        {4, 5, 0, 1, 0, 3},
-        {0, 3, 1, 6, 4, 0},
-        {0, 6, 4, 0, 1, 2},
-        {3, 0, 2, 5, 6, 0},
-        {6, 4, 0, 2, 0, 1}
-    };
+    const int (*puzzles)[2][6][6] = nullptr;
+    int puzzleCount = 0;
     
-    int solution[6][6] = {
-        {1, 2, 3, 4, 5, 6},
-        {4, 5, 6, 1, 2, 3},
-        {2, 3, 1, 6, 4, 5},
-        {5, 6, 4, 3, 1, 2},
-        {3, 1, 2, 5, 6, 4},
-        {6, 4, 5, 2, 3, 1}
-    };
+    switch (difficulty) {
+        case 1: // Easy
+            puzzles = SUDOKU_EASY_PUZZLES;
+            puzzleCount = sizeof(SUDOKU_EASY_PUZZLES) / sizeof(SUDOKU_EASY_PUZZLES[0]);
+            break;
+        case 2: // Medium
+            puzzles = SUDOKU_MEDIUM_PUZZLES;
+            puzzleCount = sizeof(SUDOKU_MEDIUM_PUZZLES) / sizeof(SUDOKU_MEDIUM_PUZZLES[0]);
+            break;
+        case 3: // Hard
+            puzzles = SUDOKU_HARD_PUZZLES;
+            puzzleCount = sizeof(SUDOKU_HARD_PUZZLES) / sizeof(SUDOKU_HARD_PUZZLES[0]);
+            break;
+        default:
+            puzzles = SUDOKU_MEDIUM_PUZZLES;
+            puzzleCount = sizeof(SUDOKU_MEDIUM_PUZZLES) / sizeof(SUDOKU_MEDIUM_PUZZLES[0]);
+            break;
+    }
+    
+    // Pick a random puzzle
+    int idx = esp_random() % puzzleCount;
     
     for (int i = 0; i < 6; i++) {
         for (int j = 0; j < 6; j++) {
-            m_sudoku.board[i][j] = puzzle[i][j];
-            m_sudoku.solution[i][j] = solution[i][j];
-            m_sudoku.readonly[i][j] = (puzzle[i][j] != 0);
+            m_sudoku.board[i][j] = puzzles[idx][0][i][j];
+            m_sudoku.solution[i][j] = puzzles[idx][1][i][j];
+            m_sudoku.readonly[i][j] = (puzzles[idx][0][i][j] != 0);
         }
     }
     
-    ESP_LOGI(TAG, "Sudoku initialized");
+    ESP_LOGI(TAG, "Sudoku initialized with difficulty %d", difficulty);
 }
 
 void GameManager::updateSudoku() {
     // Check win condition
     bool complete = true;
+    bool hasErrors = false;
     for (int i = 0; i < 6 && complete; i++) {
         for (int j = 0; j < 6 && complete; j++) {
-            if (m_sudoku.board[i][j] != m_sudoku.solution[i][j]) {
+            if (m_sudoku.board[i][j] == 0) {
                 complete = false;
+            } else if (m_sudoku.board[i][j] != m_sudoku.solution[i][j]) {
+                hasErrors = true;
             }
         }
     }
-    m_sudoku.gameWon = complete;
+    m_sudoku.gameWon = complete && !hasErrors;
 }
 
 void GameManager::drawSudoku(LovyanGFX* target) {
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
     gfx->fillScreen(TFT_WHITE);
-    drawHeader(gfx, "Sudoku");
     
-    const int CELL_SIZE = 80;
-    const int BLOCK_SPACING = 10;
-    const int GRID_WIDTH = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_HEIGHT = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH) / 2;
-    const int GRID_Y = STATUS_BAR_HEIGHT + 80;
+    // Header area below status bar
+    int headerY = STATUS_BAR_HEIGHT;
+    gfx->fillRect(0, headerY, SCREEN_WIDTH, HEADER_HEIGHT, GRAY_LIGHT);
+    gfx->drawLine(0, headerY + HEADER_HEIGHT - 1, SCREEN_WIDTH, headerY + HEADER_HEIGHT - 1, TFT_BLACK);
     
-    gfx->setTextSize(3.0f);
+    // Back button
+    gfx->setTextSize(1.4f);
+    drawButton(gfx, 10, headerY + 5, 70, 40, "Back", TFT_WHITE, TFT_BLACK);
+    
+    // Title with difficulty
+    const char* diffNames[] = {"", "Easy", "Medium", "Hard"};
+    char title[32];
+    snprintf(title, sizeof(title), "Sudoku - %s", diffNames[m_sudoku.difficulty]);
+    gfx->setTextColor(TFT_BLACK, GRAY_LIGHT);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->setTextSize(1.4f);
+    gfx->drawString(title, SCREEN_WIDTH/2, headerY + HEADER_HEIGHT/2);
+    
+    // New button
+    drawButton(gfx, SCREEN_WIDTH - 80, headerY + 5, 70, 40, "New", TFT_WHITE, TFT_BLACK);
+    
+    // Grid dimensions
+    const int CELL_SIZE = 70;
+    const int BLOCK_SPACING = 6;
+    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
+    const int GRID_HEIGHT_PX = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
+    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
+    
+    gfx->setTextSize(2.2f);
     gfx->setTextDatum(textdatum_t::middle_center);
     
     for (int i = 0; i < 6; i++) {
         for (int j = 0; j < 6; j++) {
+            // Calculate block spacing offsets
             int xOffset = (j >= 3) ? BLOCK_SPACING : 0;
             int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
             
@@ -491,9 +669,18 @@ void GameManager::drawSudoku(LovyanGFX* target) {
             // Cell background
             uint16_t bgColor = TFT_WHITE;
             if (m_sudoku.selectedRow == i && m_sudoku.selectedCol == j) {
-                bgColor = TFT_YELLOW;
+                bgColor = 0x07FF; // Cyan for selected
             } else if (m_sudoku.readonly[i][j]) {
                 bgColor = GRAY_LIGHT;
+            }
+            
+            // Check for errors (non-readonly cells that don't match solution)
+            bool isError = !m_sudoku.readonly[i][j] && 
+                           m_sudoku.board[i][j] != 0 && 
+                           m_sudoku.board[i][j] != m_sudoku.solution[i][j];
+            
+            if (isError) {
+                bgColor = 0xFD20; // Light red/orange for errors
             }
             
             gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
@@ -501,20 +688,36 @@ void GameManager::drawSudoku(LovyanGFX* target) {
             
             // Number
             if (m_sudoku.board[i][j] != 0) {
-                gfx->setTextColor(m_sudoku.readonly[i][j] ? TFT_BLACK : TFT_BLUE, bgColor);
+                uint16_t textColor = m_sudoku.readonly[i][j] ? TFT_BLACK : TFT_BLUE;
+                if (isError) textColor = TFT_RED;
+                gfx->setTextColor(textColor, bgColor);
                 char num[2] = {(char)('0' + m_sudoku.board[i][j]), 0};
                 gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
             }
         }
     }
     
+    // Draw 2x3 block dividers (thicker lines)
+    for (int i = 0; i <= 6; i += 3) {
+        int xOffset = (i >= 3) ? BLOCK_SPACING : 0;
+        int x = GRID_X + i * CELL_SIZE + xOffset;
+        if (i == 3) x -= BLOCK_SPACING/2;
+        gfx->fillRect(x - 2, GRID_Y, 4, GRID_HEIGHT_PX, TFT_BLACK);
+    }
+    for (int i = 0; i <= 6; i += 2) {
+        int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
+        int y = GRID_Y + i * CELL_SIZE + yOffset;
+        if (i == 2 || i == 4) y -= BLOCK_SPACING/2;
+        gfx->fillRect(GRID_X, y - 2, GRID_WIDTH_PX, 4, TFT_BLACK);
+    }
+    
     // Number input buttons (1-6)
-    int btnY = GRID_Y + GRID_HEIGHT + 30;
-    int btnSize = 70;
+    int btnY = GRID_Y + GRID_HEIGHT_PX + 25;
+    int btnSize = 65;
     int btnGap = 10;
     int startX = (SCREEN_WIDTH - (6 * btnSize + 5 * btnGap)) / 2;
     
-    gfx->setTextSize(2.5f);
+    gfx->setTextSize(2.0f);
     for (int i = 1; i <= 6; i++) {
         int x = startX + (i-1) * (btnSize + btnGap);
         drawButton(gfx, x, btnY, btnSize, btnSize, nullptr, GRAY_LIGHT, TFT_BLACK);
@@ -523,17 +726,37 @@ void GameManager::drawSudoku(LovyanGFX* target) {
         gfx->drawString(num, x + btnSize/2, btnY + btnSize/2);
     }
     
-    // Clear button
-    drawButton(gfx, startX, btnY + btnSize + 20, 150, 50, "Clear", TFT_WHITE, TFT_BLACK);
+    // Clear and Hint buttons row
+    int actionY = btnY + btnSize + 15;
+    drawButton(gfx, startX, actionY, 100, 45, "Clear", TFT_WHITE, TFT_BLACK);
     
-    // Back button
-    drawButton(gfx, 20, SCREEN_HEIGHT - 70, 100, 50, "Back", TFT_WHITE, TFT_BLACK);
+    // Difficulty buttons
+    int diffY = actionY + 55;
+    gfx->setTextSize(1.3f);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->drawString("Difficulty:", SCREEN_WIDTH/2, diffY);
+    
+    diffY += 25;
+    int diffBtnW = 80;
+    int diffStartX = (SCREEN_WIDTH - (3 * diffBtnW + 2 * 10)) / 2;
+    
+    for (int d = 1; d <= 3; d++) {
+        int x = diffStartX + (d-1) * (diffBtnW + 10);
+        uint16_t bg = (m_sudoku.difficulty == d) ? TFT_DARKGREY : GRAY_LIGHT;
+        uint16_t fg = (m_sudoku.difficulty == d) ? TFT_WHITE : TFT_BLACK;
+        drawButton(gfx, x, diffY, diffBtnW, 40, diffNames[d], bg, fg);
+    }
     
     // Win message
     if (m_sudoku.gameWon) {
-        gfx->setTextSize(3.0f);
+        int msgY = GRID_Y + GRID_HEIGHT_PX / 2;
+        gfx->setTextSize(2.0f);
         gfx->setTextColor(TFT_BLACK, TFT_WHITE);
-        gfx->drawString("COMPLETE!", SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
+        gfx->fillRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_BLACK);
+        gfx->drawRect(SCREEN_WIDTH/2 - 99, msgY - 24, 198, 48, TFT_BLACK);
+        gfx->drawString("COMPLETE!", SCREEN_WIDTH/2, msgY);
     }
     
     gfx->setTextDatum(textdatum_t::top_left);
@@ -541,59 +764,31 @@ void GameManager::drawSudoku(LovyanGFX* target) {
 }
 
 void GameManager::handleSudokuTouch(int x, int y) {
-    const int CELL_SIZE = 80;
-    const int BLOCK_SPACING = 10;
-    const int GRID_WIDTH = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_HEIGHT = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH) / 2;
-    const int GRID_Y = STATUS_BAR_HEIGHT + 80;
+    const int CELL_SIZE = 70;
+    const int BLOCK_SPACING = 6;
+    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
+    const int GRID_HEIGHT_PX = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
+    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
+    int headerY = STATUS_BAR_HEIGHT;
     
     // Back button
-    if (x >= 20 && x <= 120 && y >= SCREEN_HEIGHT - 70 && y <= SCREEN_HEIGHT - 20) {
+    if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
         stopGame();
+        m_returnToMenu = true;
         return;
     }
     
-    // Grid clicks
-    if (x >= GRID_X && x < GRID_X + GRID_WIDTH && 
-        y >= GRID_Y && y < GRID_Y + GRID_HEIGHT) {
-        
-        // Find which cell was clicked (accounting for block spacing)
-        int relX = x - GRID_X;
-        int relY = y - GRID_Y;
-        
-        int col = -1, row = -1;
-        
-        // Calculate column
-        if (relX < 3 * CELL_SIZE) {
-            col = relX / CELL_SIZE;
-        } else {
-            col = (relX - BLOCK_SPACING) / CELL_SIZE;
-            if (col >= 6) col = 5;
-        }
-        
-        // Calculate row
-        if (relY < 2 * CELL_SIZE) {
-            row = relY / CELL_SIZE;
-        } else if (relY < 4 * CELL_SIZE + BLOCK_SPACING) {
-            row = (relY - BLOCK_SPACING) / CELL_SIZE;
-        } else {
-            row = (relY - 2 * BLOCK_SPACING) / CELL_SIZE;
-        }
-        
-        if (row >= 0 && row < 6 && col >= 0 && col < 6) {
-            if (!m_sudoku.readonly[row][col]) {
-                m_sudoku.selectedRow = row;
-                m_sudoku.selectedCol = col;
-                draw();
-            }
-        }
+    // New button
+    if (x >= SCREEN_WIDTH - 80 && x <= SCREEN_WIDTH - 10 && y >= headerY + 5 && y <= headerY + 45) {
+        initSudokuWithDifficulty(m_sudoku.difficulty);
+        draw();
         return;
     }
     
     // Number buttons
-    int btnY = GRID_Y + GRID_HEIGHT + 30;
-    int btnSize = 70;
+    int btnY = GRID_Y + GRID_HEIGHT_PX + 25;
+    int btnSize = 65;
     int btnGap = 10;
     int startX = (SCREEN_WIDTH - (6 * btnSize + 5 * btnGap)) / 2;
     
@@ -601,8 +796,10 @@ void GameManager::handleSudokuTouch(int x, int y) {
         for (int i = 1; i <= 6; i++) {
             int bx = startX + (i-1) * (btnSize + btnGap);
             if (x >= bx && x <= bx + btnSize) {
-                m_sudoku.board[m_sudoku.selectedRow][m_sudoku.selectedCol] = i;
-                updateSudoku();
+                if (!m_sudoku.readonly[m_sudoku.selectedRow][m_sudoku.selectedCol]) {
+                    m_sudoku.board[m_sudoku.selectedRow][m_sudoku.selectedCol] = i;
+                    updateSudoku();
+                }
                 draw();
                 return;
             }
@@ -610,10 +807,65 @@ void GameManager::handleSudokuTouch(int x, int y) {
     }
     
     // Clear button
-    if (y >= btnY + btnSize + 20 && y <= btnY + btnSize + 70 && 
-        x >= startX && x <= startX + 150 && m_sudoku.selectedRow >= 0) {
-        m_sudoku.board[m_sudoku.selectedRow][m_sudoku.selectedCol] = 0;
+    int actionY = btnY + btnSize + 15;
+    if (y >= actionY && y <= actionY + 45 && x >= startX && x <= startX + 100) {
+        if (m_sudoku.selectedRow >= 0 && !m_sudoku.readonly[m_sudoku.selectedRow][m_sudoku.selectedCol]) {
+            m_sudoku.board[m_sudoku.selectedRow][m_sudoku.selectedCol] = 0;
+            draw();
+        }
+        return;
+    }
+    
+    // Difficulty buttons
+    int diffY = actionY + 55 + 25;
+    int diffBtnW = 80;
+    int diffStartX = (SCREEN_WIDTH - (3 * diffBtnW + 2 * 10)) / 2;
+    
+    if (y >= diffY && y <= diffY + 40) {
+        for (int d = 1; d <= 3; d++) {
+            int dx = diffStartX + (d-1) * (diffBtnW + 10);
+            if (x >= dx && x <= dx + diffBtnW) {
+                initSudokuWithDifficulty(d);
+                draw();
+                return;
+            }
+        }
+    }
+    
+    // Grid clicks - find which cell was clicked
+    if (x >= GRID_X && x < GRID_X + GRID_WIDTH_PX && 
+        y >= GRID_Y && y < GRID_Y + GRID_HEIGHT_PX) {
+        
+        int relX = x - GRID_X;
+        int relY = y - GRID_Y;
+        
+        // Calculate column considering block spacing
+        int col;
+        if (relX < 3 * CELL_SIZE) {
+            col = relX / CELL_SIZE;
+        } else {
+            col = (relX - BLOCK_SPACING) / CELL_SIZE;
+        }
+        if (col >= 6) col = 5;
+        if (col < 0) col = 0;
+        
+        // Calculate row considering block spacing
+        int row;
+        if (relY < 2 * CELL_SIZE) {
+            row = relY / CELL_SIZE;
+        } else if (relY < 4 * CELL_SIZE + BLOCK_SPACING) {
+            row = (relY - BLOCK_SPACING) / CELL_SIZE;
+        } else {
+            row = (relY - 2 * BLOCK_SPACING) / CELL_SIZE;
+        }
+        if (row >= 6) row = 5;
+        if (row < 0) row = 0;
+        
+        // Select the cell (even readonly ones, just can't modify them)
+        m_sudoku.selectedRow = row;
+        m_sudoku.selectedCol = col;
         draw();
+        return;
     }
 }
 
@@ -626,7 +878,8 @@ static const char* WORDLE_WORDS[] = {
     "PAPER", "BRAIN", "CRANE", "FLAME", "GRAPE", "HOUSE", "JUICE", "KNIFE",
     "LEMON", "MANGO", "NIGHT", "OCEAN", "PIANO", "QUEEN", "RIVER", "STONE",
     "TIGER", "UNION", "VIDEO", "WATER", "XENON", "YACHT", "ZEBRA", "APPLE",
-    "BEACH", "CHAIR", "DREAM", "EARTH", "FLOOR", "GHOST", "HEART", "IMAGE"
+    "BEACH", "CHAIR", "DREAM", "EARTH", "FLOOR", "GHOST", "HEART", "IMAGE",
+    "AUDIO", "BLOOM", "BRAVE", "CANDY", "DANCE", "EAGLE", "FAIRY", "GIANT"
 };
 static const int WORDLE_WORD_COUNT = sizeof(WORDLE_WORDS) / sizeof(WORDLE_WORDS[0]);
 
@@ -648,15 +901,33 @@ void GameManager::updateWordle() {
 void GameManager::drawWordle(LovyanGFX* target) {
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
     gfx->fillScreen(TFT_WHITE);
-    drawHeader(gfx, "Wordle");
     
-    const int CELL_SIZE = 80;
-    const int GAP = 8;
+    // Header area below status bar
+    int headerY = STATUS_BAR_HEIGHT;
+    gfx->fillRect(0, headerY, SCREEN_WIDTH, HEADER_HEIGHT, GRAY_LIGHT);
+    gfx->drawLine(0, headerY + HEADER_HEIGHT - 1, SCREEN_WIDTH, headerY + HEADER_HEIGHT - 1, TFT_BLACK);
+    
+    // Back button
+    gfx->setTextSize(1.4f);
+    drawButton(gfx, 10, headerY + 5, 70, 40, "Back", TFT_WHITE, TFT_BLACK);
+    
+    // Title
+    gfx->setTextColor(TFT_BLACK, GRAY_LIGHT);
+    gfx->setTextDatum(textdatum_t::middle_center);
+    gfx->setTextSize(1.5f);
+    gfx->drawString("Wordle", SCREEN_WIDTH/2, headerY + HEADER_HEIGHT/2);
+    
+    // New button
+    drawButton(gfx, SCREEN_WIDTH - 80, headerY + 5, 70, 40, "New", TFT_WHITE, TFT_BLACK);
+    
+    // Guess grid
+    const int CELL_SIZE = 60;
+    const int GAP = 6;
     const int GRID_WIDTH = 5 * CELL_SIZE + 4 * GAP;
     const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH) / 2;
-    const int GRID_Y = STATUS_BAR_HEIGHT + 80;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 15;
     
-    gfx->setTextSize(3.0f);
+    gfx->setTextSize(2.2f);
     gfx->setTextDatum(textdatum_t::middle_center);
     
     // Draw guesses grid
@@ -671,6 +942,11 @@ void GameManager::drawWordle(LovyanGFX* target) {
             else if (state == 'y') bgColor = TFT_YELLOW;
             else if (state == 'x') bgColor = GRAY_MEDIUM;
             
+            // Highlight current row
+            if (row == m_wordle.currentRow && state == 0) {
+                gfx->drawRect(x - 1, y - 1, CELL_SIZE + 2, CELL_SIZE + 2, TFT_BLUE);
+            }
+            
             gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
             gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
             
@@ -684,12 +960,12 @@ void GameManager::drawWordle(LovyanGFX* target) {
     
     // Draw keyboard
     const char* rows[] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
-    int keyW = 48;
-    int keyH = 55;
+    int keyW = 46;
+    int keyH = 50;
     int keyGap = 4;
-    int keyY = GRID_Y + 6 * (CELL_SIZE + GAP) + 20;
+    int keyY = GRID_Y + 6 * (CELL_SIZE + GAP) + 15;
     
-    gfx->setTextSize(1.8f);
+    gfx->setTextSize(1.5f);
     
     for (int r = 0; r < 3; r++) {
         int rowLen = strlen(rows[r]);
@@ -711,7 +987,8 @@ void GameManager::drawWordle(LovyanGFX* target) {
             gfx->fillRect(x, y, keyW, keyH, bgColor);
             gfx->drawRect(x, y, keyW, keyH, TFT_BLACK);
             
-            gfx->setTextColor(TFT_BLACK, bgColor);
+            uint16_t textColor = (letterState == 'x') ? TFT_WHITE : TFT_BLACK;
+            gfx->setTextColor(textColor, bgColor);
             char str[2] = {letter, 0};
             gfx->drawString(str, x + keyW/2, y + keyH/2);
         }
@@ -719,23 +996,27 @@ void GameManager::drawWordle(LovyanGFX* target) {
     
     // Special keys: Enter and Backspace
     int specialY = keyY + 3 * (keyH + keyGap);
-    drawButton(gfx, SCREEN_WIDTH/2 - 160, specialY, 120, 50, "ENTER", GRAY_LIGHT, TFT_BLACK);
-    drawButton(gfx, SCREEN_WIDTH/2 + 40, specialY, 120, 50, "DEL", GRAY_LIGHT, TFT_BLACK);
-    
-    // Back button
-    drawButton(gfx, 20, SCREEN_HEIGHT - 60, 100, 45, "Back", TFT_WHITE, TFT_BLACK);
+    gfx->setTextSize(1.3f);
+    drawButton(gfx, SCREEN_WIDTH/2 - 140, specialY, 100, 45, "ENTER", GRAY_LIGHT, TFT_BLACK);
+    drawButton(gfx, SCREEN_WIDTH/2 + 40, specialY, 100, 45, "DEL", GRAY_LIGHT, TFT_BLACK);
     
     // Win/Lose message
     if (m_wordle.gameWon) {
-        gfx->setTextSize(2.5f);
-        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
-        gfx->drawString("YOU WIN!", SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
-    } else if (m_wordle.gameLost) {
+        int msgY = GRID_Y + 3 * (CELL_SIZE + GAP);
         gfx->setTextSize(2.0f);
+        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+        gfx->fillRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_BLACK);
+        gfx->drawString("YOU WIN!", SCREEN_WIDTH/2, msgY);
+    } else if (m_wordle.gameLost) {
+        int msgY = GRID_Y + 3 * (CELL_SIZE + GAP);
+        gfx->setTextSize(1.6f);
         gfx->setTextColor(TFT_BLACK, TFT_WHITE);
         char msg[32];
         snprintf(msg, sizeof(msg), "Answer: %s", m_wordle.answer);
-        gfx->drawString(msg, SCREEN_WIDTH/2, STATUS_BAR_HEIGHT + 50);
+        gfx->fillRect(SCREEN_WIDTH/2 - 110, msgY - 25, 220, 50, TFT_WHITE);
+        gfx->drawRect(SCREEN_WIDTH/2 - 110, msgY - 25, 220, 50, TFT_BLACK);
+        gfx->drawString(msg, SCREEN_WIDTH/2, msgY);
     }
     
     gfx->setTextDatum(textdatum_t::top_left);
@@ -743,18 +1024,27 @@ void GameManager::drawWordle(LovyanGFX* target) {
 }
 
 void GameManager::handleWordleTouch(int x, int y) {
-    const int CELL_SIZE = 80;
-    const int GAP = 8;
-    const int GRID_Y = STATUS_BAR_HEIGHT + 80;
+    const int CELL_SIZE = 60;
+    const int GAP = 6;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 15;
+    int headerY = STATUS_BAR_HEIGHT;
     
     // Back button
-    if (x >= 20 && x <= 120 && y >= SCREEN_HEIGHT - 60 && y <= SCREEN_HEIGHT - 15) {
+    if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
         stopGame();
+        m_returnToMenu = true;
+        return;
+    }
+    
+    // New button
+    if (x >= SCREEN_WIDTH - 80 && x <= SCREEN_WIDTH - 10 && y >= headerY + 5 && y <= headerY + 45) {
+        initWordle();
+        draw();
         return;
     }
     
     if (m_wordle.gameWon || m_wordle.gameLost) {
-        // Tap to restart
+        // Tap anywhere to restart
         initWordle();
         draw();
         return;
@@ -762,10 +1052,10 @@ void GameManager::handleWordleTouch(int x, int y) {
     
     // Keyboard handling
     const char* rows[] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
-    int keyW = 48;
-    int keyH = 55;
+    int keyW = 46;
+    int keyH = 50;
     int keyGap = 4;
-    int keyY = GRID_Y + 6 * (CELL_SIZE + GAP) + 20;
+    int keyY = GRID_Y + 6 * (CELL_SIZE + GAP) + 15;
     
     for (int r = 0; r < 3; r++) {
         int rowLen = strlen(rows[r]);
@@ -792,8 +1082,8 @@ void GameManager::handleWordleTouch(int x, int y) {
     int specialY = keyY + 3 * (keyH + keyGap);
     
     // Enter button
-    if (x >= SCREEN_WIDTH/2 - 160 && x <= SCREEN_WIDTH/2 - 40 && 
-        y >= specialY && y <= specialY + 50) {
+    if (x >= SCREEN_WIDTH/2 - 140 && x <= SCREEN_WIDTH/2 - 40 && 
+        y >= specialY && y <= specialY + 45) {
         if (m_wordle.currentCol == 5) {
             // Check the guess
             char guess[6];
@@ -802,29 +1092,39 @@ void GameManager::handleWordleTouch(int x, int y) {
             }
             guess[5] = '\0';
             
+            // First pass: mark correct positions
             bool correct = true;
+            char answerCopy[6];
+            strncpy(answerCopy, m_wordle.answer, 6);
+            
             for (int i = 0; i < 5; i++) {
                 char c = guess[i];
                 if (c == m_wordle.answer[i]) {
                     m_wordle.states[m_wordle.currentRow][i] = 'g';
                     m_wordle.usedLetters[c - 'A'] = 'g';
+                    answerCopy[i] = '*'; // Mark as used
                 } else {
                     correct = false;
-                    // Check if letter is elsewhere in answer
-                    bool found = false;
+                    m_wordle.states[m_wordle.currentRow][i] = 'x'; // Default to gray
+                }
+            }
+            
+            // Second pass: mark yellow (wrong position but in word)
+            for (int i = 0; i < 5; i++) {
+                if (m_wordle.states[m_wordle.currentRow][i] != 'g') {
+                    char c = guess[i];
                     for (int j = 0; j < 5; j++) {
-                        if (m_wordle.answer[j] == c) {
-                            found = true;
+                        if (answerCopy[j] == c) {
+                            m_wordle.states[m_wordle.currentRow][i] = 'y';
+                            answerCopy[j] = '*'; // Mark as used
+                            if (m_wordle.usedLetters[c - 'A'] != 'g') {
+                                m_wordle.usedLetters[c - 'A'] = 'y';
+                            }
                             break;
                         }
                     }
-                    if (found) {
-                        m_wordle.states[m_wordle.currentRow][i] = 'y';
-                        if (m_wordle.usedLetters[c - 'A'] != 'g') {
-                            m_wordle.usedLetters[c - 'A'] = 'y';
-                        }
-                    } else {
-                        m_wordle.states[m_wordle.currentRow][i] = 'x';
+                    // If still gray, mark letter as used/gray
+                    if (m_wordle.states[m_wordle.currentRow][i] == 'x') {
                         if (m_wordle.usedLetters[c - 'A'] == 0) {
                             m_wordle.usedLetters[c - 'A'] = 'x';
                         }
@@ -846,8 +1146,8 @@ void GameManager::handleWordleTouch(int x, int y) {
     }
     
     // Delete button
-    if (x >= SCREEN_WIDTH/2 + 40 && x <= SCREEN_WIDTH/2 + 160 &&
-        y >= specialY && y <= specialY + 50) {
+    if (x >= SCREEN_WIDTH/2 + 40 && x <= SCREEN_WIDTH/2 + 140 &&
+        y >= specialY && y <= specialY + 45) {
         if (m_wordle.currentCol > 0) {
             m_wordle.currentCol--;
             m_wordle.guesses[m_wordle.currentRow][m_wordle.currentCol] = 0;
