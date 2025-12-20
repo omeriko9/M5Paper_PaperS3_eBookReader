@@ -782,11 +782,11 @@ void GUI::init(bool isWakeFromSleep)
                     // If it's ESP32S3, we can pin to core 1 to avoid contention with rendering on core 0
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
                     xTaskCreatePinnedToCore([](void *arg)
-                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle,
+                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle,
                                             1);
 #else
                     xTaskCreatePinnedToCore([](void *arg)
-                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle, 1);
+                                            { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle, 1);
 #endif
                 }
                 return;
@@ -801,11 +801,11 @@ void GUI::init(bool isWakeFromSleep)
     {
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
         xTaskCreatePinnedToCore([](void *arg)
-                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle,
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle,
                                 1);
 #else
         xTaskCreatePinnedToCore([](void *arg)
-                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096, this, 0, &backgroundIndexerTaskHandle, 1);
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle, 1);
 #endif
     }
 }
@@ -4289,7 +4289,7 @@ void GUI::refreshLibrary()
     if (backgroundIndexerTaskHandle == nullptr)
     {
         xTaskCreate([](void *arg)
-                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 4096*2, this, 0, &backgroundIndexerTaskHandle);
+                    { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle);
     }
 }
 

@@ -94,9 +94,6 @@ private:
     
     // Image references in current chapter
     std::vector<EpubImage> currentChapterImages;
-    
-    // Manifest mapping (id -> href) for resolving image references
-    std::map<std::string, std::string> manifest;
 
     // Helpers
     bool parseContainer();

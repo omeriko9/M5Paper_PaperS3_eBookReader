@@ -153,7 +153,6 @@ void EpubLoader::close() {
     currentChapterContent.clear();
     currentChapterContent.shrink_to_fit();
     currentChapterImages.clear();
-    manifest.clear();
 }
 
 std::string EpubLoader::getTitle() {
@@ -240,12 +239,26 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
         }
     }
     
-    // Clear and rebuild manifest
-    manifest.clear();
-    
     // 1. Parse Manifest
     // <item id="id" href="path" ... />
+    struct ManifestItem {
+        std::string id;
+        std::string href;
+    };
+    std::vector<ManifestItem> manifest;
+
     size_t pos = 0;
+    
+    // Pre-count items to reserve memory and avoid reallocations in internal RAM
+    size_t itemCount = 0;
+    size_t countPos = 0;
+    while ((countPos = xml.find("<item ", countPos)) != std::string::npos) {
+        itemCount++;
+        countPos += 6;
+    }
+    manifest.reserve(itemCount);
+
+    pos = 0;
     while (true) {
         esp_task_wdt_reset();
         pos = xml.find("<item ", pos);
@@ -272,11 +285,16 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
         }
         
         if (!id.empty() && !href.empty()) {
-            manifest[id] = href;
+            manifest.push_back({id, href});
         }
         
         pos = endTag;
     }
+
+    // Sort manifest by ID for binary search
+    std::sort(manifest.begin(), manifest.end(), [](const ManifestItem& a, const ManifestItem& b) {
+        return a.id < b.id;
+    });
     
     // 2. Parse Spine
     // <itemref idref="id" />
@@ -296,8 +314,11 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
             size_t idEnd = tag.find("\"", idrefPos + 7);
             std::string idref = tag.substr(idrefPos + 7, idEnd - (idrefPos + 7));
             
-            if (manifest.count(idref)) {
-                spine.push_back(rootDir + manifest[idref]);
+            auto it = std::lower_bound(manifest.begin(), manifest.end(), idref, [](const ManifestItem& item, const std::string& id) {
+                return item.id < id;
+            });
+            if (it != manifest.end() && it->id == idref) {
+                spine.push_back(rootDir + it->href);
             }
         }
         pos = endTag;

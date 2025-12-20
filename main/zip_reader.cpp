@@ -4,7 +4,9 @@
 #include <string.h>
 #include <vector>
 #include <memory>
+#include <string_view>
 #include <zlib.h>
+#include <algorithm>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -34,11 +36,12 @@ bool ZipReader::open(const char* path) {
 
 void ZipReader::close() {
     files.clear();
+    cdBuffer.reset();
     filePath = "";
 }
 
 bool ZipReader::fileExists(const std::string& filename) {
-    return files.count(filename) > 0;
+    return findFile(filename) != nullptr;
 }
 
 bool ZipReader::parseCentralDirectory() {
@@ -146,9 +149,7 @@ bool ZipReader::parseCentralDirectory() {
     }
 
     // Read the entire central directory in one go to avoid many small SPIFFS seeks
-    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> cdBuffer(
-        (uint8_t*)heap_caps_malloc(cdSize, MALLOC_CAP_8BIT),
-        heap_caps_free);
+    cdBuffer.reset((uint8_t*)heap_caps_malloc(cdSize, MALLOC_CAP_8BIT));
     if (!cdBuffer) {
         ESP_LOGE(TAG, "Failed to allocate %u bytes for central directory", (unsigned)cdSize);
         fclose(f);
@@ -158,6 +159,7 @@ bool ZipReader::parseCentralDirectory() {
     fseek(f, cdOffset, SEEK_SET);
     if (fread(cdBuffer.get(), 1, cdSize, f) != cdSize) {
         ESP_LOGE(TAG, "Failed to read central directory");
+        cdBuffer.reset();
         fclose(f);
         return false;
     }
@@ -165,6 +167,9 @@ bool ZipReader::parseCentralDirectory() {
     fclose(f);
 
     // Parse CD from memory
+    files.clear();
+    files.reserve(numEntries);
+
     const uint8_t *p = cdBuffer.get();
     const uint8_t *end = cdBuffer.get() + cdSize;
     for (int i = 0; i < numEntries && (p + 46) <= end; i++) {
@@ -184,8 +189,9 @@ bool ZipReader::parseCentralDirectory() {
         const uint8_t *nameStart = p + 46;
         if (nameStart + nameLen > end) break;
 
-        info.name.assign(reinterpret_cast<const char*>(nameStart), nameLen);
-        files[info.name] = info;
+        info.nameOffset = (uint32_t)(nameStart - cdBuffer.get());
+        info.nameLen = nameLen;
+        files.push_back(info);
 
         // Move to next entry
         p += 46 + nameLen + extraLen + commentLen;
@@ -197,16 +203,38 @@ bool ZipReader::parseCentralDirectory() {
         }
     }
 
+    // Sort files by name for binary search
+    std::sort(files.begin(), files.end(), [this](const ZipFileInfo& a, const ZipFileInfo& b) {
+        return std::string_view((char*)cdBuffer.get() + a.nameOffset, a.nameLen) < 
+               std::string_view((char*)cdBuffer.get() + b.nameOffset, b.nameLen);
+    });
+
     return true;
 }
 
+const ZipFileInfo* ZipReader::findFile(const std::string& filename) const {
+    if (!cdBuffer) return nullptr;
+    
+    auto it = std::lower_bound(files.begin(), files.end(), filename, [this](const ZipFileInfo& info, const std::string& name) {
+        return std::string_view((char*)cdBuffer.get() + info.nameOffset, info.nameLen) < name;
+    });
+    if (it != files.end()) {
+        if (it->nameLen == filename.length() && 
+            memcmp(cdBuffer.get() + it->nameOffset, filename.c_str(), it->nameLen) == 0) {
+            return &(*it);
+        }
+    }
+    return nullptr;
+}
+
 std::string ZipReader::extractFile(const std::string& filename) {
-    if (files.find(filename) == files.end()) {
+    const ZipFileInfo* infoPtr = findFile(filename);
+    if (!infoPtr) {
         ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
         return "";
     }
 
-    ZipFileInfo& info = files[filename];
+    const ZipFileInfo& info = *infoPtr;
     FILE* f = fopen(filePath.c_str(), "rb");
     if (!f) return "";
 
@@ -329,12 +357,13 @@ std::string ZipReader::extractFile(const std::string& filename) {
 
 bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const char*, size_t, void*), void* context) {
     esp_task_wdt_reset();
-    if (files.find(filename) == files.end()) {
+    const ZipFileInfo* infoPtr = findFile(filename);
+    if (!infoPtr) {
         ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
         return false;
     }
 
-    ZipFileInfo& info = files[filename];
+    const ZipFileInfo& info = *infoPtr;
     FILE* f = fopen(filePath.c_str(), "rb");
     if (!f) return false;
 
@@ -457,19 +486,20 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
 }
 
 uint32_t ZipReader::getUncompressedSize(const std::string& filename) {
-    if (files.find(filename) == files.end()) return 0;
-    return files[filename].uncompressedSize;
+    const ZipFileInfo* info = findFile(filename);
+    return info ? info->uncompressedSize : 0;
 }
 
 bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>& outData) {
     outData.clear();
     
-    if (files.find(filename) == files.end()) {
+    const ZipFileInfo* infoPtr = findFile(filename);
+    if (!infoPtr) {
         ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
         return false;
     }
 
-    ZipFileInfo& info = files[filename];
+    const ZipFileInfo& info = *infoPtr;
     
     // Safety limit: don't extract files larger than 5MB to avoid OOM
     if (info.uncompressedSize > 5 * 1024 * 1024) {
@@ -508,11 +538,12 @@ bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>&
 }
 
 size_t ZipReader::peekFile(const std::string& filename, uint8_t* outData, size_t size) {
-    if (files.find(filename) == files.end()) {
+    const ZipFileInfo* infoPtr = findFile(filename);
+    if (!infoPtr) {
         return 0;
     }
 
-    ZipFileInfo& info = files[filename];
+    const ZipFileInfo& info = *infoPtr;
     FILE* f = fopen(filePath.c_str(), "rb");
     if (!f) return 0;
 
@@ -585,8 +616,8 @@ size_t ZipReader::peekFile(const std::string& filename, uint8_t* outData, size_t
 std::vector<std::string> ZipReader::listFiles() const {
     std::vector<std::string> result;
     result.reserve(files.size());
-    for (const auto& pair : files) {
-        result.push_back(pair.first);
+    for (const auto& info : files) {
+        result.push_back(std::string((char*)cdBuffer.get() + info.nameOffset, info.nameLen));
     }
     return result;
 }

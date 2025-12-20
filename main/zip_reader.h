@@ -1,12 +1,14 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <map>
 #include <stdint.h>
 #include <functional>
+#include <memory>
+#include "esp_heap_caps.h"
 
 struct ZipFileInfo {
-    std::string name;
+    uint32_t nameOffset; // Offset in cdBuffer
+    uint16_t nameLen;
     uint32_t compressedSize;
     uint32_t uncompressedSize;
     uint32_t localHeaderOffset;
@@ -47,6 +49,8 @@ public:
     
 private:
     std::string filePath;
-    std::map<std::string, ZipFileInfo> files;
+    std::vector<ZipFileInfo> files;
+    std::unique_ptr<uint8_t, void(*)(void*)> cdBuffer{nullptr, heap_caps_free};
     bool parseCentralDirectory();
+    const ZipFileInfo* findFile(const std::string& filename) const;
 };
