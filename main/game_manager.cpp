@@ -588,84 +588,58 @@ static const int SUDOKU_EASY_PUZZLES[][2][6][6] = {
     }
 };
 
-static const int SUDOKU_MEDIUM_PUZZLES[][2][6][6] = {
+static const int SUDOKU_MEDIUM_PUZZLES[][2][9][9] = {
     // Medium puzzle 1
     {
         {
-            {1, 0, 3, 0, 5, 6},
-            {4, 5, 0, 1, 0, 3},
-            {0, 3, 1, 6, 4, 0},
-            {0, 6, 4, 0, 1, 2},
-            {3, 0, 2, 5, 6, 0},
-            {6, 4, 0, 2, 0, 1}
+            {5, 3, 0, 0, 7, 0, 0, 0, 0},
+            {6, 0, 0, 1, 9, 5, 0, 0, 0},
+            {0, 9, 8, 0, 0, 0, 0, 6, 0},
+            {8, 0, 0, 0, 6, 0, 0, 0, 3},
+            {4, 0, 0, 8, 0, 3, 0, 0, 1},
+            {7, 0, 0, 0, 2, 0, 0, 0, 6},
+            {0, 6, 0, 0, 0, 0, 2, 8, 0},
+            {0, 0, 0, 4, 1, 9, 0, 0, 5},
+            {0, 0, 0, 0, 8, 0, 0, 7, 9}
         },
         {
-            {1, 2, 3, 4, 5, 6},
-            {4, 5, 6, 1, 2, 3},
-            {2, 3, 1, 6, 4, 5},
-            {5, 6, 4, 3, 1, 2},
-            {3, 1, 2, 5, 6, 4},
-            {6, 4, 5, 2, 3, 1}
-        }
-    },
-    // Medium puzzle 2
-    {
-        {
-            {0, 2, 0, 4, 0, 6},
-            {4, 0, 6, 0, 2, 0},
-            {0, 3, 0, 6, 0, 5},
-            {5, 0, 4, 0, 1, 0},
-            {0, 1, 0, 5, 0, 4},
-            {6, 0, 5, 0, 3, 0}
-        },
-        {
-            {1, 2, 3, 4, 5, 6},
-            {4, 5, 6, 1, 2, 3},
-            {2, 3, 1, 6, 4, 5},
-            {5, 6, 4, 3, 1, 2},
-            {3, 1, 2, 5, 6, 4},
-            {6, 4, 5, 2, 3, 1}
+            {5, 3, 4, 6, 7, 8, 9, 1, 2},
+            {6, 7, 2, 1, 9, 5, 3, 4, 8},
+            {1, 9, 8, 3, 4, 2, 5, 6, 7},
+            {8, 5, 9, 7, 6, 1, 4, 2, 3},
+            {4, 2, 6, 8, 5, 3, 7, 9, 1},
+            {7, 1, 3, 9, 2, 4, 8, 5, 6},
+            {9, 6, 1, 5, 3, 7, 2, 8, 4},
+            {2, 8, 7, 4, 1, 9, 6, 3, 5},
+            {3, 4, 5, 2, 8, 6, 1, 7, 9}
         }
     }
 };
 
-static const int SUDOKU_HARD_PUZZLES[][2][6][6] = {
-    // Hard puzzle 1 - fewer given numbers
+static const int SUDOKU_HARD_PUZZLES[][2][9][9] = {
+    // Hard puzzle 1
     {
         {
-            {0, 0, 3, 0, 5, 0},
-            {4, 0, 0, 1, 0, 0},
-            {0, 3, 0, 0, 4, 0},
-            {0, 6, 0, 0, 1, 0},
-            {0, 0, 2, 0, 0, 4},
-            {0, 4, 0, 2, 0, 0}
+            {0, 0, 0, 0, 0, 0, 0, 1, 2},
+            {0, 0, 0, 0, 0, 0, 0, 0, 8},
+            {0, 0, 8, 0, 0, 0, 0, 6, 0},
+            {8, 0, 0, 0, 6, 0, 0, 0, 3},
+            {4, 0, 0, 8, 0, 3, 0, 0, 1},
+            {7, 0, 0, 0, 2, 0, 0, 0, 6},
+            {0, 6, 0, 0, 0, 0, 2, 8, 0},
+            {0, 0, 0, 4, 1, 9, 0, 0, 5},
+            {0, 0, 0, 0, 8, 0, 0, 7, 9}
         },
         {
-            {1, 2, 3, 4, 5, 6},
-            {4, 5, 6, 1, 2, 3},
-            {2, 3, 1, 6, 4, 5},
-            {5, 6, 4, 3, 1, 2},
-            {3, 1, 2, 5, 6, 4},
-            {6, 4, 5, 2, 3, 1}
-        }
-    },
-    // Hard puzzle 2
-    {
-        {
-            {1, 0, 0, 0, 0, 6},
-            {0, 5, 0, 0, 2, 0},
-            {0, 0, 1, 6, 0, 0},
-            {0, 0, 4, 3, 0, 0},
-            {0, 1, 0, 0, 6, 0},
-            {6, 0, 0, 0, 0, 1}
-        },
-        {
-            {1, 2, 3, 4, 5, 6},
-            {4, 5, 6, 1, 2, 3},
-            {2, 3, 1, 6, 4, 5},
-            {5, 6, 4, 3, 1, 2},
-            {3, 1, 2, 5, 6, 4},
-            {6, 4, 5, 2, 3, 1}
+            {5, 3, 4, 6, 7, 8, 9, 1, 2},
+            {6, 7, 2, 1, 9, 5, 3, 4, 8},
+            {1, 9, 8, 3, 4, 2, 5, 6, 7},
+            {8, 5, 9, 7, 6, 1, 4, 2, 3},
+            {4, 2, 6, 8, 5, 3, 7, 9, 1},
+            {7, 1, 3, 9, 2, 4, 8, 5, 6},
+            {9, 6, 1, 5, 3, 7, 2, 8, 4},
+            {2, 8, 7, 4, 1, 9, 6, 3, 5},
+            {3, 4, 5, 2, 8, 6, 1, 7, 9}
         }
     }
 };
@@ -684,36 +658,32 @@ void GameManager::initSudokuWithDifficulty(int difficulty) {
     m_sudoku.selectedRow = -1;
     m_sudoku.selectedCol = -1;
     
-    const int (*puzzles)[2][6][6] = nullptr;
-    int puzzleCount = 0;
-    
-    switch (difficulty) {
-        case 1: // Easy
-            puzzles = SUDOKU_EASY_PUZZLES;
-            puzzleCount = sizeof(SUDOKU_EASY_PUZZLES) / sizeof(SUDOKU_EASY_PUZZLES[0]);
-            break;
-        case 2: // Medium
-            puzzles = SUDOKU_MEDIUM_PUZZLES;
-            puzzleCount = sizeof(SUDOKU_MEDIUM_PUZZLES) / sizeof(SUDOKU_MEDIUM_PUZZLES[0]);
-            break;
-        case 3: // Hard
-            puzzles = SUDOKU_HARD_PUZZLES;
-            puzzleCount = sizeof(SUDOKU_HARD_PUZZLES) / sizeof(SUDOKU_HARD_PUZZLES[0]);
-            break;
-        default:
-            puzzles = SUDOKU_MEDIUM_PUZZLES;
-            puzzleCount = sizeof(SUDOKU_MEDIUM_PUZZLES) / sizeof(SUDOKU_MEDIUM_PUZZLES[0]);
-            break;
-    }
-    
-    // Pick a random puzzle
-    int idx = esp_random() % puzzleCount;
-    
-    for (int i = 0; i < 6; i++) {
-        for (int j = 0; j < 6; j++) {
-            m_sudoku.board[i][j] = puzzles[idx][0][i][j];
-            m_sudoku.solution[i][j] = puzzles[idx][1][i][j];
-            m_sudoku.readonly[i][j] = (puzzles[idx][0][i][j] != 0);
+    if (difficulty == 1) {
+        m_sudoku.currentGridSize = 6;
+        const int (*puzzles)[2][6][6] = SUDOKU_EASY_PUZZLES;
+        int puzzleCount = sizeof(SUDOKU_EASY_PUZZLES) / sizeof(SUDOKU_EASY_PUZZLES[0]);
+        int idx = esp_random() % puzzleCount;
+        
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                m_sudoku.board[i][j] = puzzles[idx][0][i][j];
+                m_sudoku.solution[i][j] = puzzles[idx][1][i][j];
+                m_sudoku.readonly[i][j] = (puzzles[idx][0][i][j] != 0);
+            }
+        }
+    } else {
+        m_sudoku.currentGridSize = 9;
+        const int (*puzzles)[2][9][9] = (difficulty == 2) ? SUDOKU_MEDIUM_PUZZLES : SUDOKU_HARD_PUZZLES;
+        int puzzleCount = (difficulty == 2) ? sizeof(SUDOKU_MEDIUM_PUZZLES) / sizeof(SUDOKU_MEDIUM_PUZZLES[0]) 
+                                            : sizeof(SUDOKU_HARD_PUZZLES) / sizeof(SUDOKU_HARD_PUZZLES[0]);
+        int idx = esp_random() % puzzleCount;
+        
+        for (int i = 0; i < 9; i++) {
+            for (int j = 0; j < 9; j++) {
+                m_sudoku.board[i][j] = puzzles[idx][0][i][j];
+                m_sudoku.solution[i][j] = puzzles[idx][1][i][j];
+                m_sudoku.readonly[i][j] = (puzzles[idx][0][i][j] != 0);
+            }
         }
     }
     
@@ -724,8 +694,8 @@ void GameManager::updateSudoku() {
     // Check win condition
     bool complete = true;
     bool hasErrors = false;
-    for (int i = 0; i < 6 && complete; i++) {
-        for (int j = 0; j < 6 && complete; j++) {
+    for (int i = 0; i < m_sudoku.currentGridSize && complete; i++) {
+        for (int j = 0; j < m_sudoku.currentGridSize && complete; j++) {
             if (m_sudoku.board[i][j] == 0) {
                 complete = false;
             } else if (m_sudoku.board[i][j] != m_sudoku.solution[i][j]) {
@@ -737,19 +707,40 @@ void GameManager::updateSudoku() {
 }
 
 void GameManager::drawSudokuCell(LovyanGFX* target, int row, int col) {
-    if (row < 0 || row >= 6 || col < 0 || col >= 6) {
+    if (row < 0 || row >= m_sudoku.currentGridSize || col < 0 || col >= m_sudoku.currentGridSize) {
         return;
     }
 
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
-    const int CELL_SIZE = 70;
+    const int CELL_SIZE = (m_sudoku.currentGridSize == 9) ? 50 : 70;
     const int BLOCK_SPACING = 6;
-    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
+    
+    int gridWidthPx, gridHeightPx;
+    if (m_sudoku.currentGridSize == 9) {
+        gridWidthPx = 9 * CELL_SIZE + 2 * BLOCK_SPACING;
+        gridHeightPx = 9 * CELL_SIZE + 2 * BLOCK_SPACING;
+    } else {
+        gridWidthPx = 6 * CELL_SIZE + BLOCK_SPACING;
+        gridHeightPx = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
+    }
+    
+    const int GRID_X = (SCREEN_WIDTH - gridWidthPx) / 2;
     const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
 
-    int xOffset = (col >= 3) ? BLOCK_SPACING : 0;
-    int yOffset = (row >= 2) ? ((row >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
+    int xOffset = 0;
+    int yOffset = 0;
+    
+    if (m_sudoku.currentGridSize == 9) {
+        if (col >= 3) xOffset += BLOCK_SPACING;
+        if (col >= 6) xOffset += BLOCK_SPACING;
+        if (row >= 3) yOffset += BLOCK_SPACING;
+        if (row >= 6) yOffset += BLOCK_SPACING;
+    } else {
+        if (col >= 3) xOffset += BLOCK_SPACING;
+        if (row >= 2) yOffset += BLOCK_SPACING;
+        if (row >= 4) yOffset += BLOCK_SPACING;
+    }
+
     int x = GRID_X + col * CELL_SIZE + xOffset;
     int y = GRID_Y + row * CELL_SIZE + yOffset;
 
@@ -775,7 +766,7 @@ void GameManager::drawSudokuCell(LovyanGFX* target, int row, int col) {
         if (isError) textColor = TFT_RED;
         gfx->setTextColor(textColor, bgColor);
         gfx->setTextDatum(textdatum_t::middle_center);
-        gfx->setTextSize(2.2f);
+        gfx->setTextSize((m_sudoku.currentGridSize == 9) ? 1.8f : 2.2f);
         char num[2] = {(char)('0' + m_sudoku.board[row][col]), 0};
         gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
     }
@@ -784,24 +775,51 @@ void GameManager::drawSudokuCell(LovyanGFX* target, int row, int col) {
 
 void GameManager::drawSudokuDividers(LovyanGFX* target) {
     LovyanGFX* gfx = target ? target : (LovyanGFX*)&M5.Display;
-    const int CELL_SIZE = 70;
+    const int CELL_SIZE = (m_sudoku.currentGridSize == 9) ? 50 : 70;
     const int BLOCK_SPACING = 6;
-    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_HEIGHT_PX = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
-    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
+    
+    int gridWidthPx, gridHeightPx;
+    if (m_sudoku.currentGridSize == 9) {
+        gridWidthPx = 9 * CELL_SIZE + 2 * BLOCK_SPACING;
+        gridHeightPx = 9 * CELL_SIZE + 2 * BLOCK_SPACING;
+    } else {
+        gridWidthPx = 6 * CELL_SIZE + BLOCK_SPACING;
+        gridHeightPx = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
+    }
+    
+    const int GRID_X = (SCREEN_WIDTH - gridWidthPx) / 2;
     const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
 
-    for (int i = 0; i <= 6; i += 3) {
-        int xOffset = (i >= 3) ? BLOCK_SPACING : 0;
-        int x = GRID_X + i * CELL_SIZE + xOffset;
-        if (i == 3) x -= BLOCK_SPACING/2;
-        gfx->fillRect(x - 2, GRID_Y, 4, GRID_HEIGHT_PX, TFT_BLACK);
-    }
-    for (int i = 0; i <= 6; i += 2) {
-        int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
-        int y = GRID_Y + i * CELL_SIZE + yOffset;
-        if (i == 2 || i == 4) y -= BLOCK_SPACING/2;
-        gfx->fillRect(GRID_X, y - 2, GRID_WIDTH_PX, 4, TFT_BLACK);
+    if (m_sudoku.currentGridSize == 9) {
+        for (int i = 0; i <= 9; i += 3) {
+            int xOffset = 0;
+            if (i >= 3) xOffset += BLOCK_SPACING;
+            if (i >= 6) xOffset += BLOCK_SPACING;
+            int x = GRID_X + i * CELL_SIZE + xOffset;
+            if (i == 3 || i == 6) x -= BLOCK_SPACING/2;
+            gfx->fillRect(x - 2, GRID_Y, 4, gridHeightPx, TFT_BLACK);
+        }
+        for (int i = 0; i <= 9; i += 3) {
+            int yOffset = 0;
+            if (i >= 3) yOffset += BLOCK_SPACING;
+            if (i >= 6) yOffset += BLOCK_SPACING;
+            int y = GRID_Y + i * CELL_SIZE + yOffset;
+            if (i == 3 || i == 6) y -= BLOCK_SPACING/2;
+            gfx->fillRect(GRID_X, y - 2, gridWidthPx, 4, TFT_BLACK);
+        }
+    } else {
+        for (int i = 0; i <= 6; i += 3) {
+            int xOffset = (i >= 3) ? BLOCK_SPACING : 0;
+            int x = GRID_X + i * CELL_SIZE + xOffset;
+            if (i == 3) x -= BLOCK_SPACING/2;
+            gfx->fillRect(x - 2, GRID_Y, 4, gridHeightPx, TFT_BLACK);
+        }
+        for (int i = 0; i <= 6; i += 2) {
+            int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
+            int y = GRID_Y + i * CELL_SIZE + yOffset;
+            if (i == 2 || i == 4) y -= BLOCK_SPACING/2;
+            gfx->fillRect(GRID_X, y - 2, gridWidthPx, 4, TFT_BLACK);
+        }
     }
 }
 
@@ -830,79 +848,26 @@ void GameManager::drawSudoku(LovyanGFX* target) {
     // New button
     drawButton(gfx, SCREEN_WIDTH - 80, headerY + 5, 70, 40, "New", TFT_WHITE, TFT_BLACK);
     
-    // Grid dimensions
-    const int CELL_SIZE = 70;
-    const int BLOCK_SPACING = 6;
-    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_HEIGHT_PX = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
-    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
-    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
-    
-    gfx->setTextSize(2.2f);
-    gfx->setTextDatum(textdatum_t::middle_center);
-    
-    for (int i = 0; i < 6; i++) {
-        for (int j = 0; j < 6; j++) {
-            // Calculate block spacing offsets
-            int xOffset = (j >= 3) ? BLOCK_SPACING : 0;
-            int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
-            
-            int x = GRID_X + j * CELL_SIZE + xOffset;
-            int y = GRID_Y + i * CELL_SIZE + yOffset;
-            
-            // Cell background
-            uint16_t bgColor = TFT_WHITE;
-            if (m_sudoku.selectedRow == i && m_sudoku.selectedCol == j) {
-                bgColor = 0x07FF; // Cyan for selected
-            } else if (m_sudoku.readonly[i][j]) {
-                bgColor = GRAY_LIGHT;
-            }
-            
-            // Check for errors (non-readonly cells that don't match solution)
-            bool isError = !m_sudoku.readonly[i][j] && 
-                           m_sudoku.board[i][j] != 0 && 
-                           m_sudoku.board[i][j] != m_sudoku.solution[i][j];
-            
-            if (isError) {
-                bgColor = 0xFD20; // Light red/orange for errors
-            }
-            
-            gfx->fillRect(x, y, CELL_SIZE, CELL_SIZE, bgColor);
-            gfx->drawRect(x, y, CELL_SIZE, CELL_SIZE, TFT_BLACK);
-            
-            // Number
-            if (m_sudoku.board[i][j] != 0) {
-                uint16_t textColor = m_sudoku.readonly[i][j] ? TFT_BLACK : TFT_BLUE;
-                if (isError) textColor = TFT_RED;
-                gfx->setTextColor(textColor, bgColor);
-                char num[2] = {(char)('0' + m_sudoku.board[i][j]), 0};
-                gfx->drawString(num, x + CELL_SIZE/2, y + CELL_SIZE/2);
-            }
+    // Draw grid
+    for (int i = 0; i < m_sudoku.currentGridSize; i++) {
+        for (int j = 0; j < m_sudoku.currentGridSize; j++) {
+            drawSudokuCell(gfx, i, j);
         }
     }
+    drawSudokuDividers(gfx);
     
-    // Draw 2x3 block dividers (thicker lines)
-    for (int i = 0; i <= 6; i += 3) {
-        int xOffset = (i >= 3) ? BLOCK_SPACING : 0;
-        int x = GRID_X + i * CELL_SIZE + xOffset;
-        if (i == 3) x -= BLOCK_SPACING/2;
-        gfx->fillRect(x - 2, GRID_Y, 4, GRID_HEIGHT_PX, TFT_BLACK);
-    }
-    for (int i = 0; i <= 6; i += 2) {
-        int yOffset = (i >= 2) ? ((i >= 4) ? BLOCK_SPACING * 2 : BLOCK_SPACING) : 0;
-        int y = GRID_Y + i * CELL_SIZE + yOffset;
-        if (i == 2 || i == 4) y -= BLOCK_SPACING/2;
-        gfx->fillRect(GRID_X, y - 2, GRID_WIDTH_PX, 4, TFT_BLACK);
-    }
+    // Number input buttons
+    int gridHeightPx = (m_sudoku.currentGridSize == 9) ? (9 * 50 + 2 * 6) : (6 * 70 + 2 * 6);
+    int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
+    int btnY = GRID_Y + gridHeightPx + 25;
     
-    // Number input buttons (1-6)
-    int btnY = GRID_Y + GRID_HEIGHT_PX + 25;
-    int btnSize = 65;
-    int btnGap = 10;
-    int startX = (SCREEN_WIDTH - (6 * btnSize + 5 * btnGap)) / 2;
+    int btnSize = (m_sudoku.currentGridSize == 9) ? 45 : 65;
+    int btnGap = (m_sudoku.currentGridSize == 9) ? 8 : 10;
+    int numBtns = m_sudoku.currentGridSize;
+    int startX = (SCREEN_WIDTH - (numBtns * btnSize + (numBtns - 1) * btnGap)) / 2;
     
-    gfx->setTextSize(2.0f);
-    for (int i = 1; i <= 6; i++) {
+    gfx->setTextSize((m_sudoku.currentGridSize == 9) ? 1.6f : 2.0f);
+    for (int i = 1; i <= numBtns; i++) {
         int x = startX + (i-1) * (btnSize + btnGap);
         drawButton(gfx, x, btnY, btnSize, btnSize, nullptr, GRAY_LIGHT, TFT_BLACK);
         char num[2] = {(char)('0' + i), 0};
@@ -934,7 +899,7 @@ void GameManager::drawSudoku(LovyanGFX* target) {
     
     // Win message
     if (m_sudoku.gameWon) {
-        int msgY = GRID_Y + GRID_HEIGHT_PX / 2;
+        int msgY = GRID_Y + gridHeightPx / 2;
         gfx->setTextSize(2.0f);
         gfx->setTextColor(TFT_BLACK, TFT_WHITE);
         gfx->fillRect(SCREEN_WIDTH/2 - 100, msgY - 25, 200, 50, TFT_WHITE);
@@ -948,16 +913,31 @@ void GameManager::drawSudoku(LovyanGFX* target) {
 }
 
 bool GameManager::handleSudokuTouch(int x, int y) {
-    const int CELL_SIZE = 70;
-    const int BLOCK_SPACING = 6;
-    const int GRID_WIDTH_PX = 6 * CELL_SIZE + BLOCK_SPACING;
-    const int GRID_HEIGHT_PX = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
-    const int GRID_X = (SCREEN_WIDTH - GRID_WIDTH_PX) / 2;
-    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
-    int headerY = STATUS_BAR_HEIGHT;
+    if (m_sudoku.gameWon) {
+        initSudokuWithDifficulty(m_sudoku.difficulty);
+        return true;
+    }
+
     int prevSelectedRow = m_sudoku.selectedRow;
     int prevSelectedCol = m_sudoku.selectedCol;
     bool prevGameWon = m_sudoku.gameWon;
+    
+    // Grid dimensions
+    const int CELL_SIZE = (m_sudoku.currentGridSize == 9) ? 50 : 70;
+    const int BLOCK_SPACING = 6;
+    int gridWidthPx, gridHeightPx;
+    if (m_sudoku.currentGridSize == 9) {
+        gridWidthPx = 9 * CELL_SIZE + 2 * BLOCK_SPACING;
+        gridHeightPx = 9 * CELL_SIZE + 2 * BLOCK_SPACING;
+    } else {
+        gridWidthPx = 6 * CELL_SIZE + BLOCK_SPACING;
+        gridHeightPx = 6 * CELL_SIZE + 2 * BLOCK_SPACING;
+    }
+    const int GRID_X = (SCREEN_WIDTH - gridWidthPx) / 2;
+    const int GRID_Y = STATUS_BAR_HEIGHT + HEADER_HEIGHT + 20;
+
+    // Header area
+    int headerY = STATUS_BAR_HEIGHT;
     
     // Back button
     if (x >= 10 && x <= 80 && y >= headerY + 5 && y <= headerY + 45) {
@@ -973,13 +953,14 @@ bool GameManager::handleSudokuTouch(int x, int y) {
     }
     
     // Number buttons
-    int btnY = GRID_Y + GRID_HEIGHT_PX + 25;
-    int btnSize = 65;
-    int btnGap = 10;
-    int startX = (SCREEN_WIDTH - (6 * btnSize + 5 * btnGap)) / 2;
+    int btnY = GRID_Y + gridHeightPx + 25;
+    int btnSize = (m_sudoku.currentGridSize == 9) ? 45 : 65;
+    int btnGap = (m_sudoku.currentGridSize == 9) ? 8 : 10;
+    int numBtns = m_sudoku.currentGridSize;
+    int startX = (SCREEN_WIDTH - (numBtns * btnSize + (numBtns - 1) * btnGap)) / 2;
     
     if (y >= btnY && y <= btnY + btnSize && m_sudoku.selectedRow >= 0) {
-        for (int i = 1; i <= 6; i++) {
+        for (int i = 1; i <= numBtns; i++) {
             int bx = startX + (i-1) * (btnSize + btnGap);
             if (x >= bx && x <= bx + btnSize) {
                 if (!m_sudoku.readonly[m_sudoku.selectedRow][m_sudoku.selectedCol]) {
@@ -1029,44 +1010,74 @@ bool GameManager::handleSudokuTouch(int x, int y) {
     }
     
     // Grid clicks - find which cell was clicked
-    if (x >= GRID_X && x < GRID_X + GRID_WIDTH_PX && 
-        y >= GRID_Y && y < GRID_Y + GRID_HEIGHT_PX) {
+    if (x >= GRID_X && x < GRID_X + gridWidthPx && 
+        y >= GRID_Y && y < GRID_Y + gridHeightPx) {
         
         int relX = x - GRID_X;
         int relY = y - GRID_Y;
         
-        // Calculate column considering block spacing
-        int col;
-        if (relX < 3 * CELL_SIZE) {
-            col = relX / CELL_SIZE;
-        } else {
-            col = (relX - BLOCK_SPACING) / CELL_SIZE;
-        }
-        if (col >= 6) col = 5;
-        if (col < 0) col = 0;
+        int col = -1;
+        int row = -1;
         
-        // Calculate row considering block spacing
-        int row;
-        if (relY < 2 * CELL_SIZE) {
-            row = relY / CELL_SIZE;
-        } else if (relY < 4 * CELL_SIZE + BLOCK_SPACING) {
-            row = (relY - BLOCK_SPACING) / CELL_SIZE;
-        } else {
-            row = (relY - 2 * BLOCK_SPACING) / CELL_SIZE;
-        }
-        if (row >= 6) row = 5;
-        if (row < 0) row = 0;
-        
-        // Select the cell (even readonly ones, just can't modify them)
-        m_sudoku.selectedRow = row;
-        m_sudoku.selectedCol = col;
-        if (prevSelectedRow != m_sudoku.selectedRow || prevSelectedCol != m_sudoku.selectedCol) {
-            if (prevSelectedRow >= 0 && prevSelectedCol >= 0) {
-                drawSudokuCell(nullptr, prevSelectedRow, prevSelectedCol);
+        if (m_sudoku.currentGridSize == 9) {
+            // 9x9 logic
+            int currentX = 0;
+            for (int c = 0; c < 9; c++) {
+                int nextX = currentX + CELL_SIZE;
+                if (c == 2 || c == 5) nextX += BLOCK_SPACING;
+                
+                if (relX >= currentX && relX < nextX) {
+                    col = c;
+                    break;
+                }
+                currentX = nextX;
             }
-            drawSudokuCell(nullptr, m_sudoku.selectedRow, m_sudoku.selectedCol);
-            drawSudokuDividers(nullptr);
-            M5.Display.display();
+            
+            int currentY = 0;
+            for (int r = 0; r < 9; r++) {
+                int nextY = currentY + CELL_SIZE;
+                if (r == 2 || r == 5) nextY += BLOCK_SPACING;
+                
+                if (relY >= currentY && relY < nextY) {
+                    row = r;
+                    break;
+                }
+                currentY = nextY;
+            }
+        } else {
+            // 6x6 logic
+            if (relX < 3 * CELL_SIZE) {
+                col = relX / CELL_SIZE;
+            } else {
+                col = (relX - BLOCK_SPACING) / CELL_SIZE;
+            }
+            
+            if (relY < 2 * CELL_SIZE) {
+                row = relY / CELL_SIZE;
+            } else if (relY < 4 * CELL_SIZE + BLOCK_SPACING) {
+                row = (relY - BLOCK_SPACING) / CELL_SIZE;
+            } else {
+                row = (relY - 2 * BLOCK_SPACING) / CELL_SIZE;
+            }
+        }
+        
+        if (col >= m_sudoku.currentGridSize) col = m_sudoku.currentGridSize - 1;
+        if (col < 0) col = -1;
+        
+        if (row >= m_sudoku.currentGridSize) row = m_sudoku.currentGridSize - 1;
+        if (row < 0) row = -1;
+
+        if (row >= 0 && col >= 0) {
+            m_sudoku.selectedRow = row;
+            m_sudoku.selectedCol = col;
+            if (prevSelectedRow != m_sudoku.selectedRow || prevSelectedCol != m_sudoku.selectedCol) {
+                if (prevSelectedRow >= 0 && prevSelectedCol >= 0) {
+                    drawSudokuCell(nullptr, prevSelectedRow, prevSelectedCol);
+                }
+                drawSudokuCell(nullptr, m_sudoku.selectedRow, m_sudoku.selectedCol);
+                drawSudokuDividers(nullptr);
+                M5.Display.display();
+            }
         }
         return false;
     }

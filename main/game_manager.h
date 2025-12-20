@@ -149,14 +149,15 @@ public:
     
     // Sudoku state
     struct SudokuState {
-        static const int GRID_SIZE = 6;
-        int board[6][6] = {};
-        int solution[6][6] = {};
-        bool readonly[6][6] = {};
+        static const int MAX_GRID_SIZE = 9;
+        int board[9][9] = {};
+        int solution[9][9] = {};
+        bool readonly[9][9] = {};
         bool gameWon = false;
         int selectedRow = -1;
         int selectedCol = -1;
         int difficulty = 2;  // 1=Easy, 2=Medium, 3=Hard
+        int currentGridSize = 6;
     };
     
     // Wordle state  
