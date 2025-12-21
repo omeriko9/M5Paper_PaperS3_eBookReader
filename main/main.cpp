@@ -341,6 +341,12 @@ extern "C" void app_main(void)
 #endif
     
     M5.begin(cfg);
+
+
+    M5.BtnPWR.setDebounceThresh(0);  // Disable default debounce
+    M5.BtnPWR.setHoldThresh(0);      // Disable default hold detection
+    
+
     esp_task_wdt_reset();
     M5.Display.setRotation(0); // Portrait
     M5.Display.setTextSize(3);
@@ -471,7 +477,7 @@ extern "C" void app_main(void)
 
     while (1)
     {
-        M5.update();
+        M5.update(); // Causes restart on short button press       
 
         // Check for long press on PWR button (or BtnA for devices without PWR button)
         // Long press = deep sleep shutdown (no timer, only wake on another button press)
@@ -479,7 +485,19 @@ extern "C" void app_main(void)
         static bool buttonLongPressHandled = false;
         const uint32_t LONG_PRESS_MS = 2000;  // 2 seconds for long press
         
-        bool buttonPressed = M5.BtnPWR.isPressed() || M5.BtnA.isPressed();
+        // Manual button detection since we skipped M5.update()
+        bool buttonPressed = false;
+        
+        #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+        // M5PaperS3: Check GPIO 0 (BtnA/Boot) and GPIO 44 (Power?)
+        // Note: GPIO 0 is active low
+        if (gpio_get_level(GPIO_NUM_0) == 0) buttonPressed = true;
+        #else
+        // M5Paper: Check GPIO 37, 38, 39 (Scroll Wheel)
+        if (gpio_get_level(GPIO_NUM_37) == 0 || 
+            gpio_get_level(GPIO_NUM_38) == 0 || 
+            gpio_get_level(GPIO_NUM_39) == 0) buttonPressed = true;
+        #endif
         
         if (buttonPressed)
         {

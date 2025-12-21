@@ -18,7 +18,7 @@
 #include "driver/sdspi_host.h"
 #endif
 
-static const char* TAG = "DeviceHAL";
+static const char *TAG = "DeviceHAL";
 
 // Pin definitions for M5Paper (original)
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPER
@@ -47,15 +47,17 @@ static constexpr ledc_mode_t BUZZER_MODE = LEDC_LOW_SPEED_MODE;
 #endif
 
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
-static sdmmc_card_t* s_card = nullptr;
+static sdmmc_card_t *s_card = nullptr;
 #endif
 
-DeviceHAL& DeviceHAL::getInstance() {
+DeviceHAL &DeviceHAL::getInstance()
+{
     static DeviceHAL instance;
     return instance;
 }
 
-DeviceHAL::DeviceHAL() {
+DeviceHAL::DeviceHAL()
+{
 #ifdef CONFIG_EBOOK_S3_BUZZER_DEFAULT_ENABLED
     m_buzzerEnabled = true;
 #else
@@ -69,8 +71,10 @@ DeviceHAL::DeviceHAL() {
 #endif
 }
 
-void DeviceHAL::init(bool isWakeFromSleep) {
-    if (m_initialized) return;
+void DeviceHAL::init(bool isWakeFromSleep)
+{
+    if (m_initialized)
+        return;
 
     ESP_LOGI(TAG, "Initializing DeviceHAL for %s", getDeviceName());
 
@@ -78,15 +82,14 @@ void DeviceHAL::init(bool isWakeFromSleep) {
     // Initialize buzzer
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
     ESP_LOGI(TAG, "Initializing buzzer on pin %d", M5PAPERS3_BUZZER_PIN);
-    
+
     ledc_timer_config_t timer_conf = {
         .speed_mode = BUZZER_MODE,
         .duty_resolution = LEDC_TIMER_10_BIT,
         .timer_num = BUZZER_TIMER,
         .freq_hz = CONFIG_EBOOK_S3_BUZZER_FREQUENCY,
         .clk_cfg = LEDC_AUTO_CLK,
-        .deconfigure = false
-    };
+        .deconfigure = false};
     ledc_timer_config(&timer_conf);
 
     ledc_channel_config_t channel_conf = {
@@ -98,17 +101,18 @@ void DeviceHAL::init(bool isWakeFromSleep) {
         .duty = 0,
         .hpoint = 0,
         .flags = {
-            .output_invert = 0
-        }
-    };
+            .output_invert = 0}};
     ledc_channel_config(&channel_conf);
 #endif
 
     // Initialize IMU for auto-rotation
 #ifdef CONFIG_EBOOK_S3_ENABLE_GYROSCOPE
-    if (M5.Imu.isEnabled()) {
+    if (M5.Imu.isEnabled())
+    {
         ESP_LOGI(TAG, "IMU initialized for auto-rotation");
-    } else {
+    }
+    else
+    {
         ESP_LOGW(TAG, "IMU not available");
     }
 #endif
@@ -119,7 +123,8 @@ void DeviceHAL::init(bool isWakeFromSleep) {
     ESP_LOGI(TAG, "DeviceHAL initialized");
 }
 
-bool DeviceHAL::isM5PaperS3() const {
+bool DeviceHAL::isM5PaperS3() const
+{
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     return true;
 #else
@@ -127,7 +132,8 @@ bool DeviceHAL::isM5PaperS3() const {
 #endif
 }
 
-bool DeviceHAL::isM5Paper() const {
+bool DeviceHAL::isM5Paper() const
+{
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPER
     return true;
 #else
@@ -135,7 +141,8 @@ bool DeviceHAL::isM5Paper() const {
 #endif
 }
 
-const char* DeviceHAL::getDeviceName() const {
+const char *DeviceHAL::getDeviceName() const
+{
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     return "M5PaperS3";
 #else
@@ -143,15 +150,18 @@ const char* DeviceHAL::getDeviceName() const {
 #endif
 }
 
-int DeviceHAL::getDisplayWidth() const {
+int DeviceHAL::getDisplayWidth() const
+{
     return M5.Display.width();
 }
 
-int DeviceHAL::getDisplayHeight() const {
+int DeviceHAL::getDisplayHeight() const
+{
     return M5.Display.height();
 }
 
-int DeviceHAL::getCanvasColorDepth() const {
+int DeviceHAL::getCanvasColorDepth() const
+{
 #ifdef CONFIG_EBOOK_CANVAS_COLOR_DEPTH
     return CONFIG_EBOOK_CANVAS_COLOR_DEPTH;
 #elif defined(CONFIG_EBOOK_DEVICE_M5PAPERS3) && defined(CONFIG_EBOOK_S3_16_GRAYSCALE)
@@ -161,53 +171,63 @@ int DeviceHAL::getCanvasColorDepth() const {
 #endif
 }
 
-int DeviceHAL::getRotation() const {
+int DeviceHAL::getRotation() const
+{
     return m_currentRotation;
 }
 
-void DeviceHAL::setRotation(int rotation) {
-    if (rotation < 0 || rotation > 3) return;
-    if (m_currentRotation == rotation) return;
+void DeviceHAL::setRotation(int rotation)
+{
+    if (rotation < 0 || rotation > 3)
+        return;
+    if (m_currentRotation == rotation)
+        return;
 
     m_currentRotation = rotation;
     M5.Display.setRotation(rotation);
     ESP_LOGI(TAG, "Display rotation set to %d", rotation);
 }
 
-bool DeviceHAL::isLandscape() const {
+bool DeviceHAL::isLandscape() const
+{
     return (m_currentRotation == 1 || m_currentRotation == 3);
 }
 
 // ==================== Buzzer ====================
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-void DeviceHAL::buzzerStopTimerCb(void* arg) {
-    auto* self = static_cast<DeviceHAL*>(arg);
-    if (self) {
+void DeviceHAL::buzzerStopTimerCb(void *arg)
+{
+    auto *self = static_cast<DeviceHAL *>(arg);
+    if (self)
+    {
         self->stopTone();
     }
 }
 
-void DeviceHAL::ensureBuzzerTimer() {
+void DeviceHAL::ensureBuzzerTimer()
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    if (m_buzzerStopTimer) return;
+    if (m_buzzerStopTimer)
+        return;
 
     const esp_timer_create_args_t timer_args = {
         .callback = &DeviceHAL::buzzerStopTimerCb,
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
-        .name = "buzzer_stop"
-    };
+        .name = "buzzer_stop"};
 
     esp_err_t err = esp_timer_create(&timer_args, &m_buzzerStopTimer);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGW(TAG, "Failed to create buzzer stop timer: %s", esp_err_to_name(err));
         m_buzzerStopTimer = nullptr;
     }
 #endif
 }
 
-void DeviceHAL::stopTone() {
+void DeviceHAL::stopTone()
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
     // Stop tone by setting duty cycle to 0
     ledc_set_duty(BUZZER_MODE, BUZZER_CHANNEL, 0);
@@ -215,12 +235,15 @@ void DeviceHAL::stopTone() {
 #endif
 }
 
-void DeviceHAL::playToneAsync(int frequency, int duration) {
+void DeviceHAL::playToneAsync(int frequency, int duration)
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    if (!m_buzzerEnabled) return;
+    if (!m_buzzerEnabled)
+        return;
 
     ensureBuzzerTimer();
-    if (m_buzzerStopTimer) {
+    if (m_buzzerStopTimer)
+    {
         esp_timer_stop(m_buzzerStopTimer);
     }
 
@@ -232,7 +255,8 @@ void DeviceHAL::playToneAsync(int frequency, int duration) {
     ledc_update_duty(BUZZER_MODE, BUZZER_CHANNEL);
 
     // Schedule stop
-    if (m_buzzerStopTimer) {
+    if (m_buzzerStopTimer)
+    {
         esp_timer_start_once(m_buzzerStopTimer, (uint64_t)duration * 1000ULL);
     }
 #else
@@ -242,7 +266,8 @@ void DeviceHAL::playToneAsync(int frequency, int duration) {
 }
 #endif
 
-bool DeviceHAL::hasBuzzer() const {
+bool DeviceHAL::hasBuzzer() const
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
     return true;
 #else
@@ -250,34 +275,39 @@ bool DeviceHAL::hasBuzzer() const {
 #endif
 }
 
-void DeviceHAL::playClickSound() {
+void DeviceHAL::playClickSound()
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    if (!m_buzzerEnabled) return;
+    if (!m_buzzerEnabled)
+        return;
     // Non-blocking click so UI responsiveness isn't impacted.
     playToneAsync(CONFIG_EBOOK_S3_BUZZER_FREQUENCY, CONFIG_EBOOK_S3_BUZZER_DURATION_MS);
 #endif
 }
 
-void DeviceHAL::playTone(int frequency, int duration) {
+void DeviceHAL::playTone(int frequency, int duration)
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    if (!m_buzzerEnabled) return;
+    if (!m_buzzerEnabled)
+        return;
 
     // Cancel any pending async stop so the blocking tone controls start/stop.
     ensureBuzzerTimer();
-    if (m_buzzerStopTimer) {
+    if (m_buzzerStopTimer)
+    {
         esp_timer_stop(m_buzzerStopTimer);
     }
 
     // Set frequency
     ledc_set_freq(BUZZER_MODE, BUZZER_TIMER, frequency);
-    
+
     // Set duty cycle to 50% for audible tone
     ledc_set_duty(BUZZER_MODE, BUZZER_CHANNEL, 512);
     ledc_update_duty(BUZZER_MODE, BUZZER_CHANNEL);
-    
+
     // Wait for duration
     vTaskDelay(pdMS_TO_TICKS(duration));
-    
+
     stopTone();
 #else
     (void)frequency;
@@ -285,9 +315,11 @@ void DeviceHAL::playTone(int frequency, int duration) {
 #endif
 }
 
-void DeviceHAL::playStartupSound() {
+void DeviceHAL::playStartupSound()
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    if (!m_buzzerEnabled) return;
+    if (!m_buzzerEnabled)
+        return;
     // Ascending sequence
     playTone(1000, 100);
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -297,9 +329,11 @@ void DeviceHAL::playStartupSound() {
 #endif
 }
 
-void DeviceHAL::playShutdownSound() {
+void DeviceHAL::playShutdownSound()
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
-    if (!m_buzzerEnabled) return;
+    if (!m_buzzerEnabled)
+        return;
     // Descending sequence ("bye bye")
     playTone(2000, 100);
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -309,18 +343,21 @@ void DeviceHAL::playShutdownSound() {
 #endif
 }
 
-void DeviceHAL::setBuzzerEnabled(bool enabled) {
+void DeviceHAL::setBuzzerEnabled(bool enabled)
+{
     m_buzzerEnabled = enabled;
     ESP_LOGI(TAG, "Buzzer %s", enabled ? "enabled" : "disabled");
 }
 
-bool DeviceHAL::isBuzzerEnabled() const {
+bool DeviceHAL::isBuzzerEnabled() const
+{
     return m_buzzerEnabled;
 }
 
 // ==================== Gyroscope/IMU ====================
 
-bool DeviceHAL::hasGyroscope() const {
+bool DeviceHAL::hasGyroscope() const
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_GYROSCOPE
     return M5.Imu.isEnabled();
 #else
@@ -328,18 +365,22 @@ bool DeviceHAL::hasGyroscope() const {
 #endif
 }
 
-bool DeviceHAL::isAutoRotateEnabled() const {
+bool DeviceHAL::isAutoRotateEnabled() const
+{
     return m_autoRotateEnabled;
 }
 
-void DeviceHAL::setAutoRotateEnabled(bool enabled) {
+void DeviceHAL::setAutoRotateEnabled(bool enabled)
+{
     m_autoRotateEnabled = enabled;
     ESP_LOGI(TAG, "Auto-rotate %s", enabled ? "enabled" : "disabled");
 }
 
-bool DeviceHAL::updateOrientation() {
+bool DeviceHAL::updateOrientation()
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_GYROSCOPE
-    if (!m_autoRotateEnabled || !hasGyroscope()) {
+    if (!m_autoRotateEnabled || !hasGyroscope())
+    {
         return false;
     }
 
@@ -348,29 +389,38 @@ bool DeviceHAL::updateOrientation() {
 
     // Determine orientation based on accelerometer
     int newRotation = m_currentRotation;
-    
+
     // Swapped logic as per user request (Landscape <-> Portrait)
-    if (ay > TILT_THRESHOLD) {
+    if (ay > TILT_THRESHOLD)
+    {
         newRotation = 1; // Landscape (left)
-    } else if (ay < -TILT_THRESHOLD) {
+    }
+    else if (ay < -TILT_THRESHOLD)
+    {
         newRotation = 3; // Landscape (right)
-    } else if (ax > TILT_THRESHOLD) {
+    }
+    else if (ax > TILT_THRESHOLD)
+    {
         newRotation = 0; // Portrait (normal)
-    } else if (ax < -TILT_THRESHOLD) {
+    }
+    else if (ax < -TILT_THRESHOLD)
+    {
         newRotation = 2; // Portrait (upside down)
     }
 
     // Debounce rotation changes
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    
-    if (newRotation != m_lastStableRotation) {
+
+    if (newRotation != m_lastStableRotation)
+    {
         m_lastStableRotation = newRotation;
         m_rotationChangeTime = now;
         return false;
     }
 
-    if (newRotation != m_currentRotation && 
-        (now - m_rotationChangeTime) > ROTATION_DEBOUNCE_MS) {
+    if (newRotation != m_currentRotation &&
+        (now - m_rotationChangeTime) > ROTATION_DEBOUNCE_MS)
+    {
         setRotation(newRotation);
         return true;
     }
@@ -378,11 +428,15 @@ bool DeviceHAL::updateOrientation() {
     return false;
 }
 
-void DeviceHAL::getAcceleration(float& x, float& y, float& z) {
+void DeviceHAL::getAcceleration(float &x, float &y, float &z)
+{
 #ifdef CONFIG_EBOOK_S3_ENABLE_GYROSCOPE
-    if (M5.Imu.isEnabled()) {
+    if (M5.Imu.isEnabled())
+    {
         M5.Imu.getAccel(&x, &y, &z);
-    } else {
+    }
+    else
+    {
         x = y = z = 0.0f;
     }
 #else
@@ -392,7 +446,8 @@ void DeviceHAL::getAcceleration(float& x, float& y, float& z) {
 
 // ==================== SD Card ====================
 
-bool DeviceHAL::hasSDCardSlot() const {
+bool DeviceHAL::hasSDCardSlot() const
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     return true;
 #else
@@ -400,13 +455,16 @@ bool DeviceHAL::hasSDCardSlot() const {
 #endif
 }
 
-bool DeviceHAL::isSDCardMounted() const {
+bool DeviceHAL::isSDCardMounted() const
+{
     return m_sdCardMounted;
 }
 
-bool DeviceHAL::mountSDCard() {
+bool DeviceHAL::mountSDCard()
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
-    if (m_sdCardMounted) {
+    if (m_sdCardMounted)
+    {
         ESP_LOGI(TAG, "SD card already mounted");
         return true;
     }
@@ -449,7 +507,8 @@ bool DeviceHAL::mountSDCard() {
     bus_cfg.intr_flags = 0;
 
     esp_err_t ret = spi_bus_initialize(host_id, &bus_cfg, SPI_DMA_CH_AUTO);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE)
+    {
         ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
         return false;
     }
@@ -462,8 +521,7 @@ bool DeviceHAL::mountSDCard() {
         .format_if_mount_failed = false,
         .max_files = 10,
         .allocation_unit_size = 16 * 1024,
-        .disk_status_check_enable = false
-    };
+        .disk_status_check_enable = false};
 
     ESP_LOGI(TAG, "Attempting SD card mount...");
     ret = esp_vfs_fat_sdspi_mount(
@@ -471,30 +529,33 @@ bool DeviceHAL::mountSDCard() {
         &host,
         &slot_config,
         &mount_config,
-        &s_card
-    );
+        &s_card);
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "Failed to mount SD card: %s", esp_err_to_name(ret));
         return false;
     }
 
     m_sdCardMounted = true;
     ESP_LOGI(TAG, "SD card mounted at %s", CONFIG_EBOOK_SD_MOUNT_POINT);
-    
-    if (s_card) {
+
+    if (s_card)
+    {
         sdmmc_card_print_info(stdout, s_card);
     }
-    
+
     return true;
 #else
     return false;
 #endif
 }
 
-void DeviceHAL::unmountSDCard() {
+void DeviceHAL::unmountSDCard()
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
-    if (!m_sdCardMounted) return;
+    if (!m_sdCardMounted)
+        return;
 
     esp_vfs_fat_sdcard_unmount(CONFIG_EBOOK_SD_MOUNT_POINT, s_card);
     s_card = nullptr;
@@ -503,7 +564,8 @@ void DeviceHAL::unmountSDCard() {
 #endif
 }
 
-const char* DeviceHAL::getSDCardMountPoint() const {
+const char *DeviceHAL::getSDCardMountPoint() const
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     return CONFIG_EBOOK_SD_MOUNT_POINT;
 #else
@@ -511,13 +573,16 @@ const char* DeviceHAL::getSDCardMountPoint() const {
 #endif
 }
 
-uint64_t DeviceHAL::getSDCardTotalSize() const {
+uint64_t DeviceHAL::getSDCardTotalSize() const
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
-    if (!m_sdCardMounted) return 0;
+    if (!m_sdCardMounted)
+        return 0;
 
     uint64_t totalBytes = 0;
     uint64_t freeBytes = 0;
-    if (esp_vfs_fat_info(CONFIG_EBOOK_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
+    if (esp_vfs_fat_info(CONFIG_EBOOK_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK)
+    {
         return totalBytes;
     }
     return 0;
@@ -526,13 +591,16 @@ uint64_t DeviceHAL::getSDCardTotalSize() const {
 #endif
 }
 
-uint64_t DeviceHAL::getSDCardFreeSize() const {
+uint64_t DeviceHAL::getSDCardFreeSize() const
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
-    if (!m_sdCardMounted) return 0;
+    if (!m_sdCardMounted)
+        return 0;
 
     uint64_t totalBytes = 0;
     uint64_t freeBytes = 0;
-    if (esp_vfs_fat_info(CONFIG_EBOOK_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK) {
+    if (esp_vfs_fat_info(CONFIG_EBOOK_SD_MOUNT_POINT, &totalBytes, &freeBytes) == ESP_OK)
+    {
         return freeBytes;
     }
     return 0;
@@ -541,18 +609,22 @@ uint64_t DeviceHAL::getSDCardFreeSize() const {
 #endif
 }
 
-bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
+bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback)
+{
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
-    if (!hasSDCardSlot()) return false;
+    if (!hasSDCardSlot())
+        return false;
 
     ESP_LOGW(TAG, "Formatting SD card...");
-    
+
     // Unmount first if mounted
-    if (m_sdCardMounted) {
+    if (m_sdCardMounted)
+    {
         unmountSDCard();
     }
 
-    if (progressCallback) progressCallback(10);
+    if (progressCallback)
+        progressCallback(10);
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
@@ -581,15 +653,15 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     slot_config.host_id = host_id;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = true,  // This will format!
+        .format_if_mount_failed = true, // This will format!
         .max_files = 10,
         .allocation_unit_size = 16 * 1024,
-        .disk_status_check_enable = false
-    };
+        .disk_status_check_enable = false};
 
-    if (progressCallback) progressCallback(30);
+    if (progressCallback)
+        progressCallback(30);
 
-    sdmmc_card_t* tempCard = nullptr;
+    sdmmc_card_t *tempCard = nullptr;
 
     // Re-initialize SPI bus (it might already be initialized)
     bus_cfg.mosi_io_num = mosi;
@@ -601,22 +673,24 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     bus_cfg.flags = SPICOMMON_BUSFLAG_MASTER;
     bus_cfg.isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO;
     bus_cfg.intr_flags = 0;
-    
+
     spi_bus_initialize(host_id, &bus_cfg, SPI_DMA_CH_AUTO);
 
-    if (progressCallback) progressCallback(50);
+    if (progressCallback)
+        progressCallback(50);
 
     esp_err_t ret = esp_vfs_fat_sdspi_mount(
         CONFIG_EBOOK_SD_MOUNT_POINT,
         &host,
         &slot_config,
         &mount_config,
-        &tempCard
-    );
+        &tempCard);
 
-    if (progressCallback) progressCallback(90);
+    if (progressCallback)
+        progressCallback(90);
 
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "Failed to format/mount SD card: %s", esp_err_to_name(ret));
         return false;
     }
@@ -624,7 +698,8 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
     s_card = tempCard;
     m_sdCardMounted = true;
 
-    if (progressCallback) progressCallback(100);
+    if (progressCallback)
+        progressCallback(100);
 
     ESP_LOGI(TAG, "SD card formatted and mounted successfully");
     return true;
@@ -636,7 +711,8 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback) {
 
 // ==================== Power & Sleep ====================
 
-gpio_num_t DeviceHAL::getTouchInterruptPin() const {
+gpio_num_t DeviceHAL::getTouchInterruptPin() const
+{
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     return M5PAPERS3_TOUCH_INT_PIN;
 #else
@@ -644,7 +720,8 @@ gpio_num_t DeviceHAL::getTouchInterruptPin() const {
 #endif
 }
 
-gpio_num_t DeviceHAL::getMainPowerPin() const {
+gpio_num_t DeviceHAL::getMainPowerPin() const
+{
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     return M5PAPERS3_MAIN_PWR_PIN;
 #else
@@ -652,7 +729,8 @@ gpio_num_t DeviceHAL::getMainPowerPin() const {
 #endif
 }
 
-void DeviceHAL::enterDeepSleepWithTouchWake() {
+void DeviceHAL::enterDeepSleepWithTouchWake()
+{
     gpio_num_t touchPin = getTouchInterruptPin();
     gpio_num_t pwrPin = getMainPowerPin();
 
@@ -664,13 +742,15 @@ void DeviceHAL::enterDeepSleepWithTouchWake() {
 
     // Wait for line to go HIGH (inactive) - it is active LOW
     int retries = 0;
-    while (gpio_get_level(touchPin) == 0 && retries < 50) {
+    while (gpio_get_level(touchPin) == 0 && retries < 50)
+    {
         M5.update();
         vTaskDelay(50 / portTICK_PERIOD_MS);
         retries++;
     }
 
-    if (gpio_get_level(touchPin) == 0) {
+    if (gpio_get_level(touchPin) == 0)
+    {
         ESP_LOGW(TAG, "Touch interrupt pin still LOW after flushing");
     }
 
@@ -692,10 +772,13 @@ void DeviceHAL::enterDeepSleepWithTouchWake() {
     M5.Display.waitDisplay();
 
     ESP_LOGI(TAG, "Entering deep sleep now");
+    fflush(stdout);
+    vTaskDelay(100 / portTICK_PERIOD_MS); // allow time for logs to flush
     esp_deep_sleep_start();
 }
 
-void DeviceHAL::enterDeepSleepShutdown() {
+void DeviceHAL::enterDeepSleepShutdown()
+{
     ESP_LOGI(TAG, "Entering deep sleep shutdown on %s...", getDeviceName());
 
     gpio_num_t pwrPin = getMainPowerPin();
@@ -719,18 +802,21 @@ void DeviceHAL::enterDeepSleepShutdown() {
     // M5PaperS3 power management
     M5.Display.sleep();
     M5.Display.waitDisplay();
-    
+
     // Configure wake source for S3: Wake on button (GPIO 0)
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
 #endif
 
+    fflush(stdout);
+    vTaskDelay(100 / portTICK_PERIOD_MS); // allow time for logs to flush
     esp_deep_sleep_start();
 }
 
 // ==================== Task Pinning ====================
 
-int DeviceHAL::getRenderTaskCore() const {
+int DeviceHAL::getRenderTaskCore() const
+{
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
     return CONFIG_EBOOK_S3_RENDER_TASK_CORE;
 #else
@@ -738,7 +824,8 @@ int DeviceHAL::getRenderTaskCore() const {
 #endif
 }
 
-int DeviceHAL::getMainTaskCore() const {
+int DeviceHAL::getMainTaskCore() const
+{
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
     return CONFIG_EBOOK_S3_MAIN_TASK_CORE;
 #else
@@ -746,7 +833,8 @@ int DeviceHAL::getMainTaskCore() const {
 #endif
 }
 
-bool DeviceHAL::isDualCoreOptimized() const {
+bool DeviceHAL::isDualCoreOptimized() const
+{
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
     return true;
 #else

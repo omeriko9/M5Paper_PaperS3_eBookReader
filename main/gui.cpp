@@ -948,7 +948,12 @@ void GUI::backgroundIndexerTaskLoop()
     {
         waitForBookOpen();
         ESP_LOGI(TAG, "BgIndexer: Loading book index...");
-        bookIndex.init(false, nullptr);
+        bookIndex.init(false, [this](int current, int total, const char *msg) {
+            if (currentState == AppState::LIBRARY || currentState == AppState::MAIN_MENU) {
+                needsRedraw = true;
+            }
+            esp_task_wdt_reset();
+        });
         bookIndexReady = true;
 
         if (pendingBookIndexSync && pendingBookId > 0)

@@ -29,6 +29,7 @@ public:
     
     // Background scanning
     bool scanForNewBooks(ProgressCallback callback = nullptr);
+    bool validateBooks(); // Check if books still exist
 
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);
@@ -55,7 +56,7 @@ public:
 private:
     std::vector<BookEntry> books;
     SemaphoreHandle_t mutex = NULL;
-    void load();
+    void load(ProgressCallback callback = nullptr);
     void save();
     int getNextId();
     void checkMetricsExistence();

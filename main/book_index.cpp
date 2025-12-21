@@ -20,18 +20,55 @@ BookIndex::BookIndex() {
 bool BookIndex::init(bool fastMode, ProgressCallback callback)
 {
     if (!mutex) mutex = xSemaphoreCreateRecursiveMutex();
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     
     // Only load the index from disk. Scanning is now done in background.
-    load();
+    // We pass the callback to load() to allow incremental updates
+    load(callback);
     
-    xSemaphoreGiveRecursive(mutex);
     return false; // No new books found during init
+}
+
+bool BookIndex::validateBooks()
+{
+    // Get a copy of books to check without holding the lock for too long
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    std::vector<BookEntry> booksCopy = books;
+    xSemaphoreGiveRecursive(mutex);
+
+    std::vector<int> idsToRemove;
+    for (const auto& book : booksCopy) {
+        struct stat st;
+        if (stat(book.path.c_str(), &st) != 0) {
+            ESP_LOGW(TAG, "Book file missing: %s", book.path.c_str());
+            idsToRemove.push_back(book.id);
+        }
+        // Yield to keep system responsive
+        vTaskDelay(1);
+    }
+
+    if (!idsToRemove.empty()) {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        bool changed = false;
+        for (int id : idsToRemove) {
+            auto it = std::remove_if(books.begin(), books.end(), [id](const BookEntry &b) { return b.id == id; });
+            if (it != books.end()) {
+                books.erase(it, books.end());
+                changed = true;
+            }
+        }
+        if (changed) {
+            save();
+            xSemaphoreGiveRecursive(mutex);
+            return true;
+        }
+        xSemaphoreGiveRecursive(mutex);
+    }
+    return false;
 }
 
 bool BookIndex::scanForNewBooks(ProgressCallback callback)
 {
-    bool foundNewBooks = false;
+    bool foundNewBooks = validateBooks();
     foundNewBooks |= scanDirectory("/spiffs", callback);
     
     DeviceHAL& hal = DeviceHAL::getInstance();
@@ -379,21 +416,24 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     return foundNewBooks;
 }
 
-void BookIndex::load()
+void BookIndex::load(ProgressCallback callback)
 {
-    // Private helper, assumes mutex held
+    // Clear existing books safely
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     books.clear();
+    xSemaphoreGiveRecursive(mutex);
+
     FILE *f = fopen(INDEX_FILE, "r");
     if (!f)
     {
         ESP_LOGW(TAG, "Index file not found, creating new");
-        // Don't draw here, it's not thread safe if called from background task
-        // M5.Display.fillScreen(WHITE);
-        // ...
         return;
     }
 
     char line[512]; // Increased buffer size
+    std::vector<BookEntry> batch;
+    int count = 0;
+
     while (fgets(line, sizeof(line), f))
     {
         esp_task_wdt_reset();
@@ -464,19 +504,45 @@ void BookIndex::load()
             if (parts.size() >= 11)
                 lastFontSize = atof(parts[10].c_str());
 
-            // Verify file exists
-            struct stat st;
-            if (stat(path.c_str(), &st) == 0)
+            // Verify file exists - REMOVED for speed. Cleanup happens in background scan.
+            // struct stat st;
+            // if (stat(path.c_str(), &st) == 0)
             {
-                books.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite, lastFont, lastFontSize});
-                // log the book
-                ESP_LOGI(TAG, "Loaded book: %s by %s", title.c_str(), author.c_str());
+                batch.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite, lastFont, lastFontSize});
+                count++;
+                // log the book - REMOVED for speed
+                // ESP_LOGI(TAG, "Loaded book: %s by %s", title.c_str(), author.c_str());
             }
+        }
+
+        // Batch update
+        if (batch.size() >= 50) {
+            xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+            books.insert(books.end(), batch.begin(), batch.end());
+            xSemaphoreGiveRecursive(mutex);
+            batch.clear();
+            
+            if (callback) {
+                callback(count, -1, "Loading books...");
+            }
+            
+            // Yield to let UI task run and avoid WDT on other tasks waiting for mutex
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+    }
+
+    // Add remaining
+    if (!batch.empty()) {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        books.insert(books.end(), batch.begin(), batch.end());
+        xSemaphoreGiveRecursive(mutex);
+        if (callback) {
+            callback(count, -1, "Loading books...");
         }
     }
 
     fclose(f);
-    ESP_LOGI(TAG, "Loaded %d books", books.size());
+    ESP_LOGI(TAG, "Loaded %d books", count);
 }
 
 static std::string sanitize(const std::string& s) {
