@@ -945,7 +945,6 @@ static esp_err_t api_favorite_handler(httpd_req_t *req)
         char param[32];
         if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
             int id = atoi(param);
-            BookIndex bookIndex;// = BookIndex:: getInstance();
             bool currentFav = bookIndex.isFavorite(id);
             bookIndex.setFavorite(id, !currentFav);
             // Return new state

@@ -109,17 +109,17 @@ void syncRtcFromNtp()
     }
 
     time(&now);
-    localtime_r(&now, &timeinfo);
+    gmtime_r(&now, &timeinfo);
 
     ESP_LOGI(TAG, "NTP Sync Debug: UTC Time: %ld", now);
-    ESP_LOGI(TAG, "NTP Sync Debug: Local Time: %04d-%02d-%02d %02d:%02d:%02d",
+    ESP_LOGI(TAG, "NTP Sync Debug: UTC Time (for RTC): %04d-%02d-%02d %02d:%02d:%02d",
              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 
     if (timeinfo.tm_year > (2020 - 1900))
     {
         M5.Rtc.setDateTime(&timeinfo);
-        ESP_LOGI(TAG, "RTC synced from NTP: %04d-%02d-%02d %02d:%02d:%02d",
+        ESP_LOGI(TAG, "RTC synced from NTP (UTC): %04d-%02d-%02d %02d:%02d:%02d",
                  timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     }

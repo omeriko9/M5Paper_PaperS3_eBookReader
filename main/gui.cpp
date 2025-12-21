@@ -65,7 +65,8 @@ struct SettingsLayout
     int row2Y;
     int row3Y;
     int row4Y;
-    int row5Y; // For favorite toggle
+    int row5Y;
+    int row6Y; // For favorite toggle
     int closeY;
     int buttonGap;
     int fontButtonW;
@@ -84,7 +85,7 @@ static SettingsLayout computeSettingsLayout()
 {
     SettingsLayout l{};
     l.panelWidth = M5.Display.width();
-    l.panelHeight = M5.Display.height() / 2;
+    l.panelHeight = M5.Display.height() * 0.6; // Increased to fit more rows
     l.panelTop = M5.Display.height() - l.panelHeight;
     l.padding = 30;
     l.rowHeight = 50; // Reduced to fit more rows
@@ -93,7 +94,8 @@ static SettingsLayout computeSettingsLayout()
     l.row2Y = l.row1Y + l.rowHeight;
     l.row3Y = l.row2Y + l.rowHeight;
     l.row4Y = l.row3Y + l.rowHeight;
-    l.row5Y = l.row4Y + l.rowHeight; // Favorite row
+    l.row5Y = l.row4Y + l.rowHeight;
+    l.row6Y = l.row5Y + l.rowHeight; // Favorite row
     l.closeY = l.panelTop + l.panelHeight - 60;
     l.buttonGap = 20;
     l.fontButtonW = 80;
@@ -3016,6 +3018,16 @@ void GUI::drawSettings()
     drawButton(layout.fontMinusX, sleepButtonY, layout.fontButtonW, layout.fontButtonH, "-", TFT_WHITE, TFT_BLACK);
     drawButton(layout.fontPlusX, sleepButtonY, layout.fontButtonW, layout.fontButtonH, "+", TFT_WHITE, TFT_BLACK);
 
+    // --- Favorite ---
+    int row6CenterY = layout.row6Y + layout.rowHeight / 2;
+    target->drawString("Favorite", layout.padding, row6CenterY + yOffset);
+    bool isFav = bookIndex.isFavorite(lastBookId);
+    int favButtonY = layout.row6Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    uint16_t favFill = isFav ? TFT_BLACK : TFT_WHITE;
+    uint16_t favText = isFav ? TFT_WHITE : TFT_BLACK;
+    drawButton(layout.toggleButtonX, favButtonY, layout.toggleButtonW, layout.fontButtonH,
+               isFav ? "YES" : "NO", favFill, favText);
+
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
     drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_WHITE, TFT_BLACK);
@@ -4226,6 +4238,13 @@ void GUI::handleTouch()
                 {
                     if (lightSleepMinutes < 60) lightSleepMinutes++;
                     saveSettings();
+                    settingsNeedsUnderlayRefresh = true;
+                }
+                // Favorite Toggle
+                else if (t.y >= layout.row6Y && t.y <= layout.row6Y + layout.rowHeight && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
+                {
+                    bool isFav = bookIndex.isFavorite(lastBookId);
+                    bookIndex.setFavorite(lastBookId, !isFav);
                     settingsNeedsUnderlayRefresh = true;
                 }
                 // Close
