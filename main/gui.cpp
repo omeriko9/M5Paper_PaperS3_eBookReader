@@ -28,6 +28,7 @@
 #include "sdkconfig.h"
 #include <ctime>
 #include <random>
+#include <sys/stat.h>
 
 // Image placeholder character (U+E000 in UTF-8)
 static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
@@ -2684,21 +2685,67 @@ void GUI::drawMainMenu()
         const char *label;
         const char *sublabel;
         bool enabled;
+        const char *icon;
     };
 
     // Check if we have a last book
     bool hasLastBook = (lastBookId > 0 && !lastBookTitle.empty());
 
     MenuButton buttons[6] = {
-        {"Last Book", hasLastBook ? lastBookTitle.c_str() : "No book yet", hasLastBook},
-        {"Books", "Library", true},
-        {"WiFi", "Network", true},
-        {"Settings", "Options", true},
-        {"Favorites", "Starred", true},
-        {"More", "Games", true} // Games and extras
+        {"Last Book", hasLastBook ? lastBookTitle.c_str() : "No book yet", hasLastBook, "last-book-gray.png"},
+        {"Books", "Library", true, "books-gray.png"},
+        {"WiFi", "Network", true, "wifi-gray.png"},
+        {"Settings", "Options", true, "settings-gray.png"},
+        {"Favorites", "Starred", true, "favorite-gray.png"},
+        {"More", "Games", true, "games-gray.png"} // Games and extras
     };
 
     target->startWrite();
+
+    const float labelTextSize = 2.4f;
+    const float sublabelTextSize = 1.5f;
+    ImageHandler &imgHandler = ImageHandler::getInstance();
+
+    struct MenuIconDraw
+    {
+        std::string path;
+        int x;
+        int y;
+        int maxW;
+        int maxH;
+    };
+    std::vector<MenuIconDraw> deferredIcons;
+
+    auto drawMenuIcon = [&](LovyanGFX *iconTarget, const std::string &iconPath, int x, int y, int maxW, int maxH)
+    {
+        if (maxW <= 0 || maxH <= 0)
+        {
+            return;
+        }
+        struct stat st;
+        if (stat(iconPath.c_str(), &st) != 0)
+        {
+            return;
+        }
+        FILE *f = fopen(iconPath.c_str(), "rb");
+        if (!f)
+        {
+            return;
+        }
+        size_t len = st.st_size;
+        uint8_t *buf = (uint8_t *)malloc(len);
+        if (!buf)
+        {
+            fclose(f);
+            return;
+        }
+        if (fread(buf, 1, len, f) == len)
+        {
+            imgHandler.decodeAndRender(buf, len, iconTarget, x, y, maxW, maxH, ImageDisplayMode::INLINE);
+        }
+        free(buf);
+        fclose(f);
+    };
 
     for (int i = 0; i < 6; i++)
     {
@@ -2721,34 +2768,62 @@ void GUI::drawMainMenu()
         target->drawRect(bx, by, btnW, btnH, borderColor);
         target->drawRect(bx + 1, by + 1, btnW - 2, btnH - 2, borderColor); // Double border
 
-        // Draw label (larger font)
-        target->setTextDatum(textdatum_t::middle_center);
-        target->setTextSize(2.0f);
+        // Draw label (larger font, top aligned)
+        target->setTextDatum(textdatum_t::top_center);
+        target->setTextSize(labelTextSize);
         target->setTextColor(buttons[i].enabled ? TFT_BLACK : TFT_DARKGREY, bgColor);
 
-        int textY = by + btnH / 2;
-        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0)
-        {
-            textY -= 15; // Move up if there's a sublabel
-        }
+        int textY = by + 12; // Top margin
         target->drawString(buttons[i].label, bx + btnW / 2, textY);
 
-        // Draw sublabel (smaller font) with mixed font support for Hebrew
-        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0)
+        // Draw Icon
+        if (buttons[i].icon)
         {
-            target->setTextSize(1.2f);
-            target->setTextColor(buttons[i].enabled ? TFT_DARKGREY : TFT_LIGHTGREY, bgColor);
+            std::string iconPath = "/spiffs/icons/";
+            iconPath += buttons[i].icon;
 
-            std::string sublabel = buttons[i].sublabel;
-            if (i == 0 && hasLastBook)
+            int labelBottom = textY + target->fontHeight();
+            target->setTextSize(sublabelTextSize);
+            int sublabelHeight = target->fontHeight();
+            int sublabelBottom = by + btnH - 8;
+            int sublabelTop = sublabelBottom - sublabelHeight;
+
+            int iconTop = labelBottom + 6;
+            int iconBottom = sublabelTop - 6;
+            int iconH = iconBottom - iconTop;
+            int iconW = btnW - 20;
+            int iconX = bx + 10;
+
+            if (sprite)
             {
-                // For last book, use mixed font support (book title may be Hebrew)
-                drawStringMixed(sublabel, bx + btnW / 2 - target->textWidth(sublabel.c_str()) / 2,
-                                by + btnH / 2 + 20, sprite, 1.0f, false, false);
+                deferredIcons.push_back({iconPath, iconX, iconTop, iconW, iconH});
             }
             else
             {
-                target->drawString(sublabel.c_str(), bx + btnW / 2, by + btnH / 2 + 25);
+                drawMenuIcon(target, iconPath, iconX, iconTop, iconW, iconH);
+            }
+        }
+
+        // Draw sublabel (smaller font) at bottom
+        if (buttons[i].sublabel && strlen(buttons[i].sublabel) > 0)
+        {
+            target->setTextSize(sublabelTextSize);
+            target->setTextColor(buttons[i].enabled ? TFT_DARKGREY : TFT_LIGHTGREY, bgColor);
+            target->setTextDatum(textdatum_t::bottom_center);
+
+            std::string sublabel = buttons[i].sublabel;
+            int subY = by + btnH - 10;
+
+            if (i == 0 && hasLastBook)
+            {
+                // For last book, use mixed font support (book title may be Hebrew)
+                int textW = target->textWidth(sublabel.c_str());
+                drawStringMixed(sublabel, bx + btnW / 2 - textW / 2,
+                                subY - 20, sprite, 1.3f, false, false);
+            }
+            else
+            {
+                target->drawString(sublabel.c_str(), bx + btnW / 2, subY);
             }
         }
     }
@@ -2759,6 +2834,14 @@ void GUI::drawMainMenu()
     if (sprite)
     {
         sprite->pushSprite(&M5.Display, 0, 0);
+    }
+
+    if (sprite && !deferredIcons.empty())
+    {
+        for (const auto &icon : deferredIcons)
+        {
+            drawMenuIcon(&M5.Display, icon.path, icon.x, icon.y, icon.maxW, icon.maxH);
+        }
     }
 
     M5.Display.display();
@@ -4962,6 +5045,30 @@ bool GUI::loadLastBook()
         char fallback[32];
         snprintf(fallback, sizeof(fallback), "/spiffs/%ld.epub", lastId);
         lastPath = fallback;
+    }
+
+    // Check if file exists
+    struct stat st;
+    if (!lastPath.empty() && stat(lastPath.c_str(), &st) != 0) {
+        ESP_LOGW(TAG, "Last book file not found: %s", lastPath.c_str());
+        // Try to recover path from ID if index is ready
+        if (bookIndexReady && lastId > 0) {
+            BookEntry entry = bookIndex.getBook(lastId);
+            if (entry.id > 0 && !entry.path.empty()) {
+                std::string newPath = entry.path;
+                if (stat(newPath.c_str(), &st) == 0) {
+                    ESP_LOGI(TAG, "Recovered path from index: %s", newPath.c_str());
+                    lastPath = newPath;
+                } else {
+                    lastPath = ""; // Invalid
+                }
+            }
+        } else {
+            // If index not ready, we can't recover yet. 
+            // But we shouldn't try to load a non-existent file.
+            // We'll leave it empty so we don't crash/fail in loader.
+            lastPath = "";
+        }
     }
 
     // Try to sync ID with bookIndex if available

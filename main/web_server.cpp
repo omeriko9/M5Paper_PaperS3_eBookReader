@@ -92,522 +92,656 @@ function saveWifi() {
 
 static const char* MANAGER_HTML = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>M5Paper Library</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background: #f2f2f7; color: #333; }
-.card { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-h2 { margin-top: 0; color: #1c1c1e; }
-ul { list-style: none; padding: 0; }
-li { padding: 12px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-li:last-child { border-bottom: none; }
-button { background: #007aff; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
-button:disabled { opacity: 0.5; }
-button.del { background: #ff3b30; padding: 6px 12px; font-size: 14px; }
-button.read { background: #34c759; padding: 6px 12px; font-size: 14px; margin-right: 8px; }
-button.fav { background: transparent; padding: 6px 12px; font-size: 20px; margin-right: 8px; border: none; cursor: pointer; }
-input { padding: 12px; border: 1px solid #d1d1d6; border-radius: 8px; width: 100%; box-sizing: border-box; margin-bottom: 15px; font-size: 16px; }
-.progress { height: 4px; background: #eee; margin-top: 10px; border-radius: 2px; overflow: hidden; display: none; }
-.bar { height: 100%; background: #34c759; width: 0%; transition: width 0.2s; }
-.stat { font-size: 14px; color: #666; margin-bottom: 10px; }
-#drop-zone.highlight { background: #f0f8ff; border-color: #007aff; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OKeysh - E-Book Reader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --warning: #f59e0b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+        
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { font-size: 24px; font-weight: 700; color: var(--primary); }
+        
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; overflow-x: auto; padding-bottom: 5px; }
+        .tab { padding: 8px 16px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 20px; cursor: pointer; font-weight: 500; white-space: nowrap; transition: all 0.2s; }
+        .tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+        
+        .section { display: none; }
+        .section.active { display: block; }
+        
+        .card { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .card h2 { font-size: 18px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        
+        .btn { background: var(--primary); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s; }
+        .btn:hover { background: var(--primary-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn.danger { background: var(--danger); }
+        .btn.success { background: var(--success); }
+        .btn.outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        .btn.sm { padding: 4px 8px; font-size: 14px; }
+        
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: var(--text-secondary); }
+        .form-row { display: flex; gap: 10px; align-items: center; }
+        
+        input[type="text"], input[type="number"], input[type="password"], select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 16px; }
+        input[type="checkbox"] { width: auto; margin-right: 8px; }
+        
+        .book-list { list-style: none; }
+        .book-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+        .book-item:last-child { border-bottom: none; }
+        .book-info { flex: 1; min-width: 0; padding-right: 10px; }
+        .book-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .book-author { font-size: 14px; color: var(--text-secondary); }
+        .book-actions { display: flex; gap: 5px; }
+        
+        .drop-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 30px; text-align: center; transition: all 0.2s; cursor: pointer; }
+        .drop-zone.highlight { border-color: var(--primary); background: #eff6ff; }
+        
+        .progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+        .progress-fill { height: 100%; background: var(--success); width: 0%; transition: width 0.2s; }
+        
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; }
+        .stat-box { background: #f1f5f9; padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-val { font-size: 20px; font-weight: 700; color: var(--primary); }
+        .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 5px; }
+
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 10px 20px; border-radius: 20px; font-size: 14px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 1000; }
+        .toast.show { opacity: 1; }
+
+        @media (max-width: 600px) {
+            .book-item { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .book-actions { width: 100%; justify-content: flex-end; }
+        }
+    </style>
 </head>
 <body>
-<div class="card">
-  <h2>Settings</h2>
-  <div class="stat">Internal Free Space: <span id="freeSpace">Loading...</span></div>
-  <div class="stat" id="sdFreeMain" style="display: none;">SD Free Space: <span id="sdFreeVal">Loading...</span></div>
-  <div style="margin-bottom: 15px;">
-    <label>Font Size: <span id="sizeVal"></span></label>
-    <div style="display: flex; gap: 10px; margin-top: 5px;">
-        <button onclick="changeSize(-0.1)">-</button>
-        <input type="number" id="customSize" step="0.1" style="width: 80px; margin:0;" onchange="setCustomSize()">
-        <button onclick="changeSize(0.1)">+</button>
-    </div>
-  </div>
-  <div style="margin-bottom: 15px;">
-    <label>Line Spacing: <span id="lineSpacingVal"></span></label>
-    <div style="display: flex; gap: 10px; margin-top: 5px;">
-        <button onclick="changeLineSpacing(-0.1)">-</button>
-        <input type="number" id="customLineSpacing" step="0.1" style="width: 80px; margin:0;" onchange="setCustomLineSpacing()">
-        <button onclick="changeLineSpacing(0.1)">+</button>
-    </div>
-  </div>
-  <div>
-    <label>Font Family:</label>
-    <select id="fontSel" onchange="changeFont()" style="width: 100%; padding: 10px; margin-top: 5px; border-radius: 8px; border: 1px solid #d1d1d6;">
-        <option value="Default">Default</option>
-        <option value="Hebrew">Hebrew</option>
-        <option value="Roboto">Roboto</option>
-    </select>
-  </div>
-  <div style="margin-top: 15px;">
-    <label style="display: flex; align-items: center; gap: 10px;">
-        <input type="checkbox" id="showImages" onchange="toggleShowImages()" style="width: auto; margin: 0;">
-        Show Images
-    </label>
-  </div>
-  <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-    <label>Jump to:</label>
-    <div style="display: flex; gap: 10px; margin-top: 5px;">
-        <input type="number" id="jumpCh" placeholder="Chapter #" style="width: 100px; margin:0;">
-        <input type="number" id="jumpPct" placeholder="%" style="width: 80px; margin:0;">
-        <button onclick="jump()">Go</button>
-    </div>
-  </div>
-    <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-    <label>Timezone (POSIX String):</label>
-    <div style="display: flex; gap: 10px; margin-top: 5px;">
-        <input id="tzStr" placeholder="e.g. EST5EDT,M3.2.0,M11.1.0" style="margin:0;">
-        <button onclick="detectTZ()" style="width: auto;">Auto-Detect</button>
-    </div>
-    <div style="font-size: 12px; color: #666; margin-top: 5px;">
-        Note: Auto-detect gives IANA name (e.g. Asia/Jerusalem). ESP32 prefers POSIX strings for correct DST. 
-        <a href="https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv" target="_blank">Lookup POSIX TZ</a>
-    </div>
-    <button onclick="syncTime()" style="margin-top: 10px;">Sync Time (NTP)</button>
-  </div>
-</div>
+    <div class="container">
+        <header>
+            <h1>OKeysh</h1>
+            <div id="device-name" style="font-size: 14px; color: var(--text-secondary);">Connecting...</div>
+        </header>
 
-<!-- M5PaperS3 Features Section (hidden on M5Paper) -->
-<div class="card" id="s3-features" style="display: none;">
-  <h2>M5PaperS3 Features</h2>
-  <div class="stat">Device: <span id="deviceName">Loading...</span></div>
-  
-  <div style="margin-bottom: 15px;">
-    <label style="display: flex; align-items: center; gap: 10px;">
-      <input type="checkbox" id="buzzerEnabled" onchange="toggleBuzzer()" style="width: auto;">
-      <span>Enable Touch Sound (Buzzer)</span>
-    </label>
-  </div>
-  
-  <div style="margin-bottom: 15px;">
-    <label style="display: flex; align-items: center; gap: 10px;">
-      <input type="checkbox" id="autoRotate" onchange="toggleAutoRotate()" style="width: auto;">
-      <span>Auto-Rotate (Gyroscope)</span>
-    </label>
-  </div>
-  
-  <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-    <h3 style="margin-top: 0; font-size: 16px;">SD Card</h3>
-    <div class="stat">SD Card Status: <span id="sdStatus">Checking...</span></div>
-    <div class="stat" id="sdSizeInfo" style="display: none;">SD Card Size: <span id="sdSize">-</span></div>
-    <div class="stat" id="sdFreeInfo" style="display: none;">SD Free Space: <span id="sdFree">-</span></div>
-    <button onclick="formatSD()" class="del" style="margin-top: 10px;">Format SD Card</button>
-    <p style="font-size: 12px; color: #666; margin-top: 5px;">Warning: This will erase all data on the SD card!</p>
-  </div>
-</div>
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('library')">Library</div>
+            <div class="tab" onclick="switchTab('settings')">Settings</div>
+            <div class="tab" onclick="switchTab('system')">System</div>
+        </div>
 
-<div class="card">
-  <h2>Library</h2>
-  
-  <div id="drop-zone" style="border: 2px dashed #ccc; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; transition: all 0.2s;">
-    <p style="margin: 0 0 10px 0; color: #666; font-weight: 500;">Drag & Drop EPUB files here</p>
-    <p style="margin: 0 0 10px 0; color: #999; font-size: 12px;">or</p>
-    <input type="file" id="upfile" accept=".epub" multiple style="display: none;">
-    <button onclick="document.getElementById('upfile').click()" style="width: auto; margin-bottom: 15px;">Select Files</button>
-    
-    <div style="text-align: center;">
-        <input type="checkbox" id="stripImg" checked style="width: auto; vertical-align: middle;"> 
-        <label for="stripImg" style="vertical-align: middle;">Strip Images (Save Space)</label>
+        <!-- Library Section -->
+        <div id="library" class="section active">
+            <div class="card">
+                <div class="drop-zone" id="drop-zone" onclick="document.getElementById('upfile').click()">
+                    <p style="font-weight: 500; margin-bottom: 5px;">Upload Books</p>
+                    <p style="font-size: 12px; color: var(--text-secondary);">Drag & drop EPUBs here or click to select</p>
+                    <input type="file" id="upfile" accept=".epub" multiple style="display: none;">
+                </div>
+                <div style="margin-top: 10px; display: flex; align-items: center; justify-content: center;">
+                    <input type="checkbox" id="stripImg" checked>
+                    <label for="stripImg" style="font-size: 14px;">Strip Images (Save Space)</label>
+                </div>
+                <div id="upload-queue" style="margin-top: 15px;"></div>
+            </div>
+
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h2>My Books</h2>
+                    <button class="btn sm outline" onclick="fetchList()">Refresh</button>
+                </div>
+                <ul id="book-list" class="book-list">
+                    <li style="text-align: center; padding: 20px; color: var(--text-secondary);">Loading...</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Settings Section -->
+        <div id="settings" class="section">
+            <div class="card">
+                <h2>Reading Preferences</h2>
+                <div class="form-group">
+                    <label>Font Size: <span id="sizeVal">1.0</span></label>
+                    <div class="form-row">
+                        <button class="btn sm outline" onclick="changeSize(-0.1)">-</button>
+                        <input type="number" id="customSize" step="0.1" onchange="setCustomSize()">
+                        <button class="btn sm outline" onclick="changeSize(0.1)">+</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Line Spacing: <span id="lineSpacingVal">1.4</span></label>
+                    <div class="form-row">
+                        <button class="btn sm outline" onclick="changeLineSpacing(-0.1)">-</button>
+                        <input type="number" id="customLineSpacing" step="0.1" onchange="setCustomLineSpacing()">
+                        <button class="btn sm outline" onclick="changeLineSpacing(0.1)">+</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Font Family</label>
+                    <select id="fontSel" onchange="changeFont()">
+                        <option value="Default">Default</option>
+                        <option value="Hebrew">Hebrew</option>
+                        <option value="Roboto">Roboto</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="showImages" onchange="toggleShowImages()">
+                        Show Images in Books
+                    </label>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Navigation</h2>
+                <div class="form-group">
+                    <label>Jump to Chapter / Percentage</label>
+                    <div class="form-row">
+                        <input type="number" id="jumpCh" placeholder="Chapter #">
+                        <input type="number" id="jumpPct" placeholder="%">
+                        <button class="btn" onclick="jump()">Go</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" id="s3-features" style="display: none;">
+                <h2>Device Features (S3)</h2>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="buzzerEnabled" onchange="toggleBuzzer()">
+                        Touch Sound (Buzzer)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="autoRotate" onchange="toggleAutoRotate()">
+                        Auto-Rotate Screen
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Section -->
+        <div id="system" class="section">
+            <div class="card">
+                <h2>Storage</h2>
+                <div class="stat-grid">
+                    <div class="stat-box">
+                        <div class="stat-val" id="freeSpace">-</div>
+                        <div class="stat-label">Internal Free</div>
+                    </div>
+                    <div class="stat-box" id="sd-box" style="display: none;">
+                        <div class="stat-val" id="sdFree">-</div>
+                        <div class="stat-label">SD Free</div>
+                    </div>
+                </div>
+                <div id="sd-controls" style="margin-top: 20px; display: none; border-top: 1px solid var(--border); padding-top: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>SD Card Status:</strong> <span id="sdStatus">Checking...</span>
+                        </div>
+                        <button class="btn danger sm" onclick="formatSD()">Format SD Card</button>
+                    </div>
+                    <p style="font-size: 12px; color: var(--danger); margin-top: 5px;">Warning: Formatting erases all data!</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Time & Date</h2>
+                <div class="form-group">
+                    <label>Timezone (POSIX)</label>
+                    <div class="form-row">
+                        <input id="tzStr" placeholder="e.g. IST-2IDT...">
+                        <button class="btn outline" onclick="detectTZ()">Auto-Detect</button>
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">
+                        <a href="https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv" target="_blank" style="color: var(--primary);">Lookup POSIX TZ</a>
+                    </div>
+                </div>
+                <button class="btn" onclick="syncTime()">Sync Time (NTP)</button>
+            </div>
+
+            <div class="card">
+                <h2>System Update</h2>
+                <div class="form-group">
+                    <label>Update Web Interface (index.html)</label>
+                    <div class="form-row">
+                        <input type="file" id="uiFile" accept=".html">
+                        <button class="btn" onclick="uploadUI()">Update UI</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-    
-    <div id="upload-queue" style="margin-top: 15px; text-align: left;"></div>
-  </div>
 
-  <ul id="list">Loading...</ul>
-</div>
+    <div id="toast" class="toast"></div>
 
-<script>
-let currentSize = 1.0;
-let currentLineSpacing = 1.4;
-let isM5PaperS3 = false;
+    <script>
+        // --- State ---
+        let currentSize = 1.0;
+        let currentLineSpacing = 1.4;
+        let isM5PaperS3 = false;
 
-function fetchSettings() {
-    fetch('/api/settings').then(r => r.json()).then(s => {
-        currentSize = s.fontSize;
-        document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
-        document.getElementById('customSize').value = currentSize.toFixed(1);
-        document.getElementById('fontSel').value = s.font;
-        if(s.lineSpacing) {
-            currentLineSpacing = s.lineSpacing;
+        // --- UI Logic ---
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            
+            document.querySelector(`.tab[onclick="switchTab('${tabId}')"]`).classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+
+        function showToast(msg, duration=3000) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), duration);
+        }
+
+        // --- API Calls ---
+        function fetchSettings() {
+            fetch('/api/settings').then(r => r.json()).then(s => {
+                currentSize = s.fontSize;
+                document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
+                document.getElementById('customSize').value = currentSize.toFixed(1);
+                document.getElementById('fontSel').value = s.font;
+                
+                if(s.lineSpacing) {
+                    currentLineSpacing = s.lineSpacing;
+                    document.getElementById('lineSpacingVal').innerText = currentLineSpacing.toFixed(1);
+                    document.getElementById('customLineSpacing').value = currentLineSpacing.toFixed(1);
+                }
+                
+                if(s.freeSpace) {
+                    document.getElementById('freeSpace').innerText = (s.freeSpace / 1024 / 1024).toFixed(2) + ' MB';
+                }
+                
+                if(s.sdFreeSpace) {
+                    document.getElementById('sd-box').style.display = 'block';
+                    document.getElementById('sdFree').innerText = (s.sdFreeSpace / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+                }
+                
+                if(s.timezone) document.getElementById('tzStr').value = s.timezone;
+                if(typeof s.showImages !== 'undefined') document.getElementById('showImages').checked = s.showImages;
+                
+                if(s.deviceName) {
+                    document.getElementById('device-name').innerText = s.deviceName;
+                    isM5PaperS3 = s.deviceName === 'M5PaperS3';
+                    if(isM5PaperS3) {
+                        document.getElementById('s3-features').style.display = 'block';
+                        document.getElementById('sd-controls').style.display = 'block';
+                        if(typeof s.buzzerEnabled !== 'undefined') document.getElementById('buzzerEnabled').checked = s.buzzerEnabled;
+                        if(typeof s.autoRotate !== 'undefined') document.getElementById('autoRotate').checked = s.autoRotate;
+                        fetchSDStatus();
+                    }
+                }
+            }).catch(e => console.error("Settings error", e));
+        }
+
+        function fetchList() {
+            fetch('/api/list').then(r => r.json()).then(files => {
+                const list = document.getElementById('book-list');
+                list.innerHTML = '';
+                if(files.length === 0) {
+                    list.innerHTML = '<li style="text-align: center; padding: 20px; color: var(--text-secondary);">No books found</li>';
+                    return;
+                }
+                files.forEach(f => {
+                    const li = document.createElement('li');
+                    li.className = 'book-item';
+                    const favClass = f.favorite ? 'warning' : 'outline';
+                    const favText = f.favorite ? '★' : '☆';
+                    
+                    li.innerHTML = `
+                        <div class="book-info">
+                            <div class="book-title">${f.name}</div>
+                            <div class="book-author">${f.author || 'Unknown Author'}</div>
+                        </div>
+                        <div class="book-actions">
+                            <button class="btn sm ${favClass}" onclick="toggleFav(${f.id}, this)" title="Favorite">${favText}</button>
+                            <button class="btn sm success" onclick="readBook(${f.id})">Read</button>
+                            <button class="btn sm danger" onclick="del(${f.id})">Delete</button>
+                        </div>
+                    `;
+                    list.appendChild(li);
+                });
+            }).catch(e => {
+                document.getElementById('book-list').innerHTML = '<li style="color: var(--danger); text-align: center;">Error loading books</li>';
+            });
+        }
+
+        function fetchSDStatus() {
+            fetch('/api/sd_status').then(r => r.json()).then(s => {
+                const statusEl = document.getElementById('sdStatus');
+                if(s.mounted) {
+                    statusEl.innerText = 'Mounted';
+                    statusEl.style.color = 'var(--success)';
+                    document.getElementById('sd-box').style.display = 'block';
+                    document.getElementById('sdFree').innerText = (s.freeSize / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+                } else {
+                    statusEl.innerText = s.available ? 'Not Mounted' : 'Not Available';
+                    statusEl.style.color = 'var(--warning)';
+                }
+            });
+        }
+
+        // --- Actions ---
+        function toggleFav(id, btn) {
+            fetch('/api/favorite?id=' + id, {method: 'POST'})
+                .then(r => r.json())
+                .then(result => {
+                    if(result.favorite) {
+                        btn.innerText = '★';
+                        btn.classList.remove('outline');
+                        btn.classList.add('warning');
+                    } else {
+                        btn.innerText = '☆';
+                        btn.classList.remove('warning');
+                        btn.classList.add('outline');
+                    }
+                })
+                .catch(() => showToast('Error toggling favorite'));
+        }
+
+        function del(id) {
+            if(!confirm('Delete this book?')) return;
+            fetch('/api/delete?id=' + id, {method: 'POST'})
+                .then(() => {
+                    showToast('Book deleted');
+                    fetchList();
+                    fetchSettings();
+                })
+                .catch(() => showToast('Error deleting book'));
+        }
+
+        function readBook(id) {
+            fetch('/api/open?id=' + id, {method: 'POST'})
+                .then(r => {
+                    if (!r.ok) throw new Error('Failed');
+                    showToast('Opening book on device...');
+                })
+                .catch(() => showToast('Failed to open book'));
+        }
+
+        function jump() {
+            const ch = document.getElementById('jumpCh').value;
+            const pct = document.getElementById('jumpPct').value;
+            let url = '/jump?';
+            if(ch) url += 'ch=' + ch + '&';
+            if(pct) url += 'pct=' + pct;
+            
+            fetch(url).then(r => r.json()).then(obj => {
+                if (obj.applied) {
+                    showToast(obj.action === 'percent' ? `Jumped to ${obj.percent}%` : `Jumped to Chapter ${obj.chapter}`);
+                } else {
+                    showToast('Jump failed: ' + (obj.reason || 'unknown'));
+                }
+            }).catch(e => showToast('Error: ' + e.message));
+        }
+
+        // --- Settings Updates ---
+        function updateSettings() {
+            const font = document.getElementById('fontSel').value;
+            document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
+            document.getElementById('customSize').value = currentSize.toFixed(1);
             document.getElementById('lineSpacingVal').innerText = currentLineSpacing.toFixed(1);
             document.getElementById('customLineSpacing').value = currentLineSpacing.toFixed(1);
+            
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({fontSize: currentSize, font: font, lineSpacing: currentLineSpacing})
+            });
         }
-        if(s.freeSpace) {
-            document.getElementById('freeSpace').innerText = (s.freeSpace / 1024 / 1024).toFixed(2) + ' MB';
+
+        function changeSize(delta) {
+            currentSize = Math.max(0.5, Math.min(5.0, currentSize + delta));
+            updateSettings();
         }
-        if(s.sdFreeSpace) {
-            document.getElementById('sdFreeMain').style.display = 'block';
-            document.getElementById('sdFreeVal').innerText = (s.sdFreeSpace / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-        } else {
-            document.getElementById('sdFreeMain').style.display = 'none';
-        }
-        if(s.timezone) {
-            document.getElementById('tzStr').value = s.timezone;
-        }
-        if(typeof s.showImages !== 'undefined') {
-            document.getElementById('showImages').checked = s.showImages;
-        }
-        
-        // M5PaperS3 specific settings
-        if(s.deviceName) {
-            document.getElementById('deviceName').innerText = s.deviceName;
-            isM5PaperS3 = s.deviceName === 'M5PaperS3';
-            if(isM5PaperS3) {
-                document.getElementById('s3-features').style.display = 'block';
-                if(typeof s.buzzerEnabled !== 'undefined') {
-                    document.getElementById('buzzerEnabled').checked = s.buzzerEnabled;
-                }
-                if(typeof s.autoRotate !== 'undefined') {
-                    document.getElementById('autoRotate').checked = s.autoRotate;
-                }
-                fetchSDStatus();
+
+        function setCustomSize() {
+            const val = parseFloat(document.getElementById('customSize').value);
+            if(!isNaN(val)) {
+                currentSize = Math.max(0.5, Math.min(5.0, val));
+                updateSettings();
             }
         }
-    });
-}
 
-function fetchSDStatus() {
-    fetch('/api/sd_status').then(r => r.json()).then(s => {
-        if(s.mounted) {
-            document.getElementById('sdStatus').innerText = 'Mounted';
-            document.getElementById('sdSizeInfo').style.display = 'block';
-            document.getElementById('sdFreeInfo').style.display = 'block';
-            document.getElementById('sdSize').innerText = (s.totalSize / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-            document.getElementById('sdFree').innerText = (s.freeSize / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-        } else {
-            document.getElementById('sdStatus').innerText = s.available ? 'Not Mounted' : 'Not Available';
-            document.getElementById('sdSizeInfo').style.display = 'none';
-            document.getElementById('sdFreeInfo').style.display = 'none';
+        function changeLineSpacing(delta) {
+            currentLineSpacing = Math.max(1.0, Math.min(3.0, currentLineSpacing + delta));
+            updateSettings();
         }
-    }).catch(e => {
-        document.getElementById('sdStatus').innerText = 'Error';
-    });
-}
 
-function toggleBuzzer() {
-    const enabled = document.getElementById('buzzerEnabled').checked;
-    fetch('/api/s3_settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({buzzerEnabled: enabled})
-    });
-}
-
-function toggleAutoRotate() {
-    const enabled = document.getElementById('autoRotate').checked;
-    fetch('/api/s3_settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({autoRotate: enabled})
-    });
-}
-
-function toggleShowImages() {
-    const enabled = document.getElementById('showImages').checked;
-    fetch('/api/settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({showImages: enabled})
-    });
-}
-
-function formatSD() {
-    if(!confirm('WARNING: This will ERASE ALL DATA on the SD card. Are you sure?')) return;
-    if(!confirm('This cannot be undone. Confirm to proceed with formatting.')) return;
-    
-    document.getElementById('sdStatus').innerText = 'Formatting...';
-    fetch('/api/format_sd', {method: 'POST'})
-        .then(r => r.json())
-        .then(result => {
-            if(result.success) {
-                alert('SD card formatted successfully!');
-                fetchSDStatus();
-            } else {
-                alert('Format failed: ' + (result.error || 'Unknown error'));
+        function setCustomLineSpacing() {
+            const val = parseFloat(document.getElementById('customLineSpacing').value);
+            if(!isNaN(val)) {
+                currentLineSpacing = Math.max(1.0, Math.min(3.0, val));
+                updateSettings();
             }
-        })
-        .catch(e => alert('Format error: ' + e.message));
-}
+        }
 
-function changeSize(delta) {
-    currentSize += delta;
-    if(currentSize < 0.5) currentSize = 0.5;
-    if(currentSize > 5.0) currentSize = 5.0;
-    updateSettings();
-}
+        function changeFont() { updateSettings(); }
 
-function setCustomSize() {
-    const val = parseFloat(document.getElementById('customSize').value);
-    if(!isNaN(val)) {
-        currentSize = val;
-        if(currentSize < 0.5) currentSize = 0.5;
-        if(currentSize > 5.0) currentSize = 5.0;
-        updateSettings();
-    }
-}
+        function toggleShowImages() {
+            const enabled = document.getElementById('showImages').checked;
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({showImages: enabled})
+            });
+        }
 
-function changeLineSpacing(delta) {
-    currentLineSpacing += delta;
-    if(currentLineSpacing < 1.0) currentLineSpacing = 1.0;
-    if(currentLineSpacing > 3.0) currentLineSpacing = 3.0;
-    updateSettings();
-}
+        function toggleBuzzer() {
+            const enabled = document.getElementById('buzzerEnabled').checked;
+            fetch('/api/s3_settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({buzzerEnabled: enabled})
+            });
+        }
 
-function setCustomLineSpacing() {
-    const val = parseFloat(document.getElementById('customLineSpacing').value);
-    if(!isNaN(val)) {
-        currentLineSpacing = val;
-        if(currentLineSpacing < 1.0) currentLineSpacing = 1.0;
-        if(currentLineSpacing > 3.0) currentLineSpacing = 3.0;
-        updateSettings();
-    }
-}
+        function toggleAutoRotate() {
+            const enabled = document.getElementById('autoRotate').checked;
+            fetch('/api/s3_settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({autoRotate: enabled})
+            });
+        }
 
-function changeFont() {
-    updateSettings();
-}
+        function detectTZ() {
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            document.getElementById('tzStr').value = tz;
+        }
 
-function updateSettings() {
-    const font = document.getElementById('fontSel').value;
-    document.getElementById('sizeVal').innerText = currentSize.toFixed(1);
-    document.getElementById('customSize').value = currentSize.toFixed(1);
-    document.getElementById('lineSpacingVal').innerText = currentLineSpacing.toFixed(1);
-    document.getElementById('customLineSpacing').value = currentLineSpacing.toFixed(1);
-    
-    fetch('/api/settings', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({fontSize: currentSize, font: font, lineSpacing: currentLineSpacing})
-    });
-}
+        function syncTime() {
+            const tz = document.getElementById('tzStr').value;
+            if(!tz) { showToast("Please set a timezone first"); return; }
+            
+            fetch('/set_time?tz=' + encodeURIComponent(tz))
+                .then(r => r.text())
+                .then(msg => showToast(msg))
+                .catch(e => showToast("Error syncing time"));
+        }
 
-function jump() {
-  var ch = document.getElementById('jumpCh').value;
-  var pct = document.getElementById('jumpPct').value;
-  var url = '/jump?';
-  if(ch) url += 'ch=' + ch + '&';
-  if(pct) url += 'pct=' + pct;
-  fetch(url).then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-  }).then(obj => {
-      if (obj.applied) {
-          if (obj.action === 'percent') {
-              alert('Jump applied: ' + obj.percent + '% (offset ' + obj.offset + ' / ' + obj.chapterSize + ')');
-          } else if (obj.action === 'chapter') {
-              alert('Jumped to chapter ' + obj.chapter);
-          } else {
-              alert('Jump applied');
-          }
-      } else {
-          alert('Jump not applied: ' + (obj.reason || 'unknown'));
-      }
-  }).catch(e => alert('Error: ' + e.message));
-}
+        function formatSD() {
+            if(!confirm('WARNING: This will ERASE ALL DATA on the SD card. Are you sure?')) return;
+            if(!confirm('This cannot be undone. Confirm to proceed with formatting.')) return;
+            
+            document.getElementById('sdStatus').innerText = 'Formatting...';
+            fetch('/api/format_sd', {method: 'POST'})
+                .then(r => r.json())
+                .then(result => {
+                    if(result.success) {
+                        showToast('SD card formatted successfully!');
+                        fetchSDStatus();
+                    } else {
+                        showToast('Format failed: ' + (result.error || 'Unknown error'));
+                    }
+                })
+                .catch(e => showToast('Format error: ' + e.message));
+        }
 
-function detectTZ() {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    document.getElementById('tzStr').value = tz;
-}
+        // --- Upload Logic ---
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('upfile');
 
-function syncTime() {
-    const tz = document.getElementById('tzStr').value;
-    if(!tz) { alert("Please set a timezone first"); return; }
-    
-    fetch('/set_time?tz=' + encodeURIComponent(tz))
-        .then(r => r.text())
-        .then(msg => alert(msg))
-        .catch(e => alert("Error: " + e));
-}
-
-function fetchList() {
-    fetch('/api/list').then(r => r.json()).then(files => {
-        const list = document.getElementById('list');
-        list.innerHTML = '';
-        if(files.length === 0) list.innerHTML = '<li>No books found</li>';
-        files.forEach(f => {
-            const li = document.createElement('li');
-            const favStar = f.favorite ? '★' : '☆';
-            li.innerHTML = `<span>${f.name}</span><div><button class="fav" onclick="toggleFav(${f.id}, this)" title="Toggle Favorite">${favStar}</button><button class="read" onclick="readBook(${f.id})">Read</button><button class="del" onclick="del(${f.id})">Delete</button></div>`;
-            list.appendChild(li);
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
         });
-    });
-}
 
-function toggleFav(id, btn) {
-    fetch('/api/favorite?id=' + id, {method: 'POST'})
-        .then(r => r.json())
-        .then(result => {
-            btn.innerText = result.favorite ? '★' : '☆';
-        })
-        .catch(e => alert('Error toggling favorite'));
-}
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('highlight'), false);
+        });
 
-function del(id) {
-    if(!confirm('Delete book?')) return;
-    fetch('/api/delete?id=' + id, {method: 'POST'})
-        .then(() => {
-            fetchList();
-            fetchSettings(); // Update free space
-        })
-        .catch(e => alert('Error deleting'));
-}
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('highlight'), false);
+        });
 
-function readBook(id) {
-    fetch('/api/open?id=' + id, {method: 'POST'})
-        .then(r => {
-            if (!r.ok) throw new Error('Failed to open');
-            alert('Opening on device...');
-        })
-        .catch(e => alert(e.message));
-}
+        dropZone.addEventListener('drop', e => handleFiles(e.dataTransfer.files), false);
+        fileInput.addEventListener('change', function() { handleFiles(this.files); });
 
-// Drag & Drop Logic
-const dropZone = document.getElementById('drop-zone');
-const fileInput = document.getElementById('upfile');
+        async function handleFiles(files) {
+            const queue = document.getElementById('upload-queue');
+            queue.innerHTML = '';
+            for (const file of files) {
+                await uploadFile(file);
+            }
+        }
 
-['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-  dropZone.addEventListener(eventName, preventDefaults, false);
-});
+        async function uploadFile(file) {
+            const queue = document.getElementById('upload-queue');
+            const div = document.createElement('div');
+            div.style.marginBottom = '10px';
+            div.innerHTML = `
+                <div style="font-size:14px; margin-bottom:4px; font-weight:500;">${file.name}</div>
+                <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+                <div class="status" style="font-size:12px; color:var(--text-secondary); margin-top:4px;">Waiting...</div>
+            `;
+            queue.appendChild(div);
+            
+            const bar = div.querySelector('.progress-fill');
+            const status = div.querySelector('.status');
+            const strip = document.getElementById('stripImg').checked;
+            
+            let fileToSend = file;
+            
+            if (strip) {
+                try {
+                    status.innerText = 'Stripping images...';
+                    const zip = new JSZip();
+                    const content = await zip.loadAsync(file);
+                    
+                    const filesToRemove = [];
+                    zip.forEach((relativePath, zipEntry) => {
+                        const lower = relativePath.toLowerCase();
+                        if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff|ttf|otf|woff|woff2)$/i) || lower.includes('oebps/images/') || lower.includes('oebps/fonts/')) {
+                            filesToRemove.push(relativePath);
+                        }
+                    });
+                    
+                    filesToRemove.forEach(f => zip.remove(f));
+                    
+                    if (filesToRemove.length > 0) {
+                        const blob = await zip.generateAsync({type:"blob", compression: "DEFLATE"});
+                        fileToSend = new File([blob], file.name, {type: "application/epub+zip"});
+                        status.innerText = `Stripped ${filesToRemove.length} files. Uploading...`;
+                    } else {
+                        status.innerText = 'No images to strip. Uploading...';
+                    }
+                } catch (e) {
+                    status.innerText = 'Error processing ZIP: ' + e.message;
+                    status.style.color = 'var(--danger)';
+                    return;
+                }
+            } else {
+                status.innerText = 'Uploading...';
+            }
+            
+            await new Promise((resolve) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/upload/' + encodeURIComponent(fileToSend.name), true);
+                
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        const percent = (e.loaded / e.total) * 100;
+                        bar.style.width = percent + '%';
+                    }
+                };
+                
+                xhr.onload = () => {
+                    if (xhr.status === 200) {
+                        status.innerText = 'Done';
+                        status.style.color = 'var(--success)';
+                        fetchList();
+                        fetchSettings();
+                    } else {
+                        status.innerText = 'Failed: ' + xhr.statusText;
+                        status.style.color = 'var(--danger)';
+                    }
+                    resolve();
+                };
+                
+                xhr.onerror = () => {
+                    status.innerText = 'Network error';
+                    status.style.color = 'var(--danger)';
+                    resolve();
+                };
+                
+                xhr.send(fileToSend);
+            });
+        }
 
-function preventDefaults(e) {
-  e.preventDefault();
-  e.stopPropagation();
-}
+        // --- UI Update Logic ---
+        function uploadUI() {
+            const fileInput = document.getElementById('uiFile');
+            if(fileInput.files.length === 0) {
+                showToast('Please select a file first');
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+            
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/update_ui', true);
+            
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    showToast('UI Updated! Reloading...');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast('Update failed: ' + xhr.statusText);
+                }
+            };
+            
+            xhr.onerror = () => showToast('Network error');
+            xhr.send(file); // Send raw file content or FormData depending on backend handler. 
+                            // Since existing upload handler expects raw body for /upload/*, 
+                            // I'll implement /update_ui to expect raw body too for simplicity.
+        }
 
-['dragenter', 'dragover'].forEach(eventName => {
-  dropZone.addEventListener(eventName, highlight, false);
-});
-
-['dragleave', 'drop'].forEach(eventName => {
-  dropZone.addEventListener(eventName, unhighlight, false);
-});
-
-function highlight(e) {
-  dropZone.classList.add('highlight');
-  dropZone.style.borderColor = '#007aff';
-  dropZone.style.background = '#f0f8ff';
-}
-
-function unhighlight(e) {
-  dropZone.classList.remove('highlight');
-  dropZone.style.borderColor = '#ccc';
-  dropZone.style.background = 'transparent';
-}
-
-dropZone.addEventListener('drop', handleDrop, false);
-
-function handleDrop(e) {
-  const dt = e.dataTransfer;
-  const files = dt.files;
-  handleFiles(files);
-}
-
-fileInput.addEventListener('change', function() {
-  handleFiles(this.files);
-});
-
-async function handleFiles(files) {
-  const queue = document.getElementById('upload-queue');
-  queue.innerHTML = ''; // Clear previous queue
-  for (const file of files) {
-      await uploadFile(file);
-  }
-}
-
-async function uploadFile(file) {
-  const queue = document.getElementById('upload-queue');
-  const div = document.createElement('div');
-  div.style.marginBottom = '10px';
-  div.style.padding = '10px';
-  div.style.background = '#f9f9f9';
-  div.style.borderRadius = '6px';
-  div.innerHTML = `<div style="font-size:14px; margin-bottom:4px; font-weight:500;">${file.name}</div>
-                   <div class="progress" style="display:block; background:#ddd;"><div class="bar" style="width:0%"></div></div>
-                   <div class="status" style="font-size:12px; color:#666; margin-top:4px;">Waiting...</div>`;
-  queue.appendChild(div);
-  
-  const bar = div.querySelector('.bar');
-  const status = div.querySelector('.status');
-  const strip = document.getElementById('stripImg').checked;
-  
-  let fileToSend = file;
-  
-  if (strip) {
-      try {
-          status.innerText = 'Stripping images...';
-          const zip = new JSZip();
-          const content = await zip.loadAsync(file);
-          
-          const filesToRemove = [];
-          zip.forEach((relativePath, zipEntry) => {
-              const lower = relativePath.toLowerCase();
-              if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|tiff|ttf|otf|woff|woff2)$/i) || lower.includes('oebps/images/') || lower.includes('oebps/fonts/')) {
-                  filesToRemove.push(relativePath);
-              }
-          });
-          
-          filesToRemove.forEach(f => zip.remove(f));
-          
-          if (filesToRemove.length > 0) {
-              const blob = await zip.generateAsync({type:"blob", compression: "DEFLATE"});
-              fileToSend = new File([blob], file.name, {type: "application/epub+zip"});
-              status.innerText = `Stripped ${filesToRemove.length} files. Uploading...`;
-          } else {
-              status.innerText = 'No images to strip. Uploading...';
-          }
-      } catch (e) {
-          status.innerText = 'Error processing ZIP: ' + e.message;
-          status.style.color = 'red';
-          return;
-      }
-  } else {
-      status.innerText = 'Uploading...';
-  }
-  
-  await new Promise((resolve) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload/' + encodeURIComponent(fileToSend.name), true);
-      
-      xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-              const percent = (e.loaded / e.total) * 100;
-              bar.style.width = percent + '%';
-          }
-      };
-      
-      xhr.onload = () => {
-          if (xhr.status === 200) {
-              status.innerText = 'Done';
-              status.style.color = 'green';
-              fetchList();
-              fetchSettings();
-          } else {
-              status.innerText = 'Failed: ' + xhr.statusText;
-              status.style.color = 'red';
-          }
-          resolve();
-      };
-      
-      xhr.onerror = () => {
-          status.innerText = 'Network error';
-          status.style.color = 'red';
-          resolve();
-      };
-      
-      xhr.send(fileToSend);
-  });
-}
-
-fetchList();
-fetchSettings();
-</script>
+        // Init
+        fetchList();
+        fetchSettings();
+    </script>
 </body>
 </html>
 )rawliteral";
@@ -1136,11 +1270,74 @@ static esp_err_t api_format_sd_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Handler for updating the UI (index.html) */
+static esp_err_t update_ui_handler(httpd_req_t *req)
+{
+    WebServer::updateActivityTime();
+    
+    // We expect the file content in the body
+    FILE *f = fopen("/spiffs/index.html", "w");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open /spiffs/index.html for writing");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char *buf = (char*)malloc(4096);
+    if (!buf) {
+        fclose(f);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int received;
+    int remaining = req->content_len;
+    
+    while (remaining > 0) {
+        if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            free(buf);
+            fclose(f);
+            return ESP_FAIL;
+        }
+        fwrite(buf, 1, received, f);
+        remaining -= received;
+    }
+    free(buf);
+    fclose(f);
+    
+    httpd_resp_send(req, "UI Updated", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 /* Main page handler */
 static esp_err_t index_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
     if (wifiManager.isConnected()) {
+        // Check if custom index.html exists
+        struct stat st;
+        if (stat("/spiffs/index.html", &st) == 0) {
+            FILE* f = fopen("/spiffs/index.html", "r");
+            if (f) {
+                char* buf = (char*)malloc(4096);
+                if (buf) {
+                    httpd_resp_set_type(req, "text/html");
+                    size_t read;
+                    while ((read = fread(buf, 1, 4096, f)) > 0) {
+                        httpd_resp_send_chunk(req, buf, read);
+                    }
+                    httpd_resp_send_chunk(req, NULL, 0);
+                    free(buf);
+                    fclose(f);
+                    return ESP_OK;
+                }
+                fclose(f);
+            }
+        }
+        // Fallback to embedded HTML
         httpd_resp_send(req, MANAGER_HTML, HTTPD_RESP_USE_STRLEN);
     } else {
         httpd_resp_send(req, CAPTIVE_HTML, HTTPD_RESP_USE_STRLEN);
@@ -1333,6 +1530,14 @@ void WebServer::init(const char* basePath) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &upload_uri);
+        
+        httpd_uri_t update_ui_uri = {
+            .uri       = "/update_ui",
+            .method    = HTTP_POST,
+            .handler   = update_ui_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &update_ui_uri);
         
         httpd_uri_t wifi_uri = {
             .uri       = "/wifi",
