@@ -9,6 +9,7 @@
 #include "image_handler.h"
 #include "gesture_detector.h"
 #include "game_manager.h"
+#include "composer_ui.h"
 #include <vector>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -1158,6 +1159,11 @@ void GUI::setShowImages(bool enabled)
 
 void GUI::update()
 {
+    if (currentState == AppState::MUSIC_COMPOSER)
+    {
+        ComposerUI::getInstance().update();
+    }
+
     // Check for button-triggered sleep request
     if (buttonSleepRequested)
     {
@@ -1257,6 +1263,9 @@ void GUI::update()
             break;
         case AppState::GAME_PLAYING:
             drawGame();
+            break;
+        case AppState::MUSIC_COMPOSER:
+            drawMusicComposer();
             break;
         case AppState::CHAPTER_MENU:
             drawChapterMenu();
@@ -1822,7 +1831,7 @@ void GUI::drawLibrary(bool favoritesOnly)
     // Use system font for library (consistent size, independent of reader settings)
     target->setFont(&lgfx::v1::fonts::Font2);
     target->setTextColor(TFT_BLACK);
-    const float itemSize = 1.8f;
+    const float itemSize = 2.0f;
     target->setTextSize(itemSize);
 
     if (!bookIndexReady)
@@ -1866,7 +1875,7 @@ void GUI::drawLibrary(bool favoritesOnly)
     for (int i = startIdx; i < endIdx; ++i)
     {
         // Ensure font is reset to system font for each item to prevent drift
-        target->setFont(&lgfx::v1::fonts::Font2);
+        target->setFont(&lgfx::v1::fonts ::Font2); // Font2
         target->setTextSize(itemSize);
 
         const auto &book = books[i];
@@ -3573,19 +3582,38 @@ void GUI::onMainMenuClick(int x, int y)
 
 void GUI::handleGesture(const GestureEvent& event)
 {
-    int screenW = M5.Display.width();
     int screenH = M5.Display.height();
     
     switch (event.type)
     {
     case GestureType::TAP:
-        handleTap(event.endX, event.endY);
+        if (currentState != AppState::MUSIC_COMPOSER)
+        {
+            handleTap(event.endX, event.endY);
+        }
+        break;
+
+    case GestureType::LONG_PRESS:
+        if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (ComposerUI::getInstance().handleLongPress(event.endX, event.endY))
+            {
+                needsRedraw = true;
+            }
+        }
         break;
 
     case GestureType::DOUBLE_TAP:
         if (currentState == AppState::READER)
         {
             processReaderTap(event.endX, event.endY, true); // true = double
+        }
+        else if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (ComposerUI::getInstance().handleDoubleTap(event.endX, event.endY))
+            {
+                needsRedraw = true;
+            }
         }
         else
         {
@@ -3610,6 +3638,13 @@ void GUI::handleGesture(const GestureEvent& event)
                 needsRedraw = true;
             }
         }
+        else if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (ComposerUI::getInstance().handleGesture(event))
+            {
+                needsRedraw = true;
+            }
+        }
         break;
 
     case GestureType::SWIPE_UP:
@@ -3626,6 +3661,13 @@ void GUI::handleGesture(const GestureEvent& event)
                 needsRedraw = true;
             }
         }
+        else if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (ComposerUI::getInstance().handleGesture(event))
+            {
+                needsRedraw = true;
+            }
+        }
         break;
         
     case GestureType::SWIPE_RIGHT:
@@ -3635,10 +3677,23 @@ void GUI::handleGesture(const GestureEvent& event)
             currentState = AppState::READER;
             needsRedraw = true;
         }
+        else if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (ComposerUI::getInstance().handleGesture(event))
+            {
+                needsRedraw = true;
+            }
+        }
         break;
         
     case GestureType::SWIPE_DOWN:
-        // Could add functionality later (e.g., refresh page)
+        if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (ComposerUI::getInstance().handleGesture(event))
+            {
+                needsRedraw = true;
+            }
+        }
         break;
         
     default:
@@ -3682,10 +3737,8 @@ void GUI::handleTap(int x, int y)
         {
             clickPending = false; // Cancel any pending
             // Save progress before exiting
-            int chIdx = 0;
             if (xSemaphoreTake(epubMutex, portMAX_DELAY))
             {
-                chIdx = epubLoader.getCurrentChapterIndex();
                 xSemaphoreGive(epubMutex);
             }
             // Save progress before exiting using centralized helper
@@ -3885,6 +3938,11 @@ void GUI::handleTap(int x, int y)
         onFontSelectionClick(x, y);
         justWokeUp = false;
     }
+    else if (currentState == AppState::MUSIC_COMPOSER)
+    {
+        onMusicComposerClick(x, y);
+        justWokeUp = false;
+    }
 }
 
 void GUI::handleTouch()
@@ -3920,6 +3978,37 @@ void GUI::handleTouch()
     {
         lastActivityTime = now;
         auto t = M5.Touch.getDetail(0);
+        
+        if (currentState == AppState::MUSIC_COMPOSER)
+        {
+            if (t.wasPressed() || (justWokeUp && t.isPressed()))
+            {
+#ifdef CONFIG_EBOOK_S3_ENABLE_BUZZER
+                deviceHAL.playClickSound();
+#endif
+                ComposerUI::getInstance().handleDragStart(t.x, t.y);
+            }
+            
+            if (t.isPressed())
+            {
+                ComposerUI::getInstance().handleDragMove(t.x, t.y);
+            }
+            
+            if (t.wasReleased())
+            {
+                ComposerUI::getInstance().handleDragEnd(t.x, t.y);
+                if (ComposerUI::getInstance().shouldExit())
+                {
+                    ComposerUI::getInstance().clearExitFlag();
+                    ComposerUI::getInstance().exit();
+                    currentState = AppState::GAMES_MENU;
+                    needsRedraw = true;
+                }
+            }
+            
+            justWokeUp = false;
+            return;
+        }
 
         if (t.wasPressed() || (justWokeUp && t.isPressed()))
         {
@@ -3930,10 +4019,18 @@ void GUI::handleTouch()
 
             // If gesture is in progress, don't process taps yet
             // UNLESS we are in a mode that requires instant response (non-Reader)
-            bool instantResponse = (currentState != AppState::READER);
+            // For Music Composer, we want both instant response for notes AND gestures for scrolling
+            bool instantResponse = (currentState != AppState::READER && currentState != AppState::MUSIC_COMPOSER);
 
             if (gestureDetector.isGestureInProgress() && !instantResponse)
             {
+                // For Music Composer, we still want to allow the touch to be processed by the composer
+                // but we don't want to reset the gesture detector.
+                if (currentState == AppState::MUSIC_COMPOSER) {
+                    onMusicComposerClick(t.x, t.y);
+                    justWokeUp = false;
+                    return;
+                }
                 return;
             }
 
@@ -3976,10 +4073,8 @@ void GUI::handleTouch()
                 {
                     clickPending = false; // Cancel any pending
                     // Save progress before exiting
-                    int chIdx = 0;
                     if (xSemaphoreTake(epubMutex, portMAX_DELAY))
                     {
-                        chIdx = epubLoader.getCurrentChapterIndex();
                         xSemaphoreGive(epubMutex);
                     }
                     // Save progress before exiting using centralized helper
@@ -4207,6 +4302,11 @@ void GUI::handleTouch()
             else if (currentState == AppState::IMAGE_VIEWER)
             {
                 onImageViewerClick(t.x, t.y);
+                justWokeUp = false;
+            }
+            else if (currentState == AppState::MUSIC_COMPOSER)
+            {
+                onMusicComposerClick(t.x, t.y);
                 justWokeUp = false;
             }
         }
@@ -6141,6 +6241,21 @@ void GUI::drawGamesMenu()
         target->drawString(gameNames[i], centerX, by + btnH / 2);
     }
 
+    // Utility section
+    int utilityY = startY + 3 * (btnH + btnGap) + 20;
+    target->setTextDatum(textdatum_t::top_center);
+    target->setTextSize(2.5f);
+    target->drawString("Utility", screenW / 2, utilityY);
+
+    int composerY = utilityY + 50;
+    int cbx = centerX - btnW / 2;
+    target->fillRect(cbx, composerY, btnW, btnH, TFT_WHITE);
+    target->drawRect(cbx, composerY, btnW, btnH, TFT_BLACK);
+    target->drawRect(cbx + 1, composerY + 1, btnW - 2, btnH - 2, TFT_BLACK);
+    target->setTextSize(2.0f);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->drawString("Music Composer", centerX, composerY + btnH / 2);
+
     // Back button
     int backY = screenH - 70;
     target->fillRect(centerX - 60, backY, 120, 50, TFT_LIGHTGREY);
@@ -6197,6 +6312,22 @@ void GUI::onGamesMenuClick(int x, int y)
         }
     }
 
+    // Check Music Composer button
+    int utilityY = startY + 3 * (btnH + btnGap) + 20;
+    int composerY = utilityY + 50;
+    int cbx = centerX - btnW / 2;
+    ESP_LOGI(TAG, "onGamesMenuClick: touch=(%d,%d), composerRect=(%d,%d,%d,%d)", x, y, cbx, composerY, btnW, btnH);
+    if (x >= cbx && x < cbx + btnW && y >= composerY && y < composerY + btnH)
+    {
+        ESP_LOGI(TAG, "Music Composer button pressed, launching composer");
+        ComposerUI::getInstance().init();
+        ComposerUI::getInstance().enter();
+        currentState = AppState::MUSIC_COMPOSER;
+        needsRedraw = true;
+        ESP_LOGI(TAG, "Composer active=%d canvasCreated=%d", ComposerUI::getInstance().isActive(), ComposerUI::getInstance().isCanvasCreated());
+        return;
+    }
+
     // Check back button
     int backY = screenH - 70;
     if (x >= centerX - 60 && x < centerX + 60 && y >= backY && y < backY + 50)
@@ -6221,6 +6352,28 @@ void GUI::drawGame()
     
     GameManager &gm = GameManager::getInstance();
     gm.draw(nullptr);
+}
+
+void GUI::drawMusicComposer()
+{
+    ComposerUI::getInstance().draw();
+}
+
+void GUI::onMusicComposerClick(int x, int y)
+{
+    ComposerUI &composer = ComposerUI::getInstance();
+    if (composer.handleTouch(x, y))
+    {
+        // Redraw is handled by ComposerUI if needed
+    }
+
+    if (composer.shouldExit())
+    {
+        composer.clearExitFlag();
+        composer.exit();
+        currentState = AppState::GAMES_MENU;
+        needsRedraw = true;
+    }
 }
 
 // ============================================

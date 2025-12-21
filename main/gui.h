@@ -23,7 +23,8 @@ enum class AppState {
     GAMES_MENU,     // Games selection menu
     GAME_PLAYING,   // Active game
     CHAPTER_MENU,   // In-book chapter jump menu
-    FONT_SELECTION  // Font selection screen (S3 only)
+    FONT_SELECTION, // Font selection screen (S3 only)
+    MUSIC_COMPOSER  // Music sequencer screen
 };
 
 struct RenderRequest {
@@ -212,6 +213,7 @@ private:
     void drawChapterMenu();     // In-book chapter jump menu
     void drawGamesMenu();       // Games selection menu  
     void drawGame();            // Current game rendering
+    void drawMusicComposer();   // Music sequencer rendering
     void drawFontSelection();   // Font selection screen (S3 only)
     void drawWifiPassword();
     void drawImageViewer();   // Full-screen image display
@@ -230,6 +232,7 @@ private:
     void onImageViewerClick(int x, int y);  // Handle image viewer clicks
     void onChapterMenuClick(int x, int y);  // Handle chapter menu clicks
     void onGamesMenuClick(int x, int y);    // Handle games menu clicks
+    void onMusicComposerClick(int x, int y); // Handle music composer clicks
     void onFontSelectionClick(int x, int y); // Handle font selection clicks
     
     // Image rendering helpers
