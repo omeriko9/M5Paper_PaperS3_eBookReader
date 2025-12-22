@@ -1443,7 +1443,7 @@ void WebServer::init(const char* basePath) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 16; // Increased for M5PaperS3 endpoints
+    config.max_uri_handlers = 24; // Increased for M5PaperS3 endpoints
     config.stack_size = 8192; // Increase stack for file ops
     config.recv_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
     config.send_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
