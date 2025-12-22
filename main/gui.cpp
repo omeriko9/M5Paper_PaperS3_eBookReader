@@ -2705,22 +2705,124 @@ void GUI::drawMainMenu()
     const float labelTextSize = 2.4f;
     const float sublabelTextSize = 1.5f;
     ImageHandler &imgHandler = ImageHandler::getInstance();
+    static constexpr int MENU_ICON_TARGET_SIZE = 96;
+
+    struct MenuIconCache
+    {
+        std::string path;
+        std::vector<uint8_t> data;
+        bool dataLoaded = false;
+        M5Canvas sprite;
+        bool spriteReady = false;
+        bool spriteAttempted = false;
+        int spriteW = 0;
+        int spriteH = 0;
+    };
+    static MenuIconCache iconCache[6];
 
     struct MenuIconDraw
     {
+        int index;
         std::string path;
         int x;
         int y;
-        int maxW;
-        int maxH;
+        int size;
     };
     std::vector<MenuIconDraw> deferredIcons;
 
-    auto drawMenuIcon = [&](LovyanGFX *iconTarget, const std::string &iconPath, int x, int y, int maxW, int maxH)
+    auto ensureIconCache = [&](int index, const std::string &iconPath, int size)
     {
-        if (maxW <= 0 || maxH <= 0)
+        if (index < 0 || index >= 6 || size <= 0)
+        {
+            return false;
+        }
+        auto &cache = iconCache[index];
+        if (cache.path != iconPath)
+        {
+            if (cache.spriteReady)
+            {
+                cache.sprite.deleteSprite();
+            }
+            cache.path = iconPath;
+            cache.data.clear();
+            cache.dataLoaded = false;
+            cache.spriteReady = false;
+            cache.spriteAttempted = false;
+            cache.spriteW = 0;
+            cache.spriteH = 0;
+        }
+
+        if (!cache.dataLoaded)
+        {
+            struct stat st;
+            if (stat(iconPath.c_str(), &st) != 0)
+            {
+                return false;
+            }
+            FILE *f = fopen(iconPath.c_str(), "rb");
+            if (!f)
+            {
+                return false;
+            }
+            cache.data.resize(st.st_size);
+            if (fread(cache.data.data(), 1, cache.data.size(), f) != cache.data.size())
+            {
+                cache.data.clear();
+                fclose(f);
+                return false;
+            }
+            fclose(f);
+            cache.dataLoaded = true;
+        }
+
+        if (cache.spriteReady && cache.spriteW == size && cache.spriteH == size)
+        {
+            return true;
+        }
+
+        if (!cache.spriteAttempted || cache.spriteW != size || cache.spriteH != size)
+        {
+            if (cache.spriteReady)
+            {
+                cache.sprite.deleteSprite();
+                cache.spriteReady = false;
+            }
+            cache.spriteAttempted = true;
+            cache.spriteW = size;
+            cache.spriteH = size;
+            cache.sprite.setColorDepth(deviceHAL.getCanvasColorDepth());
+            cache.sprite.setPsram(true);
+            if (cache.sprite.createSprite(size, size))
+            {
+                cache.sprite.fillScreen(TFT_WHITE);
+                imgHandler.decodeAndRender(cache.data.data(), cache.data.size(),
+                                           &cache.sprite, 0, 0, size, size, ImageDisplayMode::INLINE);
+                cache.spriteReady = true;
+            }
+        }
+        return cache.spriteReady;
+    };
+
+    auto drawMenuIcon = [&](int index, LovyanGFX *iconTarget, const std::string &iconPath, int x, int y, int size)
+    {
+        if (size <= 0)
         {
             return;
+        }
+        if (index >= 0 && index < 6)
+        {
+            if (ensureIconCache(index, iconPath, size))
+            {
+                iconCache[index].sprite.pushSprite(iconTarget, x, y);
+                return;
+            }
+            if (iconCache[index].dataLoaded)
+            {
+                imgHandler.decodeAndRender(iconCache[index].data.data(),
+                                           iconCache[index].data.size(),
+                                           iconTarget, x, y, size, size, ImageDisplayMode::INLINE);
+                return;
+            }
         }
         struct stat st;
         if (stat(iconPath.c_str(), &st) != 0)
@@ -2741,7 +2843,7 @@ void GUI::drawMainMenu()
         }
         if (fread(buf, 1, len, f) == len)
         {
-            imgHandler.decodeAndRender(buf, len, iconTarget, x, y, maxW, maxH, ImageDisplayMode::INLINE);
+            imgHandler.decodeAndRender(buf, len, iconTarget, x, y, size, size, ImageDisplayMode::INLINE);
         }
         free(buf);
         fclose(f);
@@ -2788,19 +2890,21 @@ void GUI::drawMainMenu()
             int sublabelBottom = by + btnH - 8;
             int sublabelTop = sublabelBottom - sublabelHeight;
 
-            int iconTop = labelBottom + 6;
-            int iconBottom = sublabelTop - 6;
+            int iconTop = labelBottom + 2;
+            int iconBottom = sublabelTop - 2;
             int iconH = iconBottom - iconTop;
-            int iconW = btnW - 20;
-            int iconX = bx + 10;
+            int iconW = btnW - 12;
+            int iconSize = std::min(MENU_ICON_TARGET_SIZE, std::min(iconW, iconH));
+            int iconX = bx + (btnW - iconSize) / 2;
+            int iconY = iconTop + (iconH - iconSize) / 2;
 
             if (sprite)
             {
-                deferredIcons.push_back({iconPath, iconX, iconTop, iconW, iconH});
+                deferredIcons.push_back({i, iconPath, iconX, iconY, iconSize});
             }
             else
             {
-                drawMenuIcon(target, iconPath, iconX, iconTop, iconW, iconH);
+                drawMenuIcon(i, target, iconPath, iconX, iconY, iconSize);
             }
         }
 
@@ -2840,7 +2944,14 @@ void GUI::drawMainMenu()
     {
         for (const auto &icon : deferredIcons)
         {
-            drawMenuIcon(&M5.Display, icon.path, icon.x, icon.y, icon.maxW, icon.maxH);
+            if (ensureIconCache(icon.index, icon.path, icon.size))
+            {
+                iconCache[icon.index].sprite.pushSprite(&M5.Display, icon.x, icon.y);
+            }
+            else
+            {
+                drawMenuIcon(icon.index, &M5.Display, icon.path, icon.x, icon.y, icon.size);
+            }
         }
     }
 
@@ -5492,10 +5603,28 @@ void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *targe
 void GUI::drawWifiScan()
 {
     M5.Display.unloadFont(); // Use default font
+    static M5Canvas wifiCanvas;
+    static bool wifiCanvasReady = false;
+    static bool wifiCanvasDisabled = false;
+
+    if (!wifiCanvasDisabled)
     {
-        M5Canvas wifiCanvas;
-        wifiCanvas.setColorDepth(1); // Use 1-bit color to save RAM
-        if (wifiCanvas.createSprite(M5.Display.width(), M5.Display.height()))
+        if (!wifiCanvasReady)
+        {
+            wifiCanvas.setColorDepth(1); // Use 1-bit color to save RAM
+            wifiCanvas.setPsram(true);
+            if (wifiCanvas.createSprite(M5.Display.width(), M5.Display.height()))
+            {
+                wifiCanvasReady = true;
+            }
+            else
+            {
+                wifiCanvasDisabled = true;
+                ESP_LOGW(TAG, "Failed to create wifi canvas - falling back to direct draw");
+            }
+        }
+
+        if (wifiCanvasReady)
         {
             wifiCanvas.fillScreen(TFT_WHITE);
             // Draw status bar to canvas
@@ -5581,7 +5710,6 @@ void GUI::drawWifiScan()
         }
     }
     // Fallback to direct draw
-    ESP_LOGE(TAG, "Failed to create wifi canvas - falling back to direct draw");
     M5.Display.fillScreen(TFT_WHITE);
     // Draw status bar directly without loading custom fonts
     M5.Display.setFont(&lgfx::v1::fonts::Font2);

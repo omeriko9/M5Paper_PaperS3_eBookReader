@@ -1,5 +1,7 @@
 #include "wifi_manager.h"
 #include "esp_wifi.h"
+#include "device_hal.h"
+#include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
@@ -10,6 +12,7 @@
 #include "dns_server.h"
 #include <stdio.h>
 #include <sys/stat.h>
+#include <string>
 
 static const char *TAG = "WIFI";
 static bool s_connected = false;
@@ -34,16 +37,32 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 }
 
 static bool readConfigFromSD(char* ssid, size_t ssid_len, char* pass, size_t pass_len) {
-    const char* path = "/sd/config.txt";
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        ESP_LOGW(TAG, "Config file not found at %s", path);
+#ifdef CONFIG_EBOOK_ENABLE_SD_CARD
+    DeviceHAL &hal = DeviceHAL::getInstance();
+    if (!hal.isSDCardMounted()) {
+        ESP_LOGI(TAG, "SD card not mounted, trying to mount for WiFi config");
+        if (!hal.mountSDCard()) {
+            ESP_LOGW(TAG, "SD card mount failed, skipping config.txt");
+            return false;
+        }
+    }
+
+    const char* mountPoint = hal.getSDCardMountPoint();
+    if (!mountPoint) {
+        ESP_LOGW(TAG, "SD card mount point not available");
         return false;
     }
 
-    FILE* f = fopen(path, "r");
+    std::string path = std::string(mountPoint) + "/config.txt";
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        ESP_LOGW(TAG, "Config file not found at %s", path.c_str());
+        return false;
+    }
+
+    FILE* f = fopen(path.c_str(), "r");
     if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open config file at %s", path);
+        ESP_LOGE(TAG, "Failed to open config file at %s", path.c_str());
         return false;
     }
 
@@ -59,10 +78,12 @@ static bool readConfigFromSD(char* ssid, size_t ssid_len, char* pass, size_t pas
 
         if (strncmp(line, "ssid=", 5) == 0) {
             strncpy(ssid, line + 5, ssid_len - 1);
+            ssid[ssid_len - 1] = '\0';
             found = true;
             ESP_LOGI(TAG, "Found SSID in config");
         } else if (strncmp(line, "password=", 9) == 0) {
             strncpy(pass, line + 9, pass_len - 1);
+            pass[pass_len - 1] = '\0';
             ESP_LOGI(TAG, "Found Password in config");
         }
     }
@@ -72,6 +93,13 @@ static bool readConfigFromSD(char* ssid, size_t ssid_len, char* pass, size_t pas
         ESP_LOGW(TAG, "SSID not found in config file");
     }
     return found && (strlen(ssid) > 0);
+#else
+    (void)ssid;
+    (void)ssid_len;
+    (void)pass;
+    (void)pass_len;
+    return false;
+#endif
 }
 
 static bool connectToAP(const char* ssid, const char* pass) {
@@ -299,28 +327,34 @@ int WifiManager::getRssi() {
 }
 
 std::vector<std::string> WifiManager::scanNetworks() {
-    if (!s_initialized) init();
+    if (!s_initialized) {
+        if (!init()) {
+            return {};
+        }
+    }
+    if (s_init_failed) {
+        return {};
+    }
     
     // Ensure we are in a mode that supports scanning (STA or APSTA)
     wifi_mode_t mode;
-    esp_wifi_get_mode(&mode);
-    if (mode == WIFI_MODE_NULL) {
+    if (esp_wifi_get_mode(&mode) != ESP_OK) {
+        mode = WIFI_MODE_NULL;
+    }
+    if (mode != WIFI_MODE_STA && mode != WIFI_MODE_APSTA) {
         esp_wifi_set_mode(WIFI_MODE_STA);
-        esp_wifi_start();
     }
 
-#ifdef CONFIG_IDF_TARGET_ESP32
-    // On ESP32, ensure WiFi is started even if mode is not NULL
-    // This fixes ESP_FAIL if WiFi was stopped but mode was preserved
+    // Ensure WiFi is started (idempotent if already started)
     esp_err_t start_ret = esp_wifi_start();
     if (start_ret != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_start failed: %s", esp_err_to_name(start_ret));
-    } else {
-        // Ensure WiFi is started (idempotent if already started, but safe)
-        esp_wifi_start();
-    } Ensure power save is off for scanning
+    }
+    // Ensure power save is off for scanning
     esp_wifi_set_ps(WIFI_PS_NONE);
-#endif
+    // Clear any stale scan state
+    esp_wifi_scan_stop();
+
     // Blocking scan
     wifi_scan_config_t scan_config = {
     .ssid = 0, // Scan for all SSIDs (0)
@@ -333,6 +367,13 @@ std::vector<std::string> WifiManager::scanNetworks() {
     },
 };
     esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi scan start failed: %s, retrying", esp_err_to_name(err));
+        esp_wifi_stop();
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_wifi_start();
+        err = esp_wifi_scan_start(&scan_config, true);
+    }
     std::vector<std::string> ssids;
     if (err == ESP_OK) {
         uint16_t ap_count = 0;

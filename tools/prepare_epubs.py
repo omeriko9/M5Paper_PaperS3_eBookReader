@@ -11,6 +11,69 @@ from io import BytesIO
 import argparse
 
 
+def get_metadata(epub_path: Path) -> Tuple[Optional[str], Optional[str], int]:
+    """
+    Extract (title, author, file_size) from the EPUB.
+    Returns (None, None, size) on failure.
+    """
+    if not epub_path.is_file():
+        return None, None, 0
+
+    size = epub_path.stat().st_size
+
+    try:
+        with zipfile.ZipFile(epub_path, "r") as zf:
+            # 1. Read META-INF/container.xml
+            try:
+                container_data = zf.read("META-INF/container.xml")
+            except KeyError:
+                return None, None, size
+
+            try:
+                container_root = ET.fromstring(container_data)
+            except Exception:
+                return None, None, size
+
+            ns_container = {
+                "c": "urn:oasis:names:tc:opendocument:xmlns:container"
+            }
+            rootfile_elem = container_root.find(
+                ".//c:rootfile", ns_container
+            )
+            if rootfile_elem is None:
+                return None, None, size
+
+            opf_path = rootfile_elem.get("full-path")
+            if not opf_path:
+                return None, None, size
+
+            # 2. Read OPF file
+            try:
+                opf_data = zf.read(opf_path)
+            except KeyError:
+                return None, None, size
+
+            try:
+                opf_root = ET.fromstring(opf_data)
+            except Exception:
+                return None, None, size
+
+            ns = {
+                "dc": "http://purl.org/dc/elements/1.1/",
+                "opf": "http://www.idpf.org/2007/opf",
+            }
+
+            title_el = opf_root.find(".//dc:title", ns)
+            author_el = opf_root.find(".//dc:creator", ns)
+
+            title = title_el.text.strip() if (title_el is not None and title_el.text) else ""
+            author = author_el.text.strip() if (author_el is not None and author_el.text) else ""
+
+            return title, author, size
+    except Exception:
+        return None, None, size
+
+
 def rename_epub_by_metadata(epub_path_str: str) -> Optional[Path]:
     """
     Given the full path to a single .epub file, read its metadata (title & author)
@@ -287,6 +350,11 @@ def process_epub(epub_path, mode='downscale'):
         if os.path.exists(temp_epub):
             os.remove(temp_epub)
 
+def sanitize(s: str) -> str:
+    """Sanitize string for index file, replacing problematic characters."""
+    return s.replace('|', '-').replace('\n', ' ').replace('\r', ' ')
+
+
 def main():
     parser = argparse.ArgumentParser(description="Process EPUB files: downscale images or remove them.")
     parser.add_argument('target_dir', nargs='?', default=os.getcwd(), help="Directory containing EPUB files (default: current directory)")
@@ -300,17 +368,45 @@ def main():
     print(f"Mode: {mode}")
     
     count = 0
+    index_entries = []
+    book_id = 1
     
     for filename in os.listdir(target_dir):
         if filename.lower().endswith('.epub'):
             full_path = os.path.join(target_dir, filename)
             if os.path.isfile(full_path):
                 process_epub(full_path, mode)
-                rename_epub_by_metadata(full_path)
+                final_path = rename_epub_by_metadata(full_path)
+                if final_path is None:
+                    final_path = Path(full_path)
+                
+                title, author, size = get_metadata(final_path)
+                if title is None:
+                    title = final_path.stem  # fallback to filename without extension
+                
+                # Sanitize title and author for the index (similar to ESP code)
+                title = sanitize(title)
+                author = sanitize(author) if author else ""
+                
+                # Path as /spiffs/filename.epub
+                index_path = f"/spiffs/{final_path.name}"
+                
+                # Format: id|title|chapter|offset|path|size|hasMetrics|author|isFavorite|lastFont|lastFontSize
+                entry = f"{book_id}|{title}|0|0|{index_path}|{size}|0|{author}|0||1.0"
+                index_entries.append(entry)
+                
+                book_id += 1
                 count += 1
                 
     if count == 0:
         print("No .epub files found in this directory.")
+    else:
+        # Write index.txt
+        index_file = os.path.join(target_dir, "index.txt")
+        with open(index_file, 'w', encoding='utf-8') as f:
+            for entry in index_entries:
+                f.write(entry + '\n')
+        print(f"Generated index.txt with {count} entries.")
 
 if __name__ == '__main__':
     main()

@@ -988,8 +988,6 @@ static std::string escapeJsonString(const std::string& input) {
 static esp_err_t api_list_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
-    // Reload index to ensure we have latest
-    bookIndex.init(); 
     auto books = bookIndex.getBooks();
     
     httpd_resp_set_type(req, "application/json");
