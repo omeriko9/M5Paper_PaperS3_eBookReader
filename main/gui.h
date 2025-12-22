@@ -171,6 +171,9 @@ private:
     size_t pendingBookOffset = 0;
     std::string pendingBookFont;
     float pendingBookFontSize = 1.0f;
+    volatile int indexingCurrent = 0;
+    volatile int indexingTotal = 0;
+    volatile bool indexingScanActive = false;
 
     // Double click detection
     uint32_t lastClickTime = 0;

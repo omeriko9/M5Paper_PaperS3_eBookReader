@@ -999,11 +999,21 @@ void GUI::backgroundIndexerTaskLoop()
     // Step 1: Scan for new books in background
     waitForBookOpen();
     ESP_LOGI(TAG, "BgIndexer: Scanning for new books...");
-    bool newBooksFound = bookIndex.scanForNewBooks([](int current, int total, const char *msg)
+    indexingScanActive = true;
+    indexingCurrent = 0;
+    indexingTotal = 0;
+    bool newBooksFound = bookIndex.scanForNewBooks([this](int current, int total, const char *msg)
                                                    {
         // Optional: update a status bar or log
         // ESP_LOGI(TAG, "Scan progress: %d/%d - %s", current, total, msg);
+        indexingCurrent = current;
+        indexingTotal = total;
+        if (currentState == AppState::MAIN_MENU)
+        {
+            needsRedraw = true;
+        }
         esp_task_wdt_reset(); });
+    indexingScanActive = false;
 
     if (newBooksFound)
     {
@@ -1170,11 +1180,19 @@ void GUI::update()
     // Check for button-triggered sleep request
     if (buttonSleepRequested)
     {
-        buttonSleepRequested = false;
-        ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
-        goToSleep();
-        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
-        return;
+        if (backgroundIndexerTaskHandle != nullptr)
+        {
+            ESP_LOGI(TAG, "Button sleep requested but indexing is active - ignoring");
+            buttonSleepRequested = false;
+        }
+        else
+        {
+            buttonSleepRequested = false;
+            ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
+            goToSleep();
+            lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+            return;
+        }
     }
 
     // Update gesture detector
@@ -1189,12 +1207,13 @@ void GUI::update()
     handleTouch();
 
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    bool indexingActive = (backgroundIndexerTaskHandle != nullptr);
 
     // Check web server activity - if there's been recent HTTP activity, don't sleep
     uint32_t lastHttpActivity = webServer.getLastActivityTime();
     bool recentHttpActivity = (lastHttpActivity > 0) && (now - lastHttpActivity < 30 * 1000); // 30 second grace period
 
-    if (recentHttpActivity)
+    if (recentHttpActivity || indexingActive)
     {
         lastActivityTime = now; // Reset idle timer if web is active
     }
@@ -1202,7 +1221,7 @@ void GUI::update()
     // Unified Sleep and WebServer Logic
     uint32_t idleTimeout = lightSleepMinutes * 60 * 1000; // Use user setting
     
-    if (now - lastActivityTime > idleTimeout && !recentHttpActivity)
+    if (!indexingActive && now - lastActivityTime > idleTimeout && !recentHttpActivity)
     {
         if (currentState == AppState::LIBRARY && webServerEnabled)
         {
@@ -2712,11 +2731,6 @@ void GUI::drawMainMenu()
         std::string path;
         std::vector<uint8_t> data;
         bool dataLoaded = false;
-        M5Canvas sprite;
-        bool spriteReady = false;
-        bool spriteAttempted = false;
-        int spriteW = 0;
-        int spriteH = 0;
     };
     static MenuIconCache iconCache[6];
 
@@ -2730,26 +2744,18 @@ void GUI::drawMainMenu()
     };
     std::vector<MenuIconDraw> deferredIcons;
 
-    auto ensureIconCache = [&](int index, const std::string &iconPath, int size)
+    auto ensureIconCache = [&](int index, const std::string &iconPath)
     {
-        if (index < 0 || index >= 6 || size <= 0)
+        if (index < 0 || index >= 6)
         {
             return false;
         }
         auto &cache = iconCache[index];
         if (cache.path != iconPath)
         {
-            if (cache.spriteReady)
-            {
-                cache.sprite.deleteSprite();
-            }
             cache.path = iconPath;
             cache.data.clear();
             cache.dataLoaded = false;
-            cache.spriteReady = false;
-            cache.spriteAttempted = false;
-            cache.spriteW = 0;
-            cache.spriteH = 0;
         }
 
         if (!cache.dataLoaded)
@@ -2775,32 +2781,7 @@ void GUI::drawMainMenu()
             cache.dataLoaded = true;
         }
 
-        if (cache.spriteReady && cache.spriteW == size && cache.spriteH == size)
-        {
-            return true;
-        }
-
-        if (!cache.spriteAttempted || cache.spriteW != size || cache.spriteH != size)
-        {
-            if (cache.spriteReady)
-            {
-                cache.sprite.deleteSprite();
-                cache.spriteReady = false;
-            }
-            cache.spriteAttempted = true;
-            cache.spriteW = size;
-            cache.spriteH = size;
-            cache.sprite.setColorDepth(deviceHAL.getCanvasColorDepth());
-            cache.sprite.setPsram(true);
-            if (cache.sprite.createSprite(size, size))
-            {
-                cache.sprite.fillScreen(TFT_WHITE);
-                imgHandler.decodeAndRender(cache.data.data(), cache.data.size(),
-                                           &cache.sprite, 0, 0, size, size, ImageDisplayMode::INLINE);
-                cache.spriteReady = true;
-            }
-        }
-        return cache.spriteReady;
+        return cache.dataLoaded;
     };
 
     auto drawMenuIcon = [&](int index, LovyanGFX *iconTarget, const std::string &iconPath, int x, int y, int size)
@@ -2811,12 +2792,7 @@ void GUI::drawMainMenu()
         }
         if (index >= 0 && index < 6)
         {
-            if (ensureIconCache(index, iconPath, size))
-            {
-                iconCache[index].sprite.pushSprite(iconTarget, x, y);
-                return;
-            }
-            if (iconCache[index].dataLoaded)
+            if (ensureIconCache(index, iconPath))
             {
                 imgHandler.decodeAndRender(iconCache[index].data.data(),
                                            iconCache[index].data.size(),
@@ -2892,6 +2868,11 @@ void GUI::drawMainMenu()
 
             int iconTop = labelBottom + 2;
             int iconBottom = sublabelTop - 2;
+            int progressBarH = 6;
+            if (i == 1 && indexingScanActive)
+            {
+                iconBottom -= (progressBarH + 6);
+            }
             int iconH = iconBottom - iconTop;
             int iconW = btnW - 12;
             int iconSize = std::min(MENU_ICON_TARGET_SIZE, std::min(iconW, iconH));
@@ -2905,6 +2886,25 @@ void GUI::drawMainMenu()
             else
             {
                 drawMenuIcon(i, target, iconPath, iconX, iconY, iconSize);
+            }
+
+            if (i == 1 && indexingScanActive)
+            {
+                int barW = btnW - 30;
+                int barX = bx + (btnW - barW) / 2;
+                int barY = iconBottom + 4;
+                float pct = 0.2f;
+                if (indexingTotal > 0)
+                {
+                    pct = (float)indexingCurrent / (float)indexingTotal;
+                }
+                pct = std::max(0.0f, std::min(1.0f, pct));
+                target->drawRect(barX, barY, barW, progressBarH, TFT_BLACK);
+                int fillW = (int)((barW - 2) * pct);
+                if (fillW > 0)
+                {
+                    target->fillRect(barX + 1, barY + 1, fillW, progressBarH - 2, TFT_BLACK);
+                }
             }
         }
 
@@ -2944,14 +2944,7 @@ void GUI::drawMainMenu()
     {
         for (const auto &icon : deferredIcons)
         {
-            if (ensureIconCache(icon.index, icon.path, icon.size))
-            {
-                iconCache[icon.index].sprite.pushSprite(&M5.Display, icon.x, icon.y);
-            }
-            else
-            {
-                drawMenuIcon(icon.index, &M5.Display, icon.path, icon.x, icon.y, icon.size);
-            }
+            drawMenuIcon(icon.index, &M5.Display, icon.path, icon.x, icon.y, icon.size);
         }
     }
 
