@@ -710,11 +710,11 @@ void GUI::init(bool isWakeFromSleep)
     {
 #ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
         xTaskCreatePinnedToCore([](void *arg)
-                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle,
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 1, &backgroundIndexerTaskHandle,
                                 1);
 #else
         xTaskCreatePinnedToCore([](void *arg)
-                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 0, &backgroundIndexerTaskHandle, 1);
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 1, &backgroundIndexerTaskHandle, 1);
 #endif
     }
 
@@ -1184,19 +1184,20 @@ void GUI::update()
     // Check for button-triggered sleep request
     if (buttonSleepRequested)
     {
+        // Force sleep even if indexing is active, but try to stop it gracefully first
         if (backgroundIndexerTaskHandle != nullptr)
         {
-            ESP_LOGI(TAG, "Button sleep requested but indexing is active - ignoring");
-            buttonSleepRequested = false;
+            ESP_LOGI(TAG, "Button sleep requested - stopping indexing and sleeping");
+            // We can't easily stop the task if it's stuck in a loop, but we can just sleep.
+            // The deep sleep will kill all tasks.
+            // Ideally we should signal it to stop, but for now let's just sleep.
         }
-        else
-        {
-            buttonSleepRequested = false;
-            ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
-            goToSleep();
-            lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
-            return;
-        }
+        
+        buttonSleepRequested = false;
+        ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
+        goToSleep();
+        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+        return;
     }
 
     // Update gesture detector

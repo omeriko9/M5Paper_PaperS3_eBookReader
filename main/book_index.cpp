@@ -257,40 +257,6 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     // We don't take the mutex for the whole function anymore to avoid freezing the UI.
     // Instead, we take it only when accessing shared data.
     
-    // First pass: count epub files (no lock needed for filesystem)
-    int totalFiles = 0;
-    DIR *dir = opendir(basePath);
-    if (!dir)
-    {
-        ESP_LOGW(TAG, "Failed to open directory: %s", basePath);
-        return false;
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL)
-    {
-        esp_task_wdt_reset();
-        if (entry->d_type == DT_REG)
-        {
-            std::string fname = entry->d_name;
-            if (fname.length() > 5 &&
-                (fname.substr(fname.length() - 5) == ".epub" || fname.substr(fname.length() - 5) == ".EPUB"))
-            {
-                totalFiles++;
-            }
-        }
-        // Yield to let UI task run
-        if (totalFiles % 10 == 0) vTaskDelay(1);
-    }
-    closedir(dir);
-
-    // Second pass: process files
-    dir = opendir(basePath);
-    if (!dir)
-    {
-        return false;
-    }
-
     // Pre-process existing books for faster lookup
     // Take lock briefly to build the map
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
@@ -304,8 +270,17 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     }
     xSemaphoreGiveRecursive(mutex);
 
+    DIR *dir = opendir(basePath);
+    if (!dir)
+    {
+        ESP_LOGW(TAG, "Failed to open directory: %s", basePath);
+        return false;
+    }
+
     bool foundNewBooks = false;
     int processedFiles = 0;
+    struct dirent *entry;
+    
     while ((entry = readdir(dir)) != NULL)
     {
         esp_task_wdt_reset();
@@ -321,22 +296,14 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
             {
                 processedFiles++;
                 
-                // Update progress every 20 books or if it's the last one
-                if (callback && (processedFiles % 20 == 0 || processedFiles == totalFiles)) {
+                // Update progress every 20 books
+                if (callback && (processedFiles % 20 == 0)) {
                     char msg[64];
-                    snprintf(msg, sizeof(msg), "Indexing %d out of %d books...", processedFiles, totalFiles);
-                    callback(processedFiles, totalFiles, msg);
+                    snprintf(msg, sizeof(msg), "Scanning %d books...", processedFiles);
+                    callback(processedFiles, -1, msg);
                 }
 
                 std::string fullPath = std::string(basePath) + "/" + fname;
-
-                // Get file stats
-                struct stat st;
-                size_t currentSize = 0;
-                if (stat(fullPath.c_str(), &st) == 0)
-                {
-                    currentSize = st.st_size;
-                }
 
                 // Check if already exists in books
                 bool found = false;
@@ -359,31 +326,9 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
                                 foundNewBooks = true;
                             }
                             
-                            // Check size
-                            if (book.fileSize != currentSize || book.fileSize == 0) {
-                                ESP_LOGI(TAG, "Book changed or no size cached: %s", fname.c_str());
-                                // Release lock to do slow metadata loading
-                                xSemaphoreGiveRecursive(mutex);
-                                
-                                EpubLoader loader;
-                                std::string metaTitle, metaAuthor;
-                                if (loader.loadMetadataOnly(fullPath.c_str()))
-                                {
-                                    metaTitle = loader.getTitle();
-                                    metaAuthor = loader.getAuthor();
-                                    loader.close();
-                                }
-                                
-                                // Re-take lock to update
-                                xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-                                if (pair.second < books.size()) {
-                                    BookEntry& b = books[pair.second];
-                                    if (!metaTitle.empty() && metaTitle != "Unknown Title") b.title = metaTitle;
-                                    b.author = metaAuthor;
-                                    b.fileSize = currentSize;
-                                    foundNewBooks = true;
-                                }
-                            }
+                            // Check size only if we suspect change, but stat is slow.
+                            // Let's skip size check for now to speed up scanning.
+                            // If the file changed, the user should probably delete the index or we need a better way.
                         }
                         xSemaphoreGiveRecursive(mutex);
                         break;
@@ -394,38 +339,53 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
                 {
                     vTaskDelay(5);
                     // New book found. Load metadata first (slow, no lock)
-                    int id = getNextId(); // This needs lock? Yes, usually. But we can guess or take lock briefly.
-                    // Actually getNextId iterates books.
+                    int id = getNextId(); 
                     
                     std::string title = fname.substr(0, fname.length() - 5);
-                    std::string bookAuthor;
-
+                    std::string author = "Unknown";
+                    
                     EpubLoader loader;
                     if (loader.loadMetadataOnly(fullPath.c_str()))
                     {
                         std::string metaTitle = loader.getTitle();
-                        if (!metaTitle.empty() && metaTitle != "Unknown Title")
-                        {
-                            title = metaTitle;
-                        }
-                        bookAuthor = loader.getAuthor();
+                        if (!metaTitle.empty()) title = metaTitle;
+                        author = loader.getAuthor();
                         loader.close();
                     }
+                    else
+                    {
+                        ESP_LOGW(TAG, "Failed to load metadata for %s", fullPath.c_str());
+                        // Still add it with filename as title
+                    }
+                    
+                    struct stat st;
+                    size_t currentSize = 0;
+                    if (stat(fullPath.c_str(), &st) == 0)
+                    {
+                        currentSize = st.st_size;
+                    }
 
-                    // Now take lock to add to vector
                     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-                    // Recalculate ID safely
-                    id = getNextId(); 
-                    books.push_back({id, title, bookAuthor, fullPath, 0, 0, currentSize, false, false, "", 1.0f});
-                    ESP_LOGI(TAG, "Found new book: %s by %s", title.c_str(), bookAuthor.c_str());
+                    BookEntry newBook;
+                    newBook.id = id;
+                    newBook.title = title;
+                    newBook.author = author;
+                    newBook.path = fullPath;
+                    newBook.fileSize = currentSize;
+                    newBook.hasMetrics = false; // Will be checked later
+                    books.push_back(newBook);
+                    // Add to map to avoid duplicates if file appears twice (unlikely)
+                    bookMap.push_back({fname, books.size() - 1});
                     foundNewBooks = true;
                     xSemaphoreGiveRecursive(mutex);
+                    
+                    ESP_LOGI(TAG, "Added new book: %s", title.c_str());
                 }
             }
         }
     }
     closedir(dir);
-
+    
     return foundNewBooks;
 }
 
