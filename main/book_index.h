@@ -17,6 +17,7 @@ struct BookEntry {
     bool isFavorite = false; // User-marked favorite
     std::string lastFont;    // Last font used for this book
     float lastFontSize = 1.0f;  // Last font size used
+    bool isFailed = false;   // Failed to index/load
 };
 
 class BookIndex {
@@ -35,6 +36,7 @@ public:
     std::string addBook(const std::string& title);
     void removeBook(int id);
     void updateProgress(int id, int chapter, size_t offset);
+    void markAsFailed(int id); // Mark book as failed to index
     void save(); // Force save index to disk
     std::vector<BookEntry> getBooks();
     std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);

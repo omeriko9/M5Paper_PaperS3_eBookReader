@@ -477,11 +477,15 @@ void BookIndex::load(ProgressCallback callback)
             if (parts.size() >= 11)
                 lastFontSize = atof(parts[10].c_str());
 
+            bool isFailed = false;
+            if (parts.size() >= 12)
+                isFailed = (atoi(parts[11].c_str()) == 1);
+
             // Verify file exists - REMOVED for speed. Cleanup happens in background scan.
             // struct stat st;
             // if (stat(path.c_str(), &st) == 0)
             {
-                batch.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite, lastFont, lastFontSize});
+                batch.push_back({id, title, author, path, chapter, offset, fsize, hasMetrics, isFavorite, lastFont, lastFontSize, isFailed});
                 count++;
                 // log the book - REMOVED for speed
                 // ESP_LOGI(TAG, "Loaded book: %s by %s", title.c_str(), author.c_str());
@@ -541,7 +545,7 @@ void BookIndex::saveInternal()
     for (const auto &book : books)
     {
         esp_task_wdt_reset();
-        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f\n", 
+        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f|%d\n", 
             book.id, 
             sanitize(book.title).c_str(), 
             book.currentChapter, 
@@ -552,9 +556,25 @@ void BookIndex::saveInternal()
             sanitize(book.author).c_str(), 
             book.isFavorite ? 1 : 0,
             sanitize(book.lastFont).c_str(),
-            book.lastFontSize);
+            book.lastFontSize,
+            book.isFailed ? 1 : 0);
     }
     fclose(f);
+}
+
+void BookIndex::markAsFailed(int id)
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (auto &book : books)
+    {
+        if (book.id == id)
+        {
+            book.isFailed = true;
+            saveInternal();
+            break;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
 }
 
 void BookIndex::save()

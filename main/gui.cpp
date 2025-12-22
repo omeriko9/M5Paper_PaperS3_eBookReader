@@ -999,6 +999,13 @@ void GUI::backgroundIndexerTaskLoop()
                 continue;
             }
 
+            // Skip if book is marked as failed
+            if (book.isFailed)
+            {
+                ESP_LOGI(TAG, "BgIndexer: Skipping failed book %d (%s)", book.id, book.title.c_str());
+                continue;
+            }
+
             // Optimization: Check if metrics file already exists on disk (e.g. from previous firmware version or crash)
             // This avoids re-calculating if we just lost the index flag but file is there.
             // We do this check here in the background task, not on main thread.
@@ -1111,7 +1118,9 @@ void GUI::backgroundIndexerTaskLoop()
             }
             else
             {
-                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d (%s)", book.id, book.path.c_str());
+                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d (%s), marking as failed", book.id, book.path.c_str());
+                bookIndex.markAsFailed(book.id);
+                indexNeedsSave = true;
             }
 
         next_book:
