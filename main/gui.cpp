@@ -11,6 +11,7 @@
 #include "game_manager.h"
 #include "composer_ui.h"
 #include <vector>
+#include <cctype>
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <algorithm>
@@ -452,10 +453,6 @@ static std::string processTextForDisplay(const std::string &text)
         return text;
 
     // Split into words (space separated)
-    // We want to reverse the order of words for RTL.
-    // And for each word, if it is Hebrew/Arabic, reverse the letters.
-    // If it is English/Number, keep letters as is.
-
     std::vector<std::string> words;
     std::string current;
     for (char c : text)
@@ -484,104 +481,53 @@ static std::string processTextForDisplay(const std::string &text)
     {
         bool isHeb = isHebrew(word);
         bool isAra = isArabic(word);
+        std::string processedWord = word;
+
+        // Fix for English words with trailing punctuation in RTL context
+        // e.g. "English," -> ",English" so it appears as "English ," in RTL flow
+        if (!isHeb && !isAra && processedWord.length() > 1)
+        {
+            char lastChar = processedWord.back();
+            // Check if it's punctuation (but not a closing bracket which might be swapped later)
+            if (ispunct((unsigned char)lastChar) && lastChar != ')' && lastChar != ']' && lastChar != '}')
+            {
+                processedWord.pop_back();
+                processedWord.insert(0, 1, lastChar);
+            }
+        }
+
         if (isHeb || isAra)
         {
             // Replace HTML entities before reversing
-            std::string processedWord = word;
             size_t pos = 0;
-            while ((pos = processedWord.find("&quot;", pos)) != std::string::npos)
-            {
-                processedWord.replace(pos, 6, "\"");
-                pos += 1;
-            }
+            while ((pos = processedWord.find("&quot;", pos)) != std::string::npos) { processedWord.replace(pos, 6, "\""); pos += 1; }
             pos = 0;
-            while ((pos = processedWord.find("&amp;", pos)) != std::string::npos)
-            {
-                processedWord.replace(pos, 5, "&");
-                pos += 1;
-            }
+            while ((pos = processedWord.find("&amp;", pos)) != std::string::npos) { processedWord.replace(pos, 5, "&"); pos += 1; }
             pos = 0;
-            while ((pos = processedWord.find("&lt;", pos)) != std::string::npos)
-            {
-                processedWord.replace(pos, 4, "<");
-                pos += 1;
-            }
+            while ((pos = processedWord.find("&lt;", pos)) != std::string::npos) { processedWord.replace(pos, 4, "<"); pos += 1; }
             pos = 0;
-            while ((pos = processedWord.find("&gt;", pos)) != std::string::npos)
-            {
-                processedWord.replace(pos, 4, ">");
-                pos += 1;
-            }
+            while ((pos = processedWord.find("&gt;", pos)) != std::string::npos) { processedWord.replace(pos, 4, ">"); pos += 1; }
             pos = 0;
-            while ((pos = processedWord.find("&apos;", pos)) != std::string::npos)
-            {
-                processedWord.replace(pos, 6, "'");
-                pos += 1;
-            }
+            while ((pos = processedWord.find("&apos;", pos)) != std::string::npos) { processedWord.replace(pos, 6, "'"); pos += 1; }
             pos = 0;
-            while ((pos = processedWord.find("&#160;", pos)) != std::string::npos)
-            {
-                processedWord.replace(pos, 6, " ");
-                pos += 1;
-            }
+            while ((pos = processedWord.find("&#160;", pos)) != std::string::npos) { processedWord.replace(pos, 6, " "); pos += 1; }
 
             if (isAra)
             {
-                // Arabic needs shaping before reversing
                 processedWord = reshapeArabic(processedWord);
             }
 
-            // Swap mirrored characters (parentheses, etc.)
+            // Swap mirrored characters
             processedWord = swapMirroredChars(processedWord);
 
             result += reverseHebrewWord(processedWord);
         }
         else
         {
-            // For non-Hebrew/Arabic words in an RTL context, we might still need to swap chars
-            // if they are part of the RTL flow (e.g. "(123)").
-            // But usually, English words are kept LTR.
-            // However, if the whole sentence is RTL, the parentheses around an English word
-            // might need swapping if they were reversed by the word order reversal?
-            // Actually, we reversed the word order.
-            // "Hello (World)" -> "(World) Hello"
-            // If we don't swap, it stays "(World) Hello".
-            // In RTL, we want ")World( olleH" (visually).
-            // Wait, `reverseHebrewWord` reverses the string.
-            // If we have "(text)", `reverseHebrewWord` makes it ")txet(".
-            // `swapMirroredChars` makes it "(txet)".
-            // So for Hebrew words, we swap THEN reverse.
-            // "(" -> ")" -> "(" (correct for RTL display of LTR string?)
-            // No.
-            // Visual string: "שלום (עולם)"
-            // Logical: "Shalom (Olam)"
-            // Reversed words: "(Olam)", " ", "Shalom"
-            // Reversed chars: ")malo(", " ", "molahS"
-            // Display: ")malo( molahS" -> looks like "(olam) Shalom" (if read RTL?)
-            // No, we are drawing LTR.
-            // We want to see: "molahS )malo(" (Shalom (Olam))
-            // So "(" should become ")" in the reversed string.
-            // `reverseHebrewWord` turns "(" into "(".
-            // So we need to swap it to ")" so it looks like ")" in the output?
-            // Wait.
-            // Logical: (
-            // Reversed: (
-            // Displayed LTR: (
-            // But in RTL context, open paren is on the right.
-            // If we draw "molahS )malo(", the ")" is on the left of "malo".
-            // That is the closing paren for "Olam".
-            // So "(" in logical text (right of Olam) should become ")" in visual text (left of Olam).
-            // So yes, we need to swap.
-            
-            // For English words in RTL sentence:
-            // They are NOT reversed by `reverseHebrewWord`.
-            // So "Hello" stays "Hello".
-            // If we have "Hebrew (English)", words: "(English)", "Hebrew".
-            // We want to see: "werbeH (English)"
-            // So English parens should NOT be swapped if the word is not reversed?
-            // This is complex. For now, let's just swap for Hebrew/Arabic words.
-            
-            result += word;
+            // Also swap mirrored characters for English words in RTL context
+            // e.g. "(English)" -> ")English(" which renders as "(English)" in RTL
+            processedWord = swapMirroredChars(processedWord);
+            result += processedWord;
         }
     }
     return result;
@@ -784,12 +730,12 @@ void GUI::init(bool isWakeFromSleep)
 void GUI::renderTaskLoop()
 {
     ESP_LOGI(TAG, "RenderTask loop started");
+    esp_task_wdt_add(NULL); // Add task to WDT once at start
     RenderRequest req;
     while (true)
     {
         if (xQueueReceive(renderQueue, &req, portMAX_DELAY))
         {
-            esp_task_wdt_add(NULL);
             esp_task_wdt_reset();
             ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
 
@@ -1024,12 +970,27 @@ void GUI::backgroundIndexerTaskLoop()
 
     // Step 2: Calculate metrics for books that need it
     auto books = bookIndex.getBooks();
+    bool indexNeedsSave = false;
+    int updatesCount = 0;
+    
+    indexingProcessingActive = true;
+    indexingTotal = books.size();
+    int processedCount = 0;
+
     for (const auto &book : books)
     {
+        processedCount++;
+        indexingCurrent = processedCount;
+        if (currentState == AppState::MAIN_MENU) needsRedraw = true;
+
         if (bookOpenInProgress)
         {
             waitForBookOpen();
         }
+        
+        // Yield to UI task
+        vTaskDelay(pdMS_TO_TICKS(10));
+
         if (!book.hasMetrics)
         {
             // Check if this book is currently being read (to avoid double calculation)
@@ -1045,13 +1006,23 @@ void GUI::backgroundIndexerTaskLoop()
             std::vector<size_t> dummyOffsets;
             if (bookIndex.loadBookMetrics(book.id, dummyTotal, dummyOffsets))
             {
-                ESP_LOGI(TAG, "BgIndexer: Found existing metrics for book %d, updating index", book.id);
-                // This will update the in-memory flag and save to index.txt
-                bookIndex.saveBookMetrics(book.id, dummyTotal, dummyOffsets);
+                ESP_LOGI(TAG, "BgIndexer: Found existing metrics for book %d (%s), updating index flag only", book.id, book.title.c_str());
+                // Update in-memory flag ONLY. Do NOT save index yet.
+                bookIndex.updateBookMetricsFlag(book.id, true);
+                indexNeedsSave = true;
+                updatesCount++;
+                
+                // Save periodically to avoid losing progress on crash/reboot
+                if (updatesCount >= 20) {
+                    ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
+                    bookIndex.save();
+                    updatesCount = 0;
+                    indexNeedsSave = false;
+                }
                 continue;
             }
 
-            ESP_LOGI(TAG, "BgIndexer: Processing book %d (%s)", book.id, book.title.c_str());
+            ESP_LOGI(TAG, "BgIndexer: Processing new book %d (%s)", book.id, book.title.c_str());
 
             if (bookOpenInProgress)
             {
@@ -1073,7 +1044,7 @@ void GUI::backgroundIndexerTaskLoop()
                 {
                     esp_task_wdt_reset();
                     // Yield frequently to keep UI responsive
-                    vTaskDelay(1);
+                    vTaskDelay(pdMS_TO_TICKS(5));
 
                     // Check for web activity and pause if needed to avoid starving the upload handler
                     uint32_t lastHttp = WebServer::getLastActivityTime();
@@ -1111,18 +1082,39 @@ void GUI::backgroundIndexerTaskLoop()
                     sums[i + 1] = cumulative;
                 }
 
-                bookIndex.saveBookMetrics(book.id, cumulative, sums);
+                // Save metrics but NOT the index file yet (pass false)
+                bookIndex.saveBookMetrics(book.id, cumulative, sums, false);
+                indexNeedsSave = true;
+                updatesCount++;
+                
+                // Save periodically
+                if (updatesCount >= 5) { // Save more frequently for expensive operations
+                    ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
+                    bookIndex.save();
+                    updatesCount = 0;
+                    indexNeedsSave = false;
+                }
+                
                 localLoader.close();
             }
             else
             {
-                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d", book.id);
+                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d (%s)", book.id, book.path.c_str());
             }
 
         next_book:
             vTaskDelay(pdMS_TO_TICKS(100)); // Rest between books
+
         }
     }
+
+    if (indexNeedsSave) {
+        ESP_LOGI(TAG, "BgIndexer: Saving updated index with found metrics...");
+        bookIndex.save();
+    }
+
+    indexingProcessingActive = false;
+    if (currentState == AppState::MAIN_MENU) needsRedraw = true;
 
     ESP_LOGI(TAG, "BgIndexer finished");
     backgroundIndexerTaskHandle = nullptr;
@@ -1524,9 +1516,11 @@ void GUI::drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage)
     if (bookPercent > 100.0f)
         bookPercent = 100.0f;
 
-    size_t bookPageTotalSize = (effectiveTotalChars + pageChars - 1) / pageChars;
+    // Use fixed page size for stable page numbering (Issue 2)
+    const size_t FIXED_PAGE_SIZE = 1024;
+    size_t bookPageTotalSize = (effectiveTotalChars + FIXED_PAGE_SIZE - 1) / FIXED_PAGE_SIZE;
     int bookPageTotal = bookPageTotalSize > 0 ? (int)bookPageTotalSize : 1;
-    int bookPageCurrent = (int)(bookOffset / pageChars) + 1;
+    int bookPageCurrent = (int)(bookOffset / FIXED_PAGE_SIZE) + 1;
     if (bookPageCurrent > bookPageTotal)
         bookPageCurrent = bookPageTotal;
 
@@ -2932,6 +2926,24 @@ void GUI::drawMainMenu()
         }
     }
 
+    // Show indexing status if active (Issue 3)
+    if (indexingScanActive)
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Scanning... %d/%d", indexingCurrent, indexingTotal);
+        target->setTextDatum(textdatum_t::bottom_center);
+        target->setTextSize(1.0f);
+        target->drawString(buf, screenW / 2, screenH - 5);
+    }
+    else if (indexingProcessingActive)
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Processing... %d/%d", indexingCurrent, indexingTotal);
+        target->setTextDatum(textdatum_t::bottom_center);
+        target->setTextSize(1.0f);
+        target->drawString(buf, screenW / 2, screenH - 5);
+    }
+
     target->endWrite();
     target->setTextDatum(textdatum_t::top_left);
 
@@ -3942,6 +3954,7 @@ void GUI::handleTap(int x, int y)
             }
             // Save progress before exiting using centralized helper
             saveLastBook();
+            bookIndex.save(); // Save index to disk on exit (Issue 1)
 
             currentState = AppState::MAIN_MENU;
             epubLoader.close();
@@ -6783,7 +6796,7 @@ void GUI::onChapterMenuClick(int x, int y)
 
 void GUI::scanSDCardFonts()
 {
-#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    // Enable SD card fonts for all devices (Issue 6)
     sdCardFonts.clear();
 
     DeviceHAL &hal = DeviceHAL::getInstance();
@@ -6821,7 +6834,6 @@ void GUI::scanSDCardFonts()
         }
     }
     closedir(dir);
-#endif
 }
 
 void GUI::drawFontSelection()
@@ -6846,8 +6858,7 @@ void GUI::drawFontSelection()
     // Built-in fonts
     std::vector<std::string> allFonts = {"Default", "Hebrew", "Arabic", "Roboto"};
 
-    // Add SD card fonts (S3 only)
-#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    // Add SD card fonts (Issue 6)
     if (sdCardFonts.empty())
     {
         scanSDCardFonts();
@@ -6856,7 +6867,6 @@ void GUI::drawFontSelection()
     {
         allFonts.push_back("SD:" + f);
     }
-#endif
 
     const int lineHeight = 70;
     const int startY = STATUS_BAR_HEIGHT + 55;

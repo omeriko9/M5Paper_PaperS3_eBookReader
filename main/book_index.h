@@ -35,6 +35,7 @@ public:
     std::string addBook(const std::string& title);
     void removeBook(int id);
     void updateProgress(int id, int chapter, size_t offset);
+    void save(); // Force save index to disk
     std::vector<BookEntry> getBooks();
     std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);
     BookEntry getBook(int id);
@@ -50,14 +51,15 @@ public:
     bool getBookFont(int id, std::string& fontName, float& fontSize);
 
     // Metrics persistence
-    bool saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets);
+    bool saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets, bool saveToDisk = true);
     bool loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>& chapterOffsets);
+    void updateBookMetricsFlag(int id, bool hasMetrics);
 
 private:
     std::vector<BookEntry> books;
     SemaphoreHandle_t mutex = NULL;
     void load(ProgressCallback callback = nullptr);
-    void save();
+    void saveInternal();
     int getNextId();
     void checkMetricsExistence();
 };

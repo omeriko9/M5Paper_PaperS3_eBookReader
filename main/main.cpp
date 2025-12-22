@@ -475,6 +475,9 @@ extern "C" void app_main(void)
         }
     }
 
+    // Ensure main task is watched by WDT
+    esp_task_wdt_add(NULL);
+
     while (1)
     {
         M5.update(); // Causes restart on short button press       

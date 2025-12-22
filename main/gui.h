@@ -174,6 +174,7 @@ private:
     volatile int indexingCurrent = 0;
     volatile int indexingTotal = 0;
     volatile bool indexingScanActive = false;
+    volatile bool indexingProcessingActive = false;
 
     // Double click detection
     uint32_t lastClickTime = 0;

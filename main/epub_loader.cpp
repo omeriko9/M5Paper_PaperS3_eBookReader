@@ -715,7 +715,7 @@ static std::string decodeHtmlEntities(const std::string& str) {
                 else if (entity == "gt") result += '>';
                 else if (entity == "quot") result += '"';
                 else if (entity == "apos") result += '\'';
-                else if (entity == "nbsp") result += ' ';
+                else if (entity == "nbsp" || entity == "160") result += ' ';
                 else if (entity[0] == '#') {
                     // Numeric entity
                     int code = 0;

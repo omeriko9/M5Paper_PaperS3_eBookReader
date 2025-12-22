@@ -57,7 +57,7 @@ bool BookIndex::validateBooks()
             }
         }
         if (changed) {
-            save();
+            saveInternal();
             xSemaphoreGiveRecursive(mutex);
             return true;
         }
@@ -83,7 +83,7 @@ bool BookIndex::scanForNewBooks(ProgressCallback callback)
     
     if (foundNewBooks) {
         xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-        save();
+        saveInternal();
         xSemaphoreGiveRecursive(mutex);
     }
     
@@ -120,7 +120,18 @@ static std::string getMetricsPath(const std::string& bookPath) {
     return metricsPath;
 }
 
-bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets) {
+void BookIndex::updateBookMetricsFlag(int id, bool hasMetrics) {
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    for (auto& book : books) {
+        if (book.id == id) {
+            book.hasMetrics = hasMetrics;
+            break;
+        }
+    }
+    xSemaphoreGiveRecursive(mutex);
+}
+
+bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets, bool saveToDisk) {
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
     
     std::string bookPath;
@@ -166,8 +177,10 @@ bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<siz
         }
     }
     
-    // Persist the flag to index
-    save();
+    // Persist the flag to index if requested
+    if (saveToDisk) {
+        saveInternal();
+    }
     
     ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters at %s", id, totalChars, count, path.c_str());
     xSemaphoreGiveRecursive(mutex);
@@ -296,8 +309,8 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     while ((entry = readdir(dir)) != NULL)
     {
         esp_task_wdt_reset();
-        // Yield to let UI task run
-        vTaskDelay(10);
+        // Yield to let UI task run - but not too much
+        if (processedFiles % 10 == 0) vTaskDelay(1);
         
         if (entry->d_type == DT_REG)
         { // Regular file
@@ -555,7 +568,7 @@ static std::string sanitize(const std::string& s) {
     return res;
 }
 
-void BookIndex::save()
+void BookIndex::saveInternal()
 {
     // Private helper, assumes mutex held
     FILE *f = fopen(INDEX_FILE, "w");
@@ -584,6 +597,13 @@ void BookIndex::save()
     fclose(f);
 }
 
+void BookIndex::save()
+{
+    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    saveInternal();
+    xSemaphoreGiveRecursive(mutex);
+}
+
 void BookIndex::updateProgress(int id, int chapter, size_t offset)
 {
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
@@ -593,7 +613,7 @@ void BookIndex::updateProgress(int id, int chapter, size_t offset)
         {
             book.currentChapter = chapter;
             book.currentOffset = offset;
-            save();
+            // saveInternal(); // Don't save on every progress update to avoid lag
             xSemaphoreGiveRecursive(mutex);
             return;
         }
@@ -657,7 +677,7 @@ std::string BookIndex::addBook(const std::string &title)
     }
 
     books.push_back({id, title, "", std::string(path), 0, 0, 0, false, false, "", 1.0f});
-    save();
+    saveInternal();
 
     xSemaphoreGiveRecursive(mutex);
     return std::string(path);
@@ -691,7 +711,7 @@ void BookIndex::removeBook(int id)
         }
         
         books.erase(it, books.end());
-        save();
+        saveInternal();
     }
     xSemaphoreGiveRecursive(mutex);
 }
@@ -757,7 +777,7 @@ void BookIndex::setFavorite(int id, bool favorite)
     for (auto& book : books) {
         if (book.id == id) {
             book.isFavorite = favorite;
-            save();
+            saveInternal();
             break;
         }
     }
@@ -785,7 +805,7 @@ void BookIndex::setBookFont(int id, const std::string& fontName, float fontSize)
         if (book.id == id) {
             book.lastFont = fontName;
             book.lastFontSize = fontSize;
-            save();
+            saveInternal();
             break;
         }
     }
