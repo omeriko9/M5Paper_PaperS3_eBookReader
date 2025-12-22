@@ -5,11 +5,181 @@ import shutil
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from PIL import Image
 from io import BytesIO
 import argparse
+import struct
 
+def count_chapter_length(data: bytes) -> int:
+    """
+    Replicates the C++ chapterLengthCallback logic to calculate text length.
+    """
+    length = 0
+    in_tag = False
+    last_space = True
+    current_tag = bytearray()
+    
+    i = 0
+    n = len(data)
+    while i < n:
+        c = data[i]
+        
+        if c == 60: # '<'
+            in_tag = True
+            current_tag = bytearray()
+            i += 1
+            continue
+            
+        if in_tag:
+            if c == 62: # '>'
+                in_tag = False
+                # Process tag
+                try:
+                    tag_str = current_tag.decode('utf-8', errors='ignore').lower()
+                except:
+                    tag_str = ""
+                
+                is_block = False
+                if tag_str in ["p", "/p"] or tag_str.startswith("p ") or tag_str.startswith("/p "): is_block = True
+                elif tag_str in ["div", "/div"] or tag_str.startswith("div ") or tag_str.startswith("/div "): is_block = True
+                elif tag_str in ["br", "br/"] or tag_str.startswith("br "): is_block = True
+                elif tag_str in ["li", "/li"]: is_block = True
+                elif len(tag_str) >= 2 and (tag_str[0] == 'h' or (tag_str[0] == '/' and tag_str[1] == 'h')): is_block = True
+                
+                if is_block:
+                    if not last_space:
+                        length += 1
+                        last_space = True
+                elif tag_str == "img" or tag_str.startswith("img "):
+                    length += 7 # [Image]
+                    last_space = False
+            else:
+                current_tag.append(c)
+            i += 1
+            continue
+            
+        # Outside tag
+        if c == 10 or c == 13: # \n or \r
+            c = 32 # space
+            
+        if c == 32:
+            if not last_space:
+                length += 1
+                last_space = True
+        else:
+            length += 1
+            last_space = False
+            
+        i += 1
+        
+    return length
+
+def generate_metrics(epub_path: Path) -> bool:
+    """
+    Generates the m_<filename>.bin metrics file for the given EPUB.
+    Returns True if successful.
+    """
+    metrics_filename = f"m_{epub_path.stem}.bin"
+    metrics_path = epub_path.parent / metrics_filename
+    
+    if metrics_path.exists():
+        # print(f"Metrics already exist for {epub_path.name}")
+        return True
+
+    print(f"Generating metrics for {epub_path.name}...")
+    
+    try:
+        with zipfile.ZipFile(epub_path, "r") as zf:
+            # 1. Find OPF
+            try:
+                container_data = zf.read("META-INF/container.xml")
+                container_root = ET.fromstring(container_data)
+                ns_container = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
+                rootfile_elem = container_root.find(".//c:rootfile", ns_container)
+                opf_path = rootfile_elem.get("full-path")
+                opf_data = zf.read(opf_path)
+                opf_root = ET.fromstring(opf_data)
+            except Exception as e:
+                print(f"[ERROR] Failed to parse OPF for {epub_path.name}: {e}")
+                return False
+
+            ns = {
+                "dc": "http://purl.org/dc/elements/1.1/",
+                "opf": "http://www.idpf.org/2007/opf",
+            }
+            
+            # 2. Get Manifest and Spine
+            manifest = {} # id -> href
+            for item in opf_root.findall(".//opf:item", ns):
+                manifest[item.get("id")] = item.get("href")
+                
+            spine_refs = []
+            for itemref in opf_root.findall(".//opf:itemref", ns):
+                spine_refs.append(itemref.get("idref"))
+                
+            # 3. Calculate metrics
+            chapter_offsets = []
+            cumulative_length = 0
+            chapter_offsets.append(0) # Start at 0
+            
+            opf_dir = os.path.dirname(opf_path)
+            
+            for idref in spine_refs:
+                if idref not in manifest:
+                    continue
+                    
+                href = manifest[idref]
+                # Resolve path relative to OPF
+                full_path = href
+                if opf_dir:
+                    full_path = opf_dir + "/" + href
+                full_path = full_path.replace("\\", "/")
+                
+                try:
+                    content = zf.read(full_path)
+                    length = count_chapter_length(content)
+                    cumulative_length += length
+                    chapter_offsets.append(cumulative_length)
+                except KeyError:
+                    print(f"[WARN] Chapter file missing: {full_path}")
+                    # Add 0 length
+                    chapter_offsets.append(cumulative_length)
+                except Exception as e:
+                    print(f"[WARN] Error reading chapter {full_path}: {e}")
+                    chapter_offsets.append(cumulative_length)
+
+            # 4. Save to .bin file
+            # Format: Version(1) | TotalChars(4) | Count(4) | Offsets...
+            # Note: chapter_offsets contains (Count + 1) entries (0 to Total).
+            # The C++ code expects:
+            # fwrite(&totalChars, sizeof(size_t), 1, f);
+            # fwrite(&count, sizeof(uint32_t), 1, f);
+            # fwrite(chapterOffsets.data(), sizeof(size_t), count, f);
+            # Wait, C++ `chapterOffsets` vector in `saveBookMetrics` seems to be the sums?
+            # In `gui.cpp`: `sums[i + 1] = cumulative;`
+            # `bookIndex.saveBookMetrics(..., sums, ...)`
+            # So `sums` has `chapters + 1` entries.
+            # `saveBookMetrics` writes `count = chapterOffsets.size()`.
+            # So it writes `chapters + 1` entries.
+            
+            with open(metrics_path, "wb") as f:
+                version = 1
+                f.write(struct.pack("<B", version))
+                f.write(struct.pack("<I", cumulative_length)) # TotalChars (size_t = 4 bytes on ESP32)
+                
+                count = len(chapter_offsets)
+                f.write(struct.pack("<I", count))
+                
+                for offset in chapter_offsets:
+                    f.write(struct.pack("<I", offset)) # size_t = 4 bytes
+                    
+            print(f"  -> Saved metrics: {cumulative_length} chars, {count} entries")
+            return True
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to process {epub_path.name}: {e}")
+        return False
 
 def get_metadata(epub_path: Path) -> Tuple[Optional[str], Optional[str], int]:
     """
@@ -380,6 +550,11 @@ def main():
                 if final_path is None:
                     final_path = Path(full_path)
                 
+                # Generate metrics
+                has_metrics = 0
+                if generate_metrics(final_path):
+                    has_metrics = 1
+
                 title, author, size = get_metadata(final_path)
                 if title is None:
                     title = final_path.stem  # fallback to filename without extension
@@ -388,11 +563,13 @@ def main():
                 title = sanitize(title)
                 author = sanitize(author) if author else ""
                 
-                # Path as /spiffs/filename.epub
-                index_path = f"/spiffs/{final_path.name}"
+                # Path as /sdcard/books/filename.epub (assuming SD card usage as requested)
+                # If using SPIFFS, the device will re-scan and update the path, but the metrics file will still be found
+                # if it is next to the epub.
+                index_path = f"/sdcard/books/{final_path.name}"
                 
                 # Format: id|title|chapter|offset|path|size|hasMetrics|author|isFavorite|lastFont|lastFontSize
-                entry = f"{book_id}|{title}|0|0|{index_path}|{size}|0|{author}|0||1.0"
+                entry = f"{book_id}|{title}|0|0|{index_path}|{size}|{has_metrics}|{author}|0||1.0"
                 index_entries.append(entry)
                 
                 book_id += 1

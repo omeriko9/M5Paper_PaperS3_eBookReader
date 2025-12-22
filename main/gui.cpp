@@ -1029,11 +1029,12 @@ void GUI::backgroundIndexerTaskLoop()
                 waitForBookOpen();
             }
 
+            uint32_t bookStartTime = (uint32_t)(esp_timer_get_time() / 1000);
             EpubLoader localLoader;
             // Note: We don't take epubMutex here because we are using a separate loader instance
             // and separate file handle. SPIFFS is thread-safe.
 
-            if (localLoader.load(book.path.c_str()))
+            if (localLoader.load(book.path.c_str(), -1, false))
             {
                 int chapters = localLoader.getTotalChapters();
                 std::vector<size_t> sums;
@@ -1045,6 +1046,17 @@ void GUI::backgroundIndexerTaskLoop()
                     esp_task_wdt_reset();
                     // Yield frequently to keep UI responsive
                     vTaskDelay(pdMS_TO_TICKS(5));
+
+                    if (i % 10 == 0) {
+                        ESP_LOGI(TAG, "BgIndexer: Processing chapter %d/%d", i, chapters);
+                    }
+
+                    // Timeout check
+                    if ((uint32_t)(esp_timer_get_time() / 1000) - bookStartTime > 10 * 60 * 1000) {
+                        ESP_LOGW(TAG, "BgIndexer: Book processing timed out, skipping");
+                        localLoader.close();
+                        goto next_book;
+                    }
 
                     // Check for web activity and pause if needed to avoid starving the upload handler
                     uint32_t lastHttp = WebServer::getLastActivityTime();

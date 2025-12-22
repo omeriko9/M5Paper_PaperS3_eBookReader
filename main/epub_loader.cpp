@@ -53,7 +53,7 @@ bool EpubLoader::isChapterSkippable(int index) {
     return false;
 }
 
-bool EpubLoader::load(const char* path, int restoreChapterIndex) {
+bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstChapter) {
     close();
     currentPath = path;
     ESP_LOGI(TAG, "Loading %s", path);
@@ -101,24 +101,26 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex) {
         }
     }
 
-    currentTextOffset = 0;
-    loadChapter(currentChapterIndex);
-    esp_task_wdt_reset();
+    if (loadFirstChapter) {
+        currentTextOffset = 0;
+        loadChapter(currentChapterIndex);
+        esp_task_wdt_reset();
 
-    // If the loaded chapter is very small (likely empty or just an image wrapper), try next
-    // Limit this to a few chapters to avoid infinite loop
-    // Only do this if NOT restoring, or if the restored chapter is weirdly empty (though if we saved it, it was probably fine)
-    if (restoreChapterIndex == -1) {
-        int retries = 0;
-        while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
-            esp_task_wdt_reset();
-            ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
-            currentChapterIndex++;
-            loadChapter(currentChapterIndex);
-            retries++;
+        // If the loaded chapter is very small (likely empty or just an image wrapper), try next
+        // Limit this to a few chapters to avoid infinite loop
+        // Only do this if NOT restoring, or if the restored chapter is weirdly empty (though if we saved it, it was probably fine)
+        if (restoreChapterIndex == -1) {
+            int retries = 0;
+            while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
+                esp_task_wdt_reset();
+                ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
+                currentChapterIndex++;
+                loadChapter(currentChapterIndex);
+                retries++;
+            }
         }
+        esp_task_wdt_reset();
     }
-    esp_task_wdt_reset();
     
     return true;
 }

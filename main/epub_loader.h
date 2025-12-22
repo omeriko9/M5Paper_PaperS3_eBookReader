@@ -18,7 +18,7 @@ struct EpubImage {
 
 class EpubLoader {
 public:
-    bool load(const char* path, int restoreChapterIndex = -1);
+    bool load(const char* path, int restoreChapterIndex = -1, bool loadFirstChapter = true);
     // Lightweight metadata-only load (title/lang), no chapter parsing or heuristics.
     bool loadMetadataOnly(const char* path);
     std::string getTitle();
