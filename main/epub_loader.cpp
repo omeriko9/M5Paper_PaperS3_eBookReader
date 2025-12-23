@@ -1017,12 +1017,13 @@ bool EpubLoader::extractImage(const std::string& imagePath, std::vector<uint8_t>
         ESP_LOGE(TAG, "EPUB not open");
         return false;
     }
-    
+    ESP_LOGI(TAG, "Extracting image: %s", imagePath.c_str());
     std::string finalPath = "";
     
     // Try the path as-is first
     if (zip.fileExists(imagePath)) {
         finalPath = imagePath;
+        ESP_LOGI(TAG, "Found image at: %s", finalPath.c_str());
     } else {
         // Try with rootDir prefix
         std::string fullPath = rootDir + imagePath;
@@ -1062,9 +1063,12 @@ bool EpubLoader::extractImage(const std::string& imagePath, std::vector<uint8_t>
 
     // Peek header to check dimensions before extracting full binary
     uint8_t header[64]; // Enough for PNG and most JPEGs
+    ESP_LOGI(TAG, "Peeking image header for dimension check: %s", finalPath.c_str());
     size_t peekSize = zip.peekFile(finalPath, header, sizeof(header));
+    ESP_LOGI(TAG, "Peeked %u bytes from image header", (unsigned)peekSize);
     if (peekSize > 0) {
         int w, h;
+        ESP_LOGI(TAG, "Checking image dimensions");
         if (ImageHandler::getInstance().getDimensions(header, peekSize, w, h)) {
             // If image is extremely large (e.g. > 4000x4000), skip it to avoid OOM or watchdog
             // Note: ImageHandler will allow up to MAX_IMAGE_DIMENSION (1920) *after scaling*
@@ -1075,6 +1079,7 @@ bool EpubLoader::extractImage(const std::string& imagePath, std::vector<uint8_t>
                 ESP_LOGW(TAG, "Image too large to process: %dx%d (%s)", w, h, finalPath.c_str());
                 return false;
             }
+            ESP_LOGI(TAG, "Image dimensions: %dx%d", w, h);
         }
     }
     

@@ -546,6 +546,7 @@ bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>&
 }
 
 size_t ZipReader::peekFile(const std::string& filename, uint8_t* outData, size_t size) {
+    
     const ZipFileInfo* infoPtr = findFile(filename);
     if (!infoPtr) {
         return 0;
@@ -611,7 +612,7 @@ size_t ZipReader::peekFile(const std::string& filename, uint8_t* outData, size_t
                 ret = inflate(&strm, Z_NO_FLUSH);
                 if (ret != Z_OK && ret != Z_STREAM_END) break;
             }
-            
+
             bytesRead = size - strm.avail_out;
             inflateEnd(&strm);
         }

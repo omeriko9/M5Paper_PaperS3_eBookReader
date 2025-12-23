@@ -36,6 +36,25 @@ static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
 static const size_t IMAGE_PLACEHOLDER_LEN = 3;
 
 static const char *TAG = "GUI";
+static bool takeEpubMutexWithWdt(SemaphoreHandle_t mutex, volatile bool *abort = nullptr)
+{
+    if (!mutex)
+    {
+        return false;
+    }
+    while (true)
+    {
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            return true;
+        }
+        esp_task_wdt_reset();
+        if (abort && *abort)
+        {
+            return false;
+        }
+    }
+}
 bool GUI::canJump() const
 {
     return currentState == AppState::READER;
@@ -2053,7 +2072,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
     // Fetch a large chunk
     std::string text;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    if (takeEpubMutexWithWdt(epubMutex, abort))
     {
         text = epubLoader.getText(startOffset, 3000);
         xSemaphoreGive(epubMutex);
@@ -2180,6 +2199,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 startX += (w + spaceWLocal);
             }
         }
+
     };
 
     int linesDrawn = 0;
@@ -2223,7 +2243,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             // Find the image at this offset
             const EpubImage *image = nullptr;
             size_t imageOffset = startOffset + i;
-            if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+            if (takeEpubMutexWithWdt(epubMutex, abort))
             {
                 image = epubLoader.findImageAtOffset(imageOffset, 10);
                 xSemaphoreGive(epubMutex);
@@ -2248,10 +2268,22 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                     // Extract and render image
                     std::vector<uint8_t> imageData;
                     bool extracted = false;
-                    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+                    bool resumeWrite = false;
+                    if (draw && target == nullptr && gfx->isEPD())
+                    {
+                        // Release EPD SPI bus before SD/zip file I/O to avoid deadlock.
+                        gfx->endWrite();
+                        resumeWrite = true;
+                    }
+                    if (takeEpubMutexWithWdt(epubMutex, abort))
                     {
                         extracted = epubLoader.extractImage(image->path, imageData);
                         xSemaphoreGive(epubMutex);
+                    }
+                    if (resumeWrite)
+                    {
+                        gfx->startWrite();
+                        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
                     }
 
                     if (extracted && !imageData.empty())
@@ -2403,7 +2435,6 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         {
             i = nextSpace;
         }
-
         if (isNewline)
         {
             drawLine(currentLine);
@@ -6419,7 +6450,6 @@ bool GUI::openImageViewer(const EpubImage &image)
         return false;
     }
 
-    ESP_LOGI(TAG, "Extracted image: %zu bytes", currentImageData.size());
 
     // Transition to image viewer state
     previousState = currentState;
