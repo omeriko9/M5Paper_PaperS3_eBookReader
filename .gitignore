@@ -2,11 +2,13 @@
 build/
 build
 build/*
-managed_components/
+managed_components
 *.epub
 bootloader-prefix/
 old-books/
 games/
+regular-fonts/
+test_spiffs_dir/
 
 # ESP-IDF specific
 sdkconfig
