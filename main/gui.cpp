@@ -601,7 +601,7 @@ void GUI::init(bool isWakeFromSleep)
                             deviceHAL.getRenderTaskCore());
 #else
     xTaskCreatePinnedToCore([](void *arg)
-                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 8192, this, 1, &renderTaskHandle, 0);
+                            { static_cast<GUI *>(arg)->renderTaskLoop(); }, "RenderTask", 8192, this, 10, &renderTaskHandle, 0);
 #endif
 
     // Initialize NVS
@@ -714,7 +714,7 @@ void GUI::init(bool isWakeFromSleep)
                                 1);
 #else
         xTaskCreatePinnedToCore([](void *arg)
-                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 1, &backgroundIndexerTaskHandle, 1);
+                                { static_cast<GUI *>(arg)->backgroundIndexerTaskLoop(); }, "BgIndexer", 8192, this, 1, &backgroundIndexerTaskHandle, 0);
 #endif
     }
 
@@ -730,12 +730,12 @@ void GUI::init(bool isWakeFromSleep)
 void GUI::renderTaskLoop()
 {
     ESP_LOGI(TAG, "RenderTask loop started");
-    esp_task_wdt_add(NULL); // Add task to WDT once at start
     RenderRequest req;
     while (true)
     {
         if (xQueueReceive(renderQueue, &req, portMAX_DELAY))
         {
+            esp_task_wdt_add(NULL);
             esp_task_wdt_reset();
             ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
 
@@ -2011,6 +2011,7 @@ void GUI::drawLibrary(bool favoritesOnly)
         sprite->pushSprite(&M5.Display, 0, 0);
     }
 
+    M5.Display.waitDisplay();
     M5.Display.display();
 }
 
@@ -2190,6 +2191,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             if (draw)
                 gfx->endWrite();
             return 0;
+        }
+
+        // Reset watchdog periodically during long rendering
+        if (linesDrawn % 5 == 0)
+        {
+            esp_task_wdt_reset();
         }
 
         // Check for image placeholder character (U+E000 = \xEE\x80\x80)
@@ -2661,6 +2668,7 @@ void GUI::drawReader(bool flush)
     if (flush)
     {
         ESP_LOGI(TAG, "Calling M5.Display.display()");
+        M5.Display.waitDisplay();
         M5.Display.display();
     }
     ESP_LOGI(TAG, "drawReader completed");
@@ -2750,16 +2758,6 @@ void GUI::drawMainMenu()
     };
     static MenuIconCache iconCache[6];
 
-    struct MenuIconDraw
-    {
-        int index;
-        std::string path;
-        int x;
-        int y;
-        int size;
-    };
-    std::vector<MenuIconDraw> deferredIcons;
-
     auto ensureIconCache = [&](int index, const std::string &iconPath)
     {
         if (index < 0 || index >= 6)
@@ -2843,6 +2841,7 @@ void GUI::drawMainMenu()
 
     for (int i = 0; i < 6; i++)
     {
+        esp_task_wdt_reset();
         int row = i / cols;
         int col = i % cols;
 
@@ -2895,14 +2894,7 @@ void GUI::drawMainMenu()
             int iconX = bx + (btnW - iconSize) / 2;
             int iconY = iconTop + (iconH - iconSize) / 2;
 
-            if (sprite)
-            {
-                deferredIcons.push_back({i, iconPath, iconX, iconY, iconSize});
-            }
-            else
-            {
-                drawMenuIcon(i, target, iconPath, iconX, iconY, iconSize);
-            }
+            drawMenuIcon(i, target, iconPath, iconX, iconY, iconSize);
 
             if (i == 1 && indexingScanActive)
             {
@@ -2974,14 +2966,7 @@ void GUI::drawMainMenu()
         sprite->pushSprite(&M5.Display, 0, 0);
     }
 
-    if (sprite && !deferredIcons.empty())
-    {
-        for (const auto &icon : deferredIcons)
-        {
-            drawMenuIcon(icon.index, &M5.Display, icon.path, icon.x, icon.y, icon.size);
-        }
-    }
-
+    // M5.Display.waitDisplay(); // Removed to avoid blocking if not needed
     M5.Display.display();
 }
 

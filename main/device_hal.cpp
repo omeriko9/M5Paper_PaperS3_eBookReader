@@ -487,7 +487,7 @@ bool DeviceHAL::mountSDCard()
     miso = M5PAPER_SD_MISO_PIN;
     clk = M5PAPER_SD_CLK_PIN;
     cs = M5PAPER_SD_CS_PIN;
-    host_id = SPI2_HOST;
+    host_id = SPI3_HOST; // Share VSPI with EPD to avoid pin mux conflicts.
     host.max_freq_khz = 20000;
 #endif
 
@@ -644,7 +644,7 @@ bool DeviceHAL::formatSDCard(std::function<void(int)> progressCallback)
     miso = M5PAPER_SD_MISO_PIN;
     clk = M5PAPER_SD_CLK_PIN;
     cs = M5PAPER_SD_CS_PIN;
-    host_id = SPI2_HOST;
+    host_id = SPI3_HOST; // Share VSPI with EPD to avoid pin mux conflicts.
     host.max_freq_khz = 20000;
 #endif
 

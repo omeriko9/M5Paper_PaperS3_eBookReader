@@ -18,6 +18,7 @@
 #include "driver/gpio.h"
 #include <time.h>
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 #if __has_include(<esp_sntp.h>)
@@ -42,7 +43,22 @@ WifiManager wifiManager;
 WebServer webServer;
 GUI gui;
 BookIndex bookIndex; // Global instance
-DeviceHAL& deviceHAL = DeviceHAL::getInstance();
+DeviceHAL &deviceHAL = DeviceHAL::getInstance();
+
+static bool waitForDisplayReady(uint32_t timeoutMs)
+{
+    uint64_t startMs = esp_timer_get_time() / 1000ULL;
+    while (M5.Display.displayBusy())
+    {
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(20));
+        if ((esp_timer_get_time() / 1000ULL) - startMs > timeoutMs)
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 static inline void stopSntpClient()
 {
@@ -57,23 +73,29 @@ void syncRtcFromNtp()
     char tz[64] = {0};
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open("storage", NVS_READONLY, &my_handle);
-    if (err == ESP_OK) {
+    if (err == ESP_OK)
+    {
         size_t required_size = sizeof(tz);
-        if (nvs_get_str(my_handle, "timezone", tz, &required_size) == ESP_OK) {
+        if (nvs_get_str(my_handle, "timezone", tz, &required_size) == ESP_OK)
+        {
             ESP_LOGI(TAG, "Loaded timezone from NVS: %s", tz);
             setenv("TZ", tz, 1);
             tzset();
-        } else {
+        }
+        else
+        {
             // Default to Jerusalem if not set
-            const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+            const char *defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
             ESP_LOGI(TAG, "Timezone not set in NVS, using default: %s", defaultTz);
             setenv("TZ", defaultTz, 1);
             tzset();
         }
         nvs_close(my_handle);
-    } else {
-         // Default to Jerusalem if NVS fails
-        const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+    }
+    else
+    {
+        // Default to Jerusalem if NVS fails
+        const char *defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
         ESP_LOGI(TAG, "NVS open failed, using default timezone: %s", defaultTz);
         setenv("TZ", defaultTz, 1);
         tzset();
@@ -146,24 +168,27 @@ extern "C" void app_main(void)
     // if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER)
     // {
     //     ESP_LOGI(TAG, "Woke from Stage 1 Deep Sleep (Timer) - Entering Stage 2 Shutdown");
-    //     // We need to initialize M5 to access board info inside enterDeepSleepShutdown, 
+    //     // We need to initialize M5 to access board info inside enterDeepSleepShutdown,
     //     // but we can skip display init to save time/power.
     //     // Actually, enterDeepSleepShutdown checks M5.getBoard().
     //     // M5.begin() is needed? M5.getBoard() might work if we just call M5.begin() minimally.
     //     // But to be safe and simple:
-    //     M5.begin(); 
+    //     M5.begin();
     //     GUI::enterDeepSleepShutdown();
     //     return; // Should not reach here
     // }
 
     bool is_wake_from_sleep = (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || wakeup_reason == ESP_SLEEP_WAKEUP_EXT1);
-    
-    if (is_wake_from_sleep) {
+
+    if (is_wake_from_sleep)
+    {
         ESP_LOGI(TAG, "Woke from deep sleep - fast path");
-    } else {
+    }
+    else
+    {
         ESP_LOGI(TAG, "Cold boot - full initialization");
     }
-    
+
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -178,22 +203,28 @@ extern "C" void app_main(void)
     {
         char tz[64] = {0};
         nvs_handle_t my_handle;
-        if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK) {
+        if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
+        {
             size_t required_size = sizeof(tz);
-            if (nvs_get_str(my_handle, "timezone", tz, &required_size) == ESP_OK) {
+            if (nvs_get_str(my_handle, "timezone", tz, &required_size) == ESP_OK)
+            {
                 ESP_LOGI(TAG, "Loaded timezone from NVS on boot: %s", tz);
                 setenv("TZ", tz, 1);
                 tzset();
-            } else {
+            }
+            else
+            {
                 // Default to Jerusalem if not set
-                const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+                const char *defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
                 ESP_LOGI(TAG, "Timezone not set, using default: %s", defaultTz);
                 setenv("TZ", defaultTz, 1);
                 tzset();
             }
             nvs_close(my_handle);
-        } else {
-            const char* defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
+        }
+        else
+        {
+            const char *defaultTz = "IST-2IDT,M3.4.4/26,M10.5.0";
             setenv("TZ", defaultTz, 1);
             tzset();
         }
@@ -316,36 +347,63 @@ extern "C" void app_main(void)
     // Initialize M5Unified AFTER SD card is mounted
     auto cfg = M5.config();
     cfg.clear_display = !is_wake_from_sleep; // Don't clear on wake - saves time
-    cfg.output_power = true; // keep main power rail
-    
-    // Use cached board type to skip autodetect (saves ~1 second)
-    if (is_wake_from_sleep) {
-#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-        // M5PaperS3 has IMU enabled by default
-        cfg.internal_imu = true;
-        cfg.internal_rtc = true;
-        cfg.internal_spk = false;
-        cfg.internal_mic = false;
-#else
-        // Original M5Paper - no IMU
-        cfg.internal_imu = false;
-        cfg.internal_rtc = true;
-        cfg.internal_spk = false;
-        cfg.internal_mic = false;
-#endif
-    }
+    cfg.output_power = true;                 // keep main power rail
 
+    // Configure device-specific settings
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-    // Enable IMU for M5PaperS3 for gyroscope-based rotation
+    // M5PaperS3 has IMU enabled for gyroscope-based rotation
     cfg.internal_imu = true;
+    cfg.internal_rtc = true;
+    cfg.internal_spk = false;
+    cfg.internal_mic = false;
+    // Ensure display init even if auto-detect fails.
+    cfg.fallback_board = m5::board_t::board_M5PaperS3;
+#else
+    // Original M5Paper - no IMU
+    cfg.internal_imu = false;
+    cfg.internal_rtc = true;
+    cfg.internal_spk = false;
+    cfg.internal_mic = false;
+    // Ensure display init even if auto-detect fails.
+    cfg.fallback_board = m5::board_t::board_M5Paper;
 #endif
-    
+
+// If we previously entered deep sleep shutdown, the M5Paper power rail GPIO can
+// be held LOW across reset. Release the hold and force it HIGH before init.
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPER
+    gpio_hold_dis(GPIO_NUM_2);
+    gpio_deep_sleep_hold_dis();
+    gpio_reset_pin(GPIO_NUM_2);
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_2, 1);
+#endif
+
     M5.begin(cfg);
+    ESP_LOGI(TAG, "M5 initialized. Board type: %d", (int)M5.getBoard());
 
+    // Ensure display is awake and powered
+    M5.Display.wakeup();
 
-    M5.BtnPWR.setDebounceThresh(0);  // Disable default debounce
-    M5.BtnPWR.setHoldThresh(0);      // Disable default hold detection
-    
+    // For original M5Paper, we might need to explicitly power the display rail
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPER
+
+    // M5.Power.setVibration(0); // Ensure vibration is off
+    //  M5.Display.setEpdMode(m5gfx::epd_mode_t::epd_quality); // Removed to avoid potential conflict
+    //  M5.Display.setBrightness(255); // Removed
+    M5.Display.setEpdMode(lgfx::epd_mode_t::epd_quality);
+    if (!waitForDisplayReady(6000))
+    {
+        ESP_LOGW(TAG, "Display busy on boot; continuing without wait");
+    }
+    M5.Display.fillScreen(TFT_WHITE);
+    M5.Display.display();
+
+    // M5.Display.display(); // Removed
+    /// M5.Power. .setMainPower(true); // Ensure main power is on
+#endif
+
+    M5.BtnPWR.setDebounceThresh(0); // Disable default debounce
+    M5.BtnPWR.setHoldThresh(0);     // Disable default hold detection
 
     esp_task_wdt_reset();
     M5.Display.setRotation(0); // Portrait
@@ -357,18 +415,25 @@ extern "C" void app_main(void)
 
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     // Try to mount SD card
-    if (deviceHAL.mountSDCard()) {
+    if (deviceHAL.mountSDCard())
+    {
         ESP_LOGI(TAG, "SD card mounted successfully");
-    } else {
+    }
+    else
+    {
         ESP_LOGW(TAG, "SD card not available");
     }
     esp_task_wdt_reset();
 #endif
-    
+
     // Skip "Initializing..." message on wake - saves ~100ms and we want fast restore
-    if (!is_wake_from_sleep) {
+    if (!is_wake_from_sleep)
+    {
         M5.Display.setTextDatum(textdatum_t::middle_center);
         M5.Display.drawString("Initializing...", M5.Display.width() / 2, M5.Display.height() / 2);
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+        M5.Display.display();
+#endif
     }
     M5.Display.setTextDatum(textdatum_t::top_left); // Reset datum
 
@@ -398,7 +463,8 @@ extern "C" void app_main(void)
         {
             esp_task_wdt_reset();
             // Skip expensive partition info query on wake - saves ~1.2 seconds
-            if (!is_wake_from_sleep) {
+            if (!is_wake_from_sleep)
+            {
                 size_t total = 0, used = 0;
                 ret = esp_spiffs_info("storage", &total, &used);
                 if (ret != ESP_OK)
@@ -418,24 +484,28 @@ extern "C" void app_main(void)
     // WiFi needs to reserve its internal buffers first to avoid OOM on devices
     // with limited internal SRAM
     bool wifiInitOk = false;
-    if (!is_wake_from_sleep) {
-        ESP_LOGI(TAG, "Pre-initializing WiFi subsystem (heap: %u)", 
+    if (!is_wake_from_sleep)
+    {
+        ESP_LOGI(TAG, "Pre-initializing WiFi subsystem (heap: %u)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
         wifiInitOk = wifiManager.init();
         esp_task_wdt_reset();
-        if (!wifiInitOk) {
+        if (!wifiInitOk)
+        {
             ESP_LOGW(TAG, "WiFi init failed - will run without WiFi support");
         }
     }
 
     gui.init(is_wake_from_sleep);
     esp_task_wdt_reset();
-    
+
     // Initialize WiFi connections - either on cold boot or on wake from deep sleep if WiFi is enabled
-    if (!is_wake_from_sleep) {
+    if (!is_wake_from_sleep)
+    {
         // Cold boot: WiFi was already initialized above
 
-        if (wifiInitOk && gui.isWifiEnabled()) {
+        if (wifiInitOk && gui.isWifiEnabled())
+        {
             // Try to connect, if fails, start AP
             bool wifiOk = wifiManager.connect();
             esp_task_wdt_reset();
@@ -451,57 +521,66 @@ extern "C" void app_main(void)
             }
             webServer.init("/spiffs");
             esp_task_wdt_reset();
-        } else if (!wifiInitOk) {
+        }
+        else if (!wifiInitOk)
+        {
             ESP_LOGW(TAG, "WiFi disabled due to init failure");
-        } else {
+        }
+        else
+        {
             ESP_LOGI(TAG, "WiFi disabled by settings");
         }
-    } else {
+    }
+    else
+    {
         // Wake from deep sleep: Init WiFi if it was enabled in settings
-        if (gui.isWifiEnabled()) {
+        if (gui.isWifiEnabled())
+        {
             ESP_LOGI(TAG, "Wake from deep sleep with WiFi enabled - connecting");
             wifiManager.init();
             esp_task_wdt_reset();
             bool wifiOk = wifiManager.connect();
             esp_task_wdt_reset();
-            if (!wifiOk) {
+            if (!wifiOk)
+            {
                 wifiManager.startAP();
                 esp_task_wdt_reset();
             }
             webServer.init("/spiffs");
             esp_task_wdt_reset();
-        } else {
+        }
+        else
+        {
             ESP_LOGI(TAG, "Wake from deep sleep - WiFi disabled in settings");
         }
     }
 
-    // Ensure main task is watched by WDT
-    esp_task_wdt_add(NULL);
-
     while (1)
     {
-        M5.update(); // Causes restart on short button press       
+        M5.update(); // Causes restart on short button press
 
         // Check for long press on PWR button (or BtnA for devices without PWR button)
         // Long press = deep sleep shutdown (no timer, only wake on another button press)
         static uint32_t buttonPressStart = 0;
         static bool buttonLongPressHandled = false;
-        const uint32_t LONG_PRESS_MS = 2000;  // 2 seconds for long press
-        
+        const uint32_t LONG_PRESS_MS = 2000; // 2 seconds for long press
+
         // Manual button detection since we skipped M5.update()
         bool buttonPressed = false;
-        
-        #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         // M5PaperS3: Check GPIO 0 (BtnA/Boot) and GPIO 44 (Power?)
         // Note: GPIO 0 is active low
-        if (gpio_get_level(GPIO_NUM_0) == 0) buttonPressed = true;
-        #else
+        if (gpio_get_level(GPIO_NUM_0) == 0)
+            buttonPressed = true;
+#else
         // M5Paper: Check GPIO 37, 38, 39 (Scroll Wheel)
-        if (gpio_get_level(GPIO_NUM_37) == 0 || 
-            gpio_get_level(GPIO_NUM_38) == 0 || 
-            gpio_get_level(GPIO_NUM_39) == 0) buttonPressed = true;
-        #endif
-        
+        if (gpio_get_level(GPIO_NUM_37) == 0 ||
+            gpio_get_level(GPIO_NUM_38) == 0 ||
+            gpio_get_level(GPIO_NUM_39) == 0)
+            buttonPressed = true;
+#endif
+
         if (buttonPressed)
         {
             if (buttonPressStart == 0)
@@ -516,19 +595,19 @@ extern "C" void app_main(void)
                 {
                     buttonLongPressHandled = true;
                     ESP_LOGI(TAG, "Long button press detected - entering deep sleep shutdown");
-                    
+
                     // Play shutdown sound
                     deviceHAL.playShutdownSound();
-                    
+
                     // Clear screen and enter deep sleep
                     ESP_LOGI(TAG, "Clearing screen before sleep...");
                     M5.Display.clear(TFT_WHITE);
                     M5.Display.display();
                     M5.Display.waitDisplay();
-                    
+
                     // Give some time for the E-Ink to finish refresh
                     vTaskDelay(1000 / portTICK_PERIOD_MS);
-                    
+
                     // Enter deep sleep with no timer - only button wake
                     GUI::enterDeepSleepShutdown();
                     // Should not return
