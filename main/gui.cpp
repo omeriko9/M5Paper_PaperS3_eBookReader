@@ -2757,6 +2757,13 @@ void GUI::drawMainMenu()
         bool dataLoaded = false;
     };
     static MenuIconCache iconCache[6];
+    const bool needsIconFlatten = deviceHAL.isM5Paper();
+    M5Canvas iconSprite;
+    if (needsIconFlatten)
+    {
+        iconSprite.setColorDepth(16);
+        iconSprite.setPsram(true);
+    }
 
     auto ensureIconCache = [&](int index, const std::string &iconPath)
     {
@@ -2839,6 +2846,34 @@ void GUI::drawMainMenu()
         fclose(f);
     };
 
+    auto drawMenuIconWithBackground = [&](int index, LovyanGFX *iconTarget, const std::string &iconPath, int x, int y, int size, uint16_t bgColor)
+    {
+        if (!needsIconFlatten)
+        {
+            drawMenuIcon(index, iconTarget, iconPath, x, y, size);
+            return;
+        }
+        if (size <= 0)
+        {
+            return;
+        }
+        if (iconSprite.width() != size || iconSprite.height() != size)
+        {
+            iconSprite.deleteSprite();
+            iconSprite.setColorDepth(16);
+            iconSprite.setPsram(true);
+            if (!iconSprite.createSprite(size, size))
+            {
+                drawMenuIcon(index, iconTarget, iconPath, x, y, size);
+                return;
+            }
+        }
+        // Flatten alpha on a higher-depth sprite so 2bpp targets don't turn transparency black.
+        iconSprite.fillScreen(bgColor);
+        drawMenuIcon(index, &iconSprite, iconPath, 0, 0, size);
+        iconSprite.pushSprite(iconTarget, x, y);
+    };
+
     for (int i = 0; i < 6; i++)
     {
         esp_task_wdt_reset();
@@ -2894,7 +2929,7 @@ void GUI::drawMainMenu()
             int iconX = bx + (btnW - iconSize) / 2;
             int iconY = iconTop + (iconH - iconSize) / 2;
 
-            drawMenuIcon(i, target, iconPath, iconX, iconY, iconSize);
+            drawMenuIconWithBackground(i, target, iconPath, iconX, iconY, iconSize, bgColor);
 
             if (i == 1 && indexingScanActive)
             {
