@@ -5780,9 +5780,9 @@ void GUI::ensureMathFontLoaded()
         
         // Initialize the math renderer with the font
         mathRenderer.setMathFont(fontDataMath.data());
-        // Use a reasonable base size (e.g. 20px) or 0 if unused. 
-        // Passing fontSize * 20 to be safe if it's used for defaults.
-        mathRenderer.init((int)(fontSize * 20), M5.Display.width());
+        // Note: baseFontSize in init() is not used by calculateLayout() - we pass
+        // our own font scale directly. Setting to 20 to match VLW native size.
+        mathRenderer.init(20, M5.Display.width());
     }
     else
     {
@@ -5830,9 +5830,17 @@ bool GUI::renderMathInline(const std::string& mathml, M5Canvas* canvas,
     }
     
     // Calculate layout
-    // fontSize is a scale factor (e.g. 1.0, 1.5). 
-    // We use it directly as the scale for the math font.
-    float mathFontSize = fontSize;  
+    // IMPORTANT: GUI's fontSize is a SCALE FACTOR (1.0, 1.5, 2.0, 2.5), NOT pixels.
+    // The math VLW font is generated at 20px native size.
+    // setTextSize(1.0) means use native size (20px), setTextSize(2.0) means 40px.
+    // 
+    // To achieve reasonable math size that scales with user font preference:
+    // - Base scale of 1.0 = native 20px font (good for inline math)
+    // - Multiply by fontSize to scale proportionally with text
+    // - But fontSize 2.5 would make math 50px which is still large,
+    //   so we use a dampened scale: 1.0 + (fontSize - 1.0) * 0.4
+    // This maps: fontSize 1.0 -> 1.0, fontSize 2.5 -> 1.6
+    float mathFontSize = 1.0f + (fontSize - 1.0f) * 0.4f;
     mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
     
     // Check if it fits
@@ -5903,7 +5911,8 @@ void GUI::measureMath(const std::string& mathml, int& outWidth, int& outHeight, 
         mathRenderer.setMathFont(fontDataMath.data());
     }
     
-    float mathFontSize = fontSize;
+    // Use same dampened scale as renderMathInline for consistency
+    float mathFontSize = 1.0f + (fontSize - 1.0f) * 0.4f;
     mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
     
     outWidth = tree->box.width;

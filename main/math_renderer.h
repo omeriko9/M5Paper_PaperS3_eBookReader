@@ -193,7 +193,9 @@ private:
     float subscriptScale = 0.7f;
     float superscriptScale = 0.7f;
     float fractionScale = 0.85f;
-    int minFontSize = 10;
+    // minFontSize is a SCALE FACTOR for setTextSize(), not pixels.
+    // With a 20px VLW font, 0.5 means minimum 10px effective size.
+    float minFontSize = 0.5f;
     
     // Font data
     const uint8_t* mathFontData = nullptr;
