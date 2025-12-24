@@ -428,7 +428,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             }
 
             remaining -= bytesRead;
-            if ((remaining & 0x3FFF) == 0) {
+            if ((remaining & 0xFFF) == 0) { // Yield every 4KB
                 esp_task_wdt_reset();
                 vTaskDelay(1); // yield occasionally
             }
@@ -478,7 +478,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             }
 
             // Yield occasionally
-            if ((strm.total_out & 0x3FFF) == 0) {
+            if ((strm.total_out & 0xFFF) == 0) { // Yield every 4KB
                 esp_task_wdt_reset();
                 vTaskDelay(1);
             }

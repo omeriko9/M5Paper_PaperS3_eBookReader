@@ -973,9 +973,14 @@ void GUI::backgroundIndexerTaskLoop()
         // ESP_LOGI(TAG, "Scan progress: %d/%d - %s", current, total, msg);
         indexingCurrent = current;
         indexingTotal = total;
-        if (currentState == AppState::MAIN_MENU)
+        
+        // Throttle redraws to avoid UI freeze/flicker
+        static uint32_t lastRedraw = 0;
+        uint32_t now = xTaskGetTickCount();
+        if (currentState == AppState::MAIN_MENU && (now - lastRedraw > pdMS_TO_TICKS(500)))
         {
             needsRedraw = true;
+            lastRedraw = now;
         }
         esp_task_wdt_reset(); });
     indexingScanActive = false;
@@ -996,11 +1001,19 @@ void GUI::backgroundIndexerTaskLoop()
     indexingTotal = books.size();
     int processedCount = 0;
 
+    uint32_t lastRedrawTime = 0;
+
     for (const auto &book : books)
     {
         processedCount++;
         indexingCurrent = processedCount;
-        if (currentState == AppState::MAIN_MENU) needsRedraw = true;
+        
+        // Throttle redraws
+        uint32_t now = xTaskGetTickCount();
+        if (currentState == AppState::MAIN_MENU && (now - lastRedrawTime > pdMS_TO_TICKS(1000))) {
+            needsRedraw = true;
+            lastRedrawTime = now;
+        }
 
         if (bookOpenInProgress)
         {
