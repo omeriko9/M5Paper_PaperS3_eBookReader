@@ -2132,6 +2132,41 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         pageRenderedImages.clear();
     }
 
+    // Pre-cache chapter images and math to avoid repeated mutex acquisitions during rendering
+    // This is a major performance optimization
+    std::vector<EpubImage> cachedImages;
+    std::vector<EpubMath> cachedMath;
+    if (takeEpubMutexWithWdt(epubMutex, abort))
+    {
+        cachedImages = epubLoader.getChapterImages();
+        cachedMath = epubLoader.getChapterMath();
+        xSemaphoreGive(epubMutex);
+    }
+    
+    // Lambda to find image at offset from cache (no mutex needed)
+    auto findCachedImage = [&cachedImages, startOffset](size_t textOffset, size_t tolerance) -> const EpubImage* {
+        for (const auto& img : cachedImages) {
+            if (img.textOffset >= startOffset && 
+                img.textOffset <= textOffset + tolerance &&
+                img.textOffset + tolerance >= textOffset) {
+                return &img;
+            }
+        }
+        return nullptr;
+    };
+    
+    // Lambda to find math at offset from cache (no mutex needed)
+    auto findCachedMath = [&cachedMath, startOffset](size_t textOffset, size_t tolerance) -> const EpubMath* {
+        for (const auto& m : cachedMath) {
+            if (m.textOffset >= startOffset && 
+                m.textOffset <= textOffset + tolerance &&
+                m.textOffset + tolerance >= textOffset) {
+                return &m;
+            }
+        }
+        return nullptr;
+    };
+
     // Store indices (start, length, isMath) instead of strings to save memory
     std::vector<std::tuple<size_t, size_t, bool>> currentLine;
     currentLine.reserve(20); // Pre-allocate to avoid reallocations
@@ -2186,13 +2221,9 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             
             // Handle inline MathML blocks (marked by isMath=true and wordLen=0)
             if (isMath && wordLen == 0) {
-                // Look up the MathML content
+                // Look up the MathML content from cache (no mutex needed)
                 size_t mathTextOffset = startOffset + wordOffset;
-                const EpubMath* mathBlock = nullptr;
-                if (xSemaphoreTake(epubMutex, pdMS_TO_TICKS(100))) {
-                    mathBlock = epubLoader.findMathAtOffset(mathTextOffset, 10);
-                    xSemaphoreGive(epubMutex);
-                }
+                const EpubMath* mathBlock = findCachedMath(mathTextOffset, 10);
                 
                 if (mathBlock && !mathBlock->mathml.empty()) {
                     int mathWidth = 0, mathHeight = 0;
@@ -2315,7 +2346,104 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 continue;
             }
 
-            // Found image placeholder - flush current line first
+            // Find the image at this offset
+            // Find the image at this offset from cache (no mutex needed)
+            size_t imageOffset = startOffset + i;
+            const EpubImage *image = findCachedImage(imageOffset, 10);
+
+            if (!image) {
+                i += IMAGE_PLACEHOLDER_LEN;
+                continue;
+            }
+
+            // Check if this is an inline math image (small symbol to render inline with text)
+            bool isInlineImage = image->isInlineMath || (!image->isBlock && 
+                                 ((image->width > 0 && image->width < 80) || 
+                                  (image->height > 0 && image->height < 40)));
+            
+            if (isInlineImage) {
+                // For inline images (like math symbols), render inline with text
+                // We'll add this to the current line similar to how math is handled
+                
+                // Calculate inline image constraints - scale to fit line height
+                int inlineMaxHeight = lineHeight * 1.2;
+                int inlineMaxWidth = maxWidth / 3;
+                
+                // For measurement, estimate width based on known dimensions or default
+                int estimatedWidth = image->width > 0 ? 
+                    std::min(image->width, inlineMaxWidth) : 
+                    lineHeight; // Default to square if unknown
+                
+                // Check if it fits on current line
+                if (currentLineWidth + estimatedWidth > maxWidth && !currentLine.empty()) {
+                    // Flush current line and start new one
+                    drawLine(currentLine);
+                    linesDrawn++;
+                    currentLine.clear();
+                    currentLineWidth = 0;
+                    currentY += lineHeight;
+                    
+                    if (currentY + lineHeight > maxY) {
+                        break; // Page full
+                    }
+                }
+                
+                if (draw) {
+                    // Extract and render inline image
+                    std::vector<uint8_t> imageData;
+                    bool extracted = false;
+                    bool resumeWrite = false;
+                    if (target == nullptr && gfx->isEPD()) {
+                        gfx->endWrite();
+                        resumeWrite = true;
+                    }
+                    if (takeEpubMutexWithWdt(epubMutex, abort)) {
+                        extracted = epubLoader.extractImage(image->path, imageData);
+                        xSemaphoreGive(epubMutex);
+                    }
+                    if (resumeWrite) {
+                        gfx->startWrite();
+                        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+                    }
+
+                    if (extracted && !imageData.empty()) {
+                        ImageHandler &imgHandler = ImageHandler::getInstance();
+                        // Calculate X position based on current line width
+                        int imgX = (isRTLDocument ? (width - rightMargin - currentLineWidth - estimatedWidth) : 
+                                                    (x + currentLineWidth));
+                        // Vertically center the image on the baseline
+                        int imgY = currentY + (lineHeight - inlineMaxHeight) / 2;
+                        if (imgY < currentY) imgY = currentY;
+
+                        ImageDecodeResult result = imgHandler.decodeAndRender(
+                            imageData.data(), imageData.size(),
+                            (M5Canvas *)target, imgX, imgY,
+                            inlineMaxWidth, inlineMaxHeight,
+                            ImageDisplayMode::INLINE);
+
+                        if (result.success) {
+                            currentLineWidth += result.scaledWidth + 5; // Add small spacing
+                            // Track for tap detection
+                            if (target == nullptr) {
+                                RenderedImageInfo ri;
+                                ri.x = imgX; ri.y = imgY;
+                                ri.width = result.scaledWidth;
+                                ri.height = result.scaledHeight;
+                                ri.image = *image;
+                                pageRenderedImages.push_back(ri);
+                            }
+                        }
+                    }
+                } else {
+                    // Measuring only - add estimated width
+                    currentLineWidth += estimatedWidth + 5;
+                }
+                
+                i += IMAGE_PLACEHOLDER_LEN;
+                continue;
+            }
+            
+            // Block image - flush current line first
             if (!currentLine.empty())
             {
                 drawLine(currentLine);
@@ -2325,27 +2453,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 currentY += lineHeight;
             }
 
-            // Find the image at this offset
-            const EpubImage *image = nullptr;
-            size_t imageOffset = startOffset + i;
-            if (takeEpubMutexWithWdt(epubMutex, abort))
-            {
-                image = epubLoader.findImageAtOffset(imageOffset, 10);
-                xSemaphoreGive(epubMutex);
-            }
-
-            if (image && draw)
+            if (draw)
             {
                 // Calculate image dimensions
                 int imgMaxWidth = maxWidth;
                 int imgMaxHeight = maxY - currentY;
-
-                // For inline images, limit height more
-                if (!image->isBlock)
-                {
-                    imgMaxHeight = std::min(imgMaxHeight, lineHeight * 4);
-                    imgMaxWidth = maxWidth / 2;
-                }
 
                 // Only render if we have enough vertical space
                 if (imgMaxHeight > 50)
@@ -2354,7 +2466,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                     std::vector<uint8_t> imageData;
                     bool extracted = false;
                     bool resumeWrite = false;
-                    if (draw && target == nullptr && gfx->isEPD())
+                    if (target == nullptr && gfx->isEPD())
                     {
                         // Release EPD SPI bus before SD/zip file I/O to avoid deadlock.
                         gfx->endWrite();
@@ -2384,7 +2496,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             imgX, imgY,
                             imgMaxWidth,
                             imgMaxHeight,
-                            image->isBlock ? ImageDisplayMode::BLOCK : ImageDisplayMode::INLINE);
+                            ImageDisplayMode::BLOCK);
 
                         if (result.success)
                         {
@@ -2394,15 +2506,15 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                                 RenderedImageInfo ri;
                                 ri.x = imgX;
                                 ri.y = imgY;
-                                ri.width = result.scaledWidth - 20 > 0 ? result.scaledWidth - 20 : result.scaledWidth;     // Adjust for margins
-                                ri.height = result.scaledHeight - 20 > 0 ? result.scaledHeight - 20 : result.scaledHeight; // Adjust for margins
+                                ri.width = result.scaledWidth - 20 > 0 ? result.scaledWidth - 20 : result.scaledWidth;
+                                ri.height = result.scaledHeight - 20 > 0 ? result.scaledHeight - 20 : result.scaledHeight;
                                 ri.image = *image;
                                 pageRenderedImages.push_back(ri);
                             }
 
                             // Move Y past the image
-                            currentY += result.scaledHeight + 10; // Add some padding
-                            ESP_LOGI(TAG, "Rendered image at Y=%d, size=%dx%d",
+                            currentY += result.scaledHeight + 10;
+                            ESP_LOGI(TAG, "Rendered block image at Y=%d, size=%dx%d",
                                      imgY, result.scaledWidth, result.scaledHeight);
                         }
                         else
@@ -2431,11 +2543,10 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                     break;
                 }
             }
-            else if (!draw)
+            else
             {
                 // When measuring (not drawing), account for image space
-                // Estimate a reasonable image height
-                currentY += lineHeight * 3; // Reserve space for typical image
+                currentY += lineHeight * 3; // Reserve space for typical block image
             }
 
             // Skip past the placeholder
@@ -2453,13 +2564,9 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         // Check for math markers - render MathML blocks properly
         if (i + MATH_MARKER_LEN <= text.length()) {
             if (text.compare(i, MATH_MARKER_LEN, MATH_START) == 0) {
-                // Look up the MathML content
+                // Look up the MathML content using cached lookup (no mutex needed)
                 size_t mathTextOffset = startOffset + i;
-                const EpubMath* mathBlock = nullptr;
-                if (takeEpubMutexWithWdt(epubMutex, abort)) {
-                    mathBlock = epubLoader.findMathAtOffset(mathTextOffset, 10);
-                    xSemaphoreGive(epubMutex);
-                }
+                const EpubMath* mathBlock = findCachedMath(mathTextOffset, 10);
                 
                 if (mathBlock && !mathBlock->mathml.empty()) {
                     // Measure the math content

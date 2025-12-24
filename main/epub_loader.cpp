@@ -881,6 +881,8 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                     // Parse image tag and store reference
                     EpubImage img;
                     img.textOffset = context->content->length();
+                    img.isInlineMath = false;
+                    img.verticalAlign = 0;
                     
                     // Extract src attribute
                     std::string src = extractAttribute(tag, "src");
@@ -902,15 +904,45 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                             img.alt = decodeHtmlEntities(img.alt);
                         }
                         
+                        // Extract CSS class - important for detecting inline math images
+                        img.cssClass = extractAttribute(tag, "class");
+                        
                         // Extract dimensions if specified
                         std::string widthStr = extractAttribute(tag, "width");
                         std::string heightStr = extractAttribute(tag, "height");
                         img.width = widthStr.empty() ? -1 : atoi(widthStr.c_str());
                         img.height = heightStr.empty() ? -1 : atoi(heightStr.c_str());
                         
-                        // Determine if block-level (heuristic: large images or in figure/div)
-                        // For now, treat images > 200px as block-level
-                        img.isBlock = (img.width > 200 || img.height > 200);
+                        // Detect inline math images by class name patterns
+                        // Common patterns: "img2", "inline", "math", "symbol", "formula"
+                        std::string lowerClass = img.cssClass;
+                        for (auto& c : lowerClass) c = tolower(c);
+                        bool hasInlineClass = (lowerClass.find("img2") != std::string::npos ||
+                                               lowerClass.find("inline") != std::string::npos ||
+                                               lowerClass.find("math") != std::string::npos ||
+                                               lowerClass.find("symbol") != std::string::npos ||
+                                               lowerClass.find("formula-inline") != std::string::npos);
+                        
+                        // Also check path for math/formula patterns
+                        std::string lowerPath = img.path;
+                        for (auto& c : lowerPath) c = tolower(c);
+                        bool isMathPath = (lowerPath.find("/r.jpg") != std::string::npos ||  // ℝ symbol
+                                          lowerPath.find("/l.jpg") != std::string::npos ||   // L symbol
+                                          (lowerPath.find("/images/") != std::string::npos && 
+                                              img.width > 0 && img.width < 80 && img.height > 0 && img.height < 40));
+                        
+                        // Mark as inline math if small size or has inline-related class
+                        img.isInlineMath = hasInlineClass || isMathPath || 
+                                          (img.width > 0 && img.width < 100 && img.height > 0 && img.height < 50);
+                        
+                        // Determine if block-level
+                        // Block = large images OR not detected as inline math
+                        if (img.isInlineMath) {
+                            img.isBlock = false;
+                        } else {
+                            img.isBlock = (img.width > 200 || img.height > 200 || 
+                                          (img.width == -1 && img.height == -1));  // Unknown size = assume block
+                        }
                         
                         // Store image reference
                         if (context->images) {
@@ -925,6 +957,9 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                     // SVG <image> tag
                     EpubImage img;
                     img.textOffset = context->content->length();
+                    img.isInlineMath = false;
+                    img.verticalAlign = 0;
+                    img.cssClass = "";
                     
                     std::string href = extractAttribute(tag, "xlink:href");
                     if (href.empty()) {
@@ -935,12 +970,14 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                         href = decodeHtmlEntities(href);
                         img.path = resolveRelativePath(context->chapterDir, href);
                         img.alt = "";
-                        img.isBlock = true;
                         
                         std::string widthStr = extractAttribute(tag, "width");
                         std::string heightStr = extractAttribute(tag, "height");
                         img.width = widthStr.empty() ? -1 : atoi(widthStr.c_str());
                         img.height = heightStr.empty() ? -1 : atoi(heightStr.c_str());
+                        
+                        // SVG images are typically block unless small
+                        img.isBlock = !(img.width > 0 && img.width < 100 && img.height > 0 && img.height < 50);
                         
                         if (context->images) {
                             context->images->push_back(img);

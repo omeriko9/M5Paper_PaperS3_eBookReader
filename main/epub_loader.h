@@ -27,9 +27,12 @@ struct EpubImage {
     size_t textOffset;       // Position in text content where image appears
     std::string path;        // Path to image within EPUB (relative to rootDir)
     std::string alt;         // Alt text if provided
+    std::string cssClass;    // CSS class attribute (e.g., "img2" for inline math)
     bool isBlock;            // True if image is block-level (full width)
+    bool isInlineMath;       // True if this is a small inline math symbol image
     int width;               // Specified width (-1 if not specified)
     int height;              // Specified height (-1 if not specified)
+    int verticalAlign;       // Vertical alignment offset in pixels (for baseline alignment)
 };
 
 class EpubLoader {
