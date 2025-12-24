@@ -94,6 +94,7 @@ private:
     AppState previousState = AppState::MAIN_MENU; // For returning from settings
     volatile bool needsRedraw = true;
     volatile bool bookOpenInProgress = false;
+    volatile bool renderingInProgress = false;
     BookEntry currentBook;
     struct PageInfo { int current = 1; int total = 1; };
     bool isRTLDocument = false;

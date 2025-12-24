@@ -606,6 +606,8 @@ struct LoadChapterContext {
     int mathDepth;  // Track nested math tags
     std::string currentMathML;  // Accumulate MathML content
     size_t mathStartOffset;  // Where the math placeholder starts
+    bool inStyle = false;
+    bool inScript = false;
 };
 
 struct ChapterLengthContext {
@@ -615,6 +617,8 @@ struct ChapterLengthContext {
     std::string currentTag;
     size_t processedSinceYield = 0;
     TickType_t lastYieldTick = 0;
+    bool inStyle = false;
+    bool inScript = false;
 };
 
 static void appendSeparatorIfNeeded(ChapterLengthContext* ctx) {
@@ -654,6 +658,14 @@ static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
                 } else if (tag == "img" || tag.find("img ") == 0) {
                     context->length += 7; // "[Image]"
                     context->lastSpace = false;
+                } else if (tag == "style" || tag.find("style ") == 0) {
+                    context->inStyle = true;
+                } else if (tag == "/style") {
+                    context->inStyle = false;
+                } else if (tag == "script" || tag.find("script ") == 0) {
+                    context->inScript = true;
+                } else if (tag == "/script") {
+                    context->inScript = false;
                 }
             } else {
                 context->currentTag += c;
@@ -662,6 +674,10 @@ static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
         }
 
         // Outside of tag
+        if (context->inStyle || context->inScript) {
+            continue;
+        }
+
         if (c == '\n' || c == '\r') {
             c = ' ';
         }
@@ -838,6 +854,23 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                 else if (tag == "li" || tag == "/li") isBlock = true;
                 else if (tag.length() >= 2 && (tag[0] == 'h' || (tag[0] == '/' && tag[1] == 'h'))) isBlock = true;
 
+                if (tag == "style" || tag.find("style ") == 0) {
+                    // Skip style content
+                    // We need to find the end of style tag in the stream.
+                    // Since we are streaming char by char, we need a state for "inStyle"
+                    // But here we are in a callback.
+                    // For simplicity, let's just set a flag in context to ignore content until </style>
+                    // Wait, we don't have an "inStyle" flag in context.
+                    // Let's add it to LoadChapterContext.
+                    ((LoadChapterContext*)ctx)->inStyle = true;
+                } else if (tag == "/style") {
+                    ((LoadChapterContext*)ctx)->inStyle = false;
+                } else if (tag == "script" || tag.find("script ") == 0) {
+                    ((LoadChapterContext*)ctx)->inScript = true;
+                } else if (tag == "/script") {
+                    ((LoadChapterContext*)ctx)->inScript = false;
+                }
+
                 if (isBlock) {
                     // Insert newline if not already there
                     if (!context->lastSpace) {
@@ -932,6 +965,10 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                 continue;
             }
             
+            if (context->inStyle || context->inScript) {
+                continue;
+            }
+            
             // Skip newlines in HTML source
             if (c == '\n' || c == '\r') {
                 c = ' ';
@@ -992,6 +1029,8 @@ void EpubLoader::loadChapter(int index) {
     ctx->inMath = false;
     ctx->mathDepth = 0;
     ctx->mathStartOffset = 0;
+    ctx->inStyle = false;
+    ctx->inScript = false;
 
     // Stream process the HTML file directly from ZIP to text
     // This avoids loading the full HTML into memory

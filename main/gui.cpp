@@ -760,6 +760,7 @@ void GUI::renderTaskLoop()
     {
         if (xQueueReceive(renderQueue, &req, portMAX_DELAY))
         {
+            renderingInProgress = true;
             esp_task_wdt_add(NULL);
             esp_task_wdt_reset();
             ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
@@ -800,6 +801,7 @@ void GUI::renderTaskLoop()
                 ESP_LOGW(TAG, "RenderTask: Aborted");
             }
             esp_task_wdt_delete(NULL);
+            renderingInProgress = false;
         }
         else
         {
@@ -912,7 +914,7 @@ void GUI::backgroundIndexerTaskLoop()
 
     auto waitForBookOpen = [this]()
     {
-        while (bookOpenInProgress)
+        while (bookOpenInProgress || renderingInProgress)
         {
             esp_task_wdt_reset();
             vTaskDelay(pdMS_TO_TICKS(50));
@@ -990,7 +992,7 @@ void GUI::backgroundIndexerTaskLoop()
         }
         esp_task_wdt_reset(); },
         [this]() {
-            return bookOpenInProgress;
+            return bookOpenInProgress || renderingInProgress;
         });
     indexingScanActive = false;
 
@@ -1135,6 +1137,18 @@ void GUI::backgroundIndexerTaskLoop()
                         localLoader.close();
                         waitForBookOpen();
                         goto next_book;
+                    }
+
+                    if (renderingInProgress)
+                    {
+                        waitForBookOpen();
+                        // Re-check if we should abort in case state changed while waiting
+                        if (currentState == AppState::READER && currentBook.id == book.id)
+                        {
+                             ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it (after render wait)", book.id);
+                             localLoader.close();
+                             goto next_book;
+                        }
                     }
 
                     size_t len = localLoader.getChapterTextLength(i);

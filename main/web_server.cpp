@@ -1048,6 +1048,8 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
 /* API to open a book on the device */
 static esp_err_t api_open_handler(httpd_req_t *req)
 {
+    // Add this task to WDT because openBookById can be slow and calls functions that reset WDT
+    esp_task_wdt_add(NULL);
     WebServer::updateActivityTime();
     char buf[100];
     size_t buf_len = sizeof(buf);
@@ -1058,11 +1060,13 @@ static esp_err_t api_open_handler(httpd_req_t *req)
             int id = atoi(param);
             if (gui.openBookById(id)) {
                 httpd_resp_send(req, "OK", 2);
+                esp_task_wdt_delete(NULL);
                 return ESP_OK;
             }
         }
     }
     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid book id");
+    esp_task_wdt_delete(NULL);
     return ESP_FAIL;
 }
 
