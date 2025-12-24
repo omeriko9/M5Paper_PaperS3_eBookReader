@@ -2172,6 +2172,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     currentLine.reserve(20); // Pre-allocate to avoid reallocations
 
     int currentLineWidth = 0;
+    int currentLineXOffset = 0; // Offset for current line segment (for inline images)
     int currentY = y;
     size_t i = 0;
     bool inMathMode = false;
@@ -2179,7 +2180,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     int debugWordsLogged = 0;
     std::string tempWord; // Reusable buffer for measurements
 
-    auto drawLine = [&](const std::vector<std::tuple<size_t, size_t, bool>> &line)
+    auto drawLine = [&](const std::vector<std::tuple<size_t, size_t, bool>> &line, int xOffset = 0)
     {
         if (!draw || line.empty())
             return;
@@ -2208,7 +2209,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             }
         }
 
-        int startX = isRTL ? (width - rightMargin) : x;
+        int startX = isRTL ? (width - rightMargin - xOffset) : (x + xOffset);
         int spaceW = gfx->textWidth(" ");
         if (spaceW == 0)
             spaceW = 5; // Fallback if font has no space width
@@ -2366,7 +2367,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 // We'll add this to the current line similar to how math is handled
                 
                 // Calculate inline image constraints - scale to fit line height
-                int inlineMaxHeight = lineHeight * 1.2;
+                int inlineMaxHeight = lineHeight * 0.9; // Slightly smaller than line height
                 int inlineMaxWidth = maxWidth / 3;
                 
                 // For measurement, estimate width based on known dimensions or default
@@ -2377,10 +2378,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 // Check if it fits on current line
                 if (currentLineWidth + estimatedWidth > maxWidth && !currentLine.empty()) {
                     // Flush current line and start new one
-                    drawLine(currentLine);
+                    drawLine(currentLine, currentLineXOffset);
                     linesDrawn++;
                     currentLine.clear();
                     currentLineWidth = 0;
+                    currentLineXOffset = 0;
                     currentY += lineHeight;
                     
                     if (currentY + lineHeight > maxY) {
@@ -2389,6 +2391,14 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 }
                 
                 if (draw) {
+                    // Flush any pending text before drawing the image
+                    if (!currentLine.empty()) {
+                        drawLine(currentLine, currentLineXOffset);
+                        currentLine.clear();
+                        // Update offset for next segment (skip what we just drew)
+                        currentLineXOffset = currentLineWidth;
+                    }
+
                     // Extract and render inline image
                     std::vector<uint8_t> imageData;
                     bool extracted = false;
@@ -2422,7 +2432,9 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             ImageDisplayMode::INLINE);
 
                         if (result.success) {
-                            currentLineWidth += result.scaledWidth + 5; // Add small spacing
+                            // Update estimated width with actual rendered width
+                            estimatedWidth = result.scaledWidth;
+                            
                             // Track for tap detection
                             if (target == nullptr) {
                                 RenderedImageInfo ri;
@@ -2434,10 +2446,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             }
                         }
                     }
-                } else {
-                    // Measuring only - add estimated width
-                    currentLineWidth += estimatedWidth + 5;
                 }
+                
+                // Advance cursor past the image
+                currentLineWidth += estimatedWidth + 5; // Add small spacing
+                // Update offset for next text segment to start after image
+                currentLineXOffset = currentLineWidth;
                 
                 i += IMAGE_PLACEHOLDER_LEN;
                 continue;
@@ -2446,10 +2460,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             // Block image - flush current line first
             if (!currentLine.empty())
             {
-                drawLine(currentLine);
+                drawLine(currentLine, currentLineXOffset);
                 linesDrawn++;
                 currentLine.clear();
                 currentLineWidth = 0;
+                currentLineXOffset = 0;
                 currentY += lineHeight;
             }
 
@@ -2577,10 +2592,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                     if (mathBlock->isBlock) {
                         // Flush current line first
                         if (!currentLine.empty()) {
-                            drawLine(currentLine);
+                            drawLine(currentLine, currentLineXOffset);
                             linesDrawn++;
                             currentLine.clear();
                             currentLineWidth = 0;
+                            currentLineXOffset = 0;
                             currentY += lineHeight;
                         }
                         
@@ -2606,10 +2622,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                         // Inline math - check if it fits on current line
                         if (currentLineWidth + mathWidth > maxWidth) {
                             // Doesn't fit - flush line first
-                            drawLine(currentLine);
+                            drawLine(currentLine, currentLineXOffset);
                             linesDrawn++;
                             currentLine.clear();
                             currentLineWidth = 0;
+                            currentLineXOffset = 0;
                             currentY += lineHeight;
                             
                             if (currentY + lineHeight > maxY) {
@@ -2700,10 +2717,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         // Check if word fits
         if (currentLineWidth + w > maxWidth)
         {
-            drawLine(currentLine);
+            drawLine(currentLine, currentLineXOffset);
             linesDrawn++;
             currentLine.clear();
             currentLineWidth = 0;
+            currentLineXOffset = 0;
             currentY += lineHeight;
 
             if (currentY + lineHeight > maxY)
@@ -2730,10 +2748,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         }
         if (isNewline)
         {
-            drawLine(currentLine);
+            drawLine(currentLine, currentLineXOffset);
             linesDrawn++;
             currentLine.clear();
             currentLineWidth = 0;
+            currentLineXOffset = 0;
             currentY += lineHeight;
             if (currentY + lineHeight > maxY)
             {
@@ -2745,7 +2764,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     // Flush remaining line
     if (!currentLine.empty() && currentY + lineHeight <= maxY)
     {
-        drawLine(currentLine);
+        drawLine(currentLine, currentLineXOffset);
         linesDrawn++;
     }
 
