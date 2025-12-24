@@ -2788,6 +2788,17 @@ void GUI::drawMainMenu()
         bool dataLoaded = false;
     };
     static MenuIconCache iconCache[6];
+    
+    struct MenuIconDraw
+    {
+        int index;
+        std::string path;
+        int x;
+        int y;
+        int size;
+    };
+    std::vector<MenuIconDraw> deferredIcons;
+
     const bool needsIconFlatten = deviceHAL.isM5Paper();
     M5Canvas iconSprite;
     if (needsIconFlatten)
@@ -2960,7 +2971,21 @@ void GUI::drawMainMenu()
             int iconX = bx + (btnW - iconSize) / 2;
             int iconY = iconTop + (iconH - iconSize) / 2;
 
-            drawMenuIconWithBackground(i, target, iconPath, iconX, iconY, iconSize, bgColor);
+            if (deviceHAL.isM5PaperS3())
+            {
+                if (sprite)
+                {
+                    deferredIcons.push_back({i, iconPath, iconX, iconY, iconSize});
+                }
+                else
+                {
+                    drawMenuIcon(i, target, iconPath, iconX, iconY, iconSize);
+                }
+            }
+            else
+            {
+                drawMenuIconWithBackground(i, target, iconPath, iconX, iconY, iconSize, bgColor);
+            }
 
             if (i == 1 && indexingScanActive)
             {
@@ -3030,6 +3055,14 @@ void GUI::drawMainMenu()
     if (sprite)
     {
         sprite->pushSprite(&M5.Display, 0, 0);
+    }
+
+    if (deviceHAL.isM5PaperS3() && sprite && !deferredIcons.empty())
+    {
+        for (const auto &icon : deferredIcons)
+        {
+            drawMenuIcon(icon.index, &M5.Display, icon.path, icon.x, icon.y, icon.size);
+        }
     }
 
     // M5.Display.waitDisplay(); // Removed to avoid blocking if not needed

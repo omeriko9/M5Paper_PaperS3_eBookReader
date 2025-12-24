@@ -56,3 +56,7 @@ __pycache__/
 
 # Local logs
 build_log.txt
+
+dependencies.lock
+.gitignore
+.env
