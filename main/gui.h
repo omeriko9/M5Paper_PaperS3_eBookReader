@@ -147,6 +147,7 @@ private:
     std::vector<uint8_t> fontData; // Buffer to hold loaded font in memory
     std::vector<uint8_t> fontDataHebrew; // Cache for Hebrew font
     std::vector<uint8_t> fontDataArabic; // Cache for Arabic font
+    std::vector<uint8_t> fontDataMath; // Cache for Math font
     bool wifiEnabled = true;
     bool showImages = true;
     int textBoldness = 0;  // 0-3, controls grayscale intensity
@@ -249,7 +250,12 @@ private:
     void loadFonts();
     void ensureHebrewFontLoaded();
     void ensureArabicFontLoaded();
+    void ensureMathFontLoaded();
     void scanSDCardFonts();  // Scan SD card for .otf fonts
+    
+    // Math rendering helpers
+    bool renderMathInline(const std::string& mathml, M5Canvas* canvas, int x, int y, int maxWidth, int& outWidth, int& outHeight);
+    void measureMath(const std::string& mathml, int& outWidth, int& outHeight, int& outBaseline);
     void drawStringMixed(const std::string &text, int x, int y, M5Canvas *target = nullptr, float size = -1.0f, bool isProcessed = false, bool respectUserFont = true);
     
     void saveSettings();

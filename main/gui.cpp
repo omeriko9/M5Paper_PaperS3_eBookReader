@@ -1,6 +1,7 @@
 #include "gui.h"
 #include "web_server.h"
 #include "epub_loader.h"
+#include "math_renderer.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "wifi_manager.h"
@@ -36,6 +37,10 @@ static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
 static const size_t IMAGE_PLACEHOLDER_LEN = 3;
 
 static const char *TAG = "GUI";
+
+// Math renderer instance
+extern MathRenderer mathRenderer;
+
 static bool takeEpubMutexWithWdt(SemaphoreHandle_t mutex, volatile bool *abort = nullptr)
 {
     if (!mutex)
@@ -638,6 +643,7 @@ void GUI::init(bool isWakeFromSleep)
 
     loadSettings();
     loadFonts();
+    ensureMathFontLoaded();
 
     // Initialize gesture detector
     gestureDetector.init(M5.Display.width(), M5.Display.height());
@@ -2112,18 +2118,19 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         pageRenderedImages.clear();
     }
 
-    // Store indices (start, length) instead of strings to save memory
-    std::vector<std::pair<size_t, size_t>> currentLine;
+    // Store indices (start, length, isMath) instead of strings to save memory
+    std::vector<std::tuple<size_t, size_t, bool>> currentLine;
     currentLine.reserve(20); // Pre-allocate to avoid reallocations
 
     int currentLineWidth = 0;
     int currentY = y;
     size_t i = 0;
+    bool inMathMode = false;
 
     int debugWordsLogged = 0;
     std::string tempWord; // Reusable buffer for measurements
 
-    auto drawLine = [&](const std::vector<std::pair<size_t, size_t>> &line)
+    auto drawLine = [&](const std::vector<std::tuple<size_t, size_t, bool>> &line)
     {
         if (!draw || line.empty())
             return;
@@ -2133,9 +2140,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         {
             for (const auto &p : line)
             {
+                if (std::get<2>(p)) continue; // Skip math for RTL check
                 // Check if word is Hebrew
-                const char *wordStart = text.c_str() + p.first;
-                for (size_t k = 0; k < p.second; ++k)
+                size_t len = std::get<1>(p);
+                if (len == 0) continue; // Skip math blocks (length=0 marks MathML)
+                const char *wordStart = text.c_str() + std::get<0>(p);
+                for (size_t k = 0; k < len; ++k)
                 {
                     unsigned char c = (unsigned char)wordStart[k];
                     if (c >= 0xD6 && c <= 0xD7)
@@ -2156,8 +2166,42 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
         for (const auto &p : line)
         {
-            std::string displayWord = text.substr(p.first, p.second);
-            if (isHebrew(displayWord))
+            bool isMath = std::get<2>(p);
+            size_t wordOffset = std::get<0>(p);
+            size_t wordLen = std::get<1>(p);
+            
+            // Handle inline MathML blocks (marked by isMath=true and wordLen=0)
+            if (isMath && wordLen == 0) {
+                // Look up the MathML content
+                size_t mathTextOffset = startOffset + wordOffset;
+                const EpubMath* mathBlock = nullptr;
+                if (xSemaphoreTake(epubMutex, pdMS_TO_TICKS(100))) {
+                    mathBlock = epubLoader.findMathAtOffset(mathTextOffset, 10);
+                    xSemaphoreGive(epubMutex);
+                }
+                
+                if (mathBlock && !mathBlock->mathml.empty()) {
+                    int mathWidth = 0, mathHeight = 0;
+                    // Render inline math at baseline
+                    renderMathInline(mathBlock->mathml, (M5Canvas*)target, startX, currentY, maxWidth, mathWidth, mathHeight);
+                    
+                    if (isRTL) {
+                        startX -= (mathWidth + spaceW);
+                    } else {
+                        startX += (mathWidth + spaceW);
+                    }
+                }
+                continue;
+            }
+            
+            std::string displayWord = text.substr(wordOffset, wordLen);
+            
+            if (isMath) {
+                // Old-style math word (should not happen with new code, but keep for safety)
+                if (!fontDataMath.empty()) {
+                    gfx->loadFont(fontDataMath.data());
+                }
+            } else if (isHebrew(displayWord))
             {
                 // Replace HTML entities
                 size_t pos = 0;
@@ -2213,6 +2257,17 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             {
                 drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target, fontSize, true);
                 startX += (w + spaceWLocal);
+            }
+            
+            if (isMath) {
+                // Restore book font
+                if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+                    gfx->loadFont(fontDataHebrew.data());
+                } else if (currentFont != "Default" && !fontData.empty()) {
+                    gfx->loadFont(fontData.data());
+                } else {
+                    gfx->unloadFont();
+                }
             }
         }
 
@@ -2381,14 +2436,104 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             continue; // Continue to next word/element
         }
 
+        // Check for math markers - render MathML blocks properly
+        if (i + MATH_MARKER_LEN <= text.length()) {
+            if (text.compare(i, MATH_MARKER_LEN, MATH_START) == 0) {
+                // Look up the MathML content
+                size_t mathTextOffset = startOffset + i;
+                const EpubMath* mathBlock = nullptr;
+                if (takeEpubMutexWithWdt(epubMutex, abort)) {
+                    mathBlock = epubLoader.findMathAtOffset(mathTextOffset, 10);
+                    xSemaphoreGive(epubMutex);
+                }
+                
+                if (mathBlock && !mathBlock->mathml.empty()) {
+                    // Measure the math content
+                    int mathWidth = 0, mathHeight = 0, mathBaseline = 0;
+                    measureMath(mathBlock->mathml, mathWidth, mathHeight, mathBaseline);
+                    
+                    // For block math, center it on its own line
+                    if (mathBlock->isBlock) {
+                        // Flush current line first
+                        if (!currentLine.empty()) {
+                            drawLine(currentLine);
+                            linesDrawn++;
+                            currentLine.clear();
+                            currentLineWidth = 0;
+                            currentY += lineHeight;
+                        }
+                        
+                        // Check if math block fits on page
+                        if (currentY + mathHeight > maxY) {
+                            break; // Page full
+                        }
+                        
+                        // Center the math
+                        int mathX = x + (maxWidth - mathWidth) / 2;
+                        
+                        if (draw && target) {
+                            int dummy1, dummy2;
+                            renderMathInline(mathBlock->mathml, (M5Canvas*)target, mathX, currentY + mathBaseline, maxWidth, dummy1, dummy2);
+                        } else if (draw) {
+                            int dummy1, dummy2;
+                            M5Canvas* mainCanvas = nullptr;
+                            renderMathInline(mathBlock->mathml, mainCanvas, mathX, currentY + mathBaseline, maxWidth, dummy1, dummy2);
+                        }
+                        
+                        currentY += mathHeight + lineHeight / 2;  // Add some spacing
+                    } else {
+                        // Inline math - check if it fits on current line
+                        if (currentLineWidth + mathWidth > maxWidth) {
+                            // Doesn't fit - flush line first
+                            drawLine(currentLine);
+                            linesDrawn++;
+                            currentLine.clear();
+                            currentLineWidth = 0;
+                            currentY += lineHeight;
+                            
+                            if (currentY + lineHeight > maxY) {
+                                break; // Page full
+                            }
+                        }
+                        
+                        // Add as a special math entry - use negative length to mark as math block index
+                        // We'll store the text offset so drawLine can find the math
+                        currentLine.emplace_back(i, 0, true);  // length=0 marks as MathML block
+                        currentLineWidth += mathWidth + gfx->textWidth(" ");
+                    }
+                }
+                
+                // Skip to MATH_END
+                size_t mathEndPos = text.find(MATH_END, i);
+                if (mathEndPos != std::string::npos) {
+                    i = mathEndPos + MATH_MARKER_LEN;
+                } else {
+                    i += MATH_MARKER_LEN;
+                }
+                inMathMode = false;
+                continue;
+            }
+            if (text.compare(i, MATH_MARKER_LEN, MATH_END) == 0) {
+                inMathMode = false;
+                i += MATH_MARKER_LEN;
+                continue;
+            }
+        }
+
         // Find next word boundary
         size_t nextSpace = text.find_first_of(" \n", i);
-        if (nextSpace == std::string::npos)
-            nextSpace = text.length();
+        size_t nextMathStart = text.find(MATH_START, i);
+        size_t nextMathEnd = text.find(MATH_END, i);
+        
+        size_t boundary = nextSpace;
+        if (boundary == std::string::npos) boundary = text.length();
+        
+        if (nextMathStart != std::string::npos && nextMathStart < boundary) boundary = nextMathStart;
+        if (nextMathEnd != std::string::npos && nextMathEnd < boundary) boundary = nextMathEnd;
 
-        bool isNewline = (nextSpace < text.length() && text[nextSpace] == '\n');
+        bool isNewline = (boundary < text.length() && text[boundary] == '\n');
 
-        size_t wordLen = nextSpace - i;
+        size_t wordLen = boundary - i;
 
         // Measure word using reusable buffer
         tempWord.assign(text, i, wordLen);
@@ -2399,7 +2544,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
         // Make sure we measure with the same font that will be used to draw the word.
         bool swappedFont = false;
-        if (wordIsHebrew && !fontDataHebrew.empty() && currentFont != "Hebrew")
+        if (inMathMode && !fontDataMath.empty()) {
+             gfx->loadFont(fontDataMath.data());
+             gfx->setTextSize(fontSize);
+             swappedFont = true;
+        } else if (wordIsHebrew && !fontDataHebrew.empty() && currentFont != "Hebrew")
         {
             gfx->loadFont(fontDataHebrew.data());
             gfx->setTextSize(fontSize);
@@ -2414,7 +2563,9 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         // Restore the display font
         if (swappedFont)
         {
-            if (currentFont != "Default" && !fontData.empty())
+            if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+                gfx->loadFont(fontDataHebrew.data());
+            } else if (currentFont != "Default" && !fontData.empty())
             {
                 gfx->loadFont(fontData.data());
             }
@@ -2440,16 +2591,21 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             }
         }
 
-        currentLine.push_back({i, wordLen});
+        currentLine.emplace_back(i, wordLen, inMathMode);
         currentLineWidth += w + spaceW;
 
-        if (nextSpace < text.length())
+        if (boundary < text.length())
         {
-            i = nextSpace + 1;
+            if (text[boundary] == ' ' || text[boundary] == '\n') {
+                i = boundary + 1;
+            } else {
+                // Marker
+                i = boundary;
+            }
         }
         else
         {
-            i = nextSpace;
+            i = boundary;
         }
         if (isNewline)
         {
@@ -5585,6 +5741,160 @@ void GUI::ensureArabicFontLoaded()
     {
         ESP_LOGE(TAG, "Failed to open Arabic font file: %s (errno=%d)", path, errno);
     }
+}
+
+void GUI::ensureMathFontLoaded()
+{
+    if (!fontDataMath.empty())
+    {
+        return;
+    }
+
+    const char *path = "/spiffs/fonts/math.vlw";
+    ESP_LOGI(TAG, "Attempting to load Math font from: %s", path);
+    FILE *f = fopen(path, "rb");
+    if (f)
+    {
+        fseek(f, 0, SEEK_END);
+        size_t size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        
+        fontDataMath.resize(size);
+        size_t read = fread(fontDataMath.data(), 1, size, f);
+        fclose(f);
+        ESP_LOGI(TAG, "Math font loaded: %u bytes read", (unsigned int)read);
+        
+        // Initialize the math renderer with the font
+        mathRenderer.setMathFont(fontDataMath.data());
+        // Use a reasonable base size (e.g. 20px) or 0 if unused. 
+        // Passing fontSize * 20 to be safe if it's used for defaults.
+        mathRenderer.init((int)(fontSize * 20), M5.Display.width());
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Failed to load Math font: %s", path);
+    }
+}
+
+/**
+ * @brief Render a MathML block inline with text
+ * @param mathml The MathML string to render
+ * @param canvas Target canvas (nullptr for main display)
+ * @param x X position
+ * @param y Y position (baseline)
+ * @param maxWidth Maximum width available
+ * @param outWidth Output: rendered width
+ * @param outHeight Output: rendered height
+ * @return true if rendered successfully
+ */
+bool GUI::renderMathInline(const std::string& mathml, M5Canvas* canvas, 
+                           int x, int y, int maxWidth, int& outWidth, int& outHeight)
+{
+    if (mathml.empty()) {
+        outWidth = 0;
+        outHeight = 0;
+        return false;
+    }
+    
+    // Parse the MathML
+    auto tree = mathRenderer.parse(mathml);
+    if (!tree) {
+        ESP_LOGW(TAG, "Failed to parse MathML");
+        outWidth = 0;
+        outHeight = 0;
+        return false;
+    }
+    
+    // Get the graphics device
+    LGFX_Device* gfx = canvas ? (LGFX_Device*)canvas : (LGFX_Device*)&M5.Display;
+    
+    // Ensure math font is loaded
+    ensureMathFontLoaded();
+    if (!fontDataMath.empty()) {
+        gfx->loadFont(fontDataMath.data());
+        mathRenderer.setMathFont(fontDataMath.data());
+    }
+    
+    // Calculate layout
+    // fontSize is a scale factor (e.g. 1.0, 1.5). 
+    // We use it directly as the scale for the math font.
+    float mathFontSize = fontSize;  
+    mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
+    
+    // Check if it fits
+    outWidth = tree->box.width;
+    outHeight = tree->box.height;
+    
+    if (outWidth > maxWidth) {
+        // Scale down if too wide
+        float scale = (float)maxWidth / outWidth;
+        mathFontSize *= scale;
+        mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
+        outWidth = tree->box.width;
+        outHeight = tree->box.height;
+    }
+    
+    // Render
+    if (canvas) {
+        MathRenderResult result = mathRenderer.render(tree.get(), canvas, x, y, mathFontSize, TFT_BLACK);
+        return result.success;
+    } else {
+        // Render directly to display - create temporary canvas
+        // Limit canvas size to avoid huge allocations
+        if (outWidth > 2000 || outHeight > 2000) {
+            ESP_LOGE(TAG, "Math render size too large: %dx%d", outWidth, outHeight);
+            return false;
+        }
+        
+        M5Canvas tempCanvas(&M5.Display);
+        if (!tempCanvas.createSprite(outWidth, outHeight)) {
+            ESP_LOGE(TAG, "Failed to create temp canvas for math: %dx%d", outWidth, outHeight);
+            return false;
+        }
+        tempCanvas.fillSprite(TFT_WHITE);
+        
+        MathRenderResult result = mathRenderer.render(tree.get(), &tempCanvas, 0, tree->box.baseline, mathFontSize, TFT_BLACK);
+        if (result.success) {
+            tempCanvas.pushSprite(x, y - tree->box.baseline);
+        }
+        tempCanvas.deleteSprite();
+        return result.success;
+    }
+}
+
+/**
+ * @brief Measure the dimensions of a MathML block
+ * @param mathml The MathML string
+ * @param outWidth Output: width
+ * @param outHeight Output: height
+ * @param outBaseline Output: baseline offset from top
+ */
+void GUI::measureMath(const std::string& mathml, int& outWidth, int& outHeight, int& outBaseline)
+{
+    if (mathml.empty()) {
+        outWidth = outHeight = outBaseline = 0;
+        return;
+    }
+    
+    auto tree = mathRenderer.parse(mathml);
+    if (!tree) {
+        outWidth = outHeight = outBaseline = 0;
+        return;
+    }
+    
+    LGFX_Device* gfx = &M5.Display;
+    ensureMathFontLoaded();
+    if (!fontDataMath.empty()) {
+        gfx->loadFont(fontDataMath.data());
+        mathRenderer.setMathFont(fontDataMath.data());
+    }
+    
+    float mathFontSize = fontSize;
+    mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
+    
+    outWidth = tree->box.width;
+    outHeight = tree->box.height;
+    outBaseline = tree->box.baseline;
 }
 
 void GUI::processText(std::string &text)

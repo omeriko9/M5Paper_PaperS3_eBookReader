@@ -4,6 +4,22 @@
 #include <map>
 #include "zip_reader.h"
 
+// Special markers for inline math - using Private Use Area codepoints
+// MATH_START (U+E001) marks beginning, followed by 4-byte hex index, then MathML content
+// MATH_END (U+E002) marks end of math block
+static const char MATH_START[] = "\xEE\x80\x81";
+static const char MATH_END[] = "\xEE\x80\x82";
+static const size_t MATH_MARKER_LEN = 3;
+
+/**
+ * @brief Represents a MathML block in chapter content
+ */
+struct EpubMath {
+    size_t textOffset;      // Position in text where math placeholder appears
+    std::string mathml;     // Raw MathML content (inside <math> tags)
+    bool isBlock;           // True if display math (centered), false for inline
+};
+
 /**
  * @brief Represents an image reference embedded in chapter content
  */
@@ -75,6 +91,20 @@ public:
      */
     bool hasImageAtOffset(size_t textOffset) const;
     
+    /**
+     * @brief Get all math blocks in the current chapter
+     * @return Vector of math block references
+     */
+    const std::vector<EpubMath>& getChapterMath() const { return currentChapterMath; }
+    
+    /**
+     * @brief Find math block at or near text offset
+     * @param textOffset Text offset to search near
+     * @param tolerance How many characters to search around offset
+     * @return Pointer to math info, or nullptr if not found
+     */
+    const EpubMath* findMathAtOffset(size_t textOffset, size_t tolerance = 10) const;
+    
 private:
     std::string currentPath;
     std::string language;
@@ -98,6 +128,9 @@ private:
     
     // Image references in current chapter
     std::vector<EpubImage> currentChapterImages;
+    
+    // Math blocks in current chapter
+    std::vector<EpubMath> currentChapterMath;
 
     // Helpers
     bool parseContainer();

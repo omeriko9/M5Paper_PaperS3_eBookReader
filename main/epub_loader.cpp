@@ -159,6 +159,7 @@ void EpubLoader::close() {
     currentChapterContent.clear();
     currentChapterContent.shrink_to_fit();
     currentChapterImages.clear();
+    currentChapterMath.clear();
 }
 
 std::string EpubLoader::getTitle() {
@@ -595,11 +596,16 @@ void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
 struct LoadChapterContext {
     std::string* content;
     std::vector<EpubImage>* images;
+    std::vector<EpubMath>* mathBlocks;  // Store MathML blocks
     std::string chapterDir;  // Directory of current chapter for relative path resolution
     std::string rootDir;     // EPUB root directory
     bool inTag;
     bool lastSpace;
     std::string currentTag;
+    bool inMath; // Track if we are inside a math tag
+    int mathDepth;  // Track nested math tags
+    std::string currentMathML;  // Accumulate MathML content
+    size_t mathStartOffset;  // Where the math placeholder starts
 };
 
 struct ChapterLengthContext {
@@ -785,8 +791,46 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
             if (c == '>') {
                 context->inTag = false;
                 
-                // Check for block tags to insert newlines
                 std::string& tag = context->currentTag;
+
+                // Handle MathML tags - extract full MathML content
+                if (tag == "math" || tag.find("math ") == 0) {
+                    context->inMath = true;
+                    context->mathDepth = 1;
+                    context->currentMathML = "<" + tag + ">";
+                    context->mathStartOffset = context->content->length();
+                    // Add placeholder for math - will be replaced by renderer
+                    context->content->append(MATH_START);
+                    context->lastSpace = false;
+                } else if (context->inMath) {
+                    // Inside math - accumulate all content
+                    context->currentMathML += "<" + tag + ">";
+                    
+                    if (tag == "/math") {
+                        context->mathDepth--;
+                        if (context->mathDepth <= 0) {
+                            // End of math block - store the MathML
+                            context->inMath = false;
+                            
+                            // Create math block entry
+                            if (context->mathBlocks) {
+                                EpubMath mathBlock;
+                                mathBlock.textOffset = context->mathStartOffset;
+                                mathBlock.mathml = context->currentMathML;
+                                mathBlock.isBlock = false;  // TODO: detect display math
+                                context->mathBlocks->push_back(mathBlock);
+                            }
+                            
+                            context->currentMathML.clear();
+                            context->content->append(MATH_END);
+                            context->lastSpace = false;
+                        }
+                    } else if (tag == "math" || tag.find("math ") == 0) {
+                        context->mathDepth++;
+                    }
+                }
+
+                // Check for block tags to insert newlines
                 bool isBlock = false;
                 if (tag == "p" || tag == "/p" || tag.find("p ") == 0) isBlock = true;
                 else if (tag == "div" || tag == "/div" || tag.find("div ") == 0) isBlock = true;
@@ -881,6 +925,13 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
         }
         
         if (!context->inTag) {
+            // If inside math, accumulate to MathML string instead of main content
+            if (context->inMath) {
+                // Accumulate text content for MathML
+                context->currentMathML += c;
+                continue;
+            }
+            
             // Skip newlines in HTML source
             if (c == '\n' || c == '\r') {
                 c = ' ';
@@ -908,6 +959,7 @@ void EpubLoader::loadChapter(int index) {
     currentChapterSize = 0;
     currentChapterContent.clear();
     currentChapterImages.clear();
+    currentChapterMath.clear();
     
     // Determine chapter directory for relative path resolution
     const std::string& chapterPath = spine[index];
@@ -932,10 +984,14 @@ void EpubLoader::loadChapter(int index) {
     LoadChapterContext* ctx = new LoadChapterContext();
     ctx->content = &currentChapterContent;
     ctx->images = &currentChapterImages;
+    ctx->mathBlocks = &currentChapterMath;
     ctx->chapterDir = currentChapterDir;
     ctx->rootDir = rootDir;
     ctx->inTag = false;
     ctx->lastSpace = true; // Start assuming we are at start of line (no leading spaces)
+    ctx->inMath = false;
+    ctx->mathDepth = 0;
+    ctx->mathStartOffset = 0;
 
     // Stream process the HTML file directly from ZIP to text
     // This avoids loading the full HTML into memory
@@ -948,7 +1004,8 @@ void EpubLoader::loadChapter(int index) {
         chapterTextLengths[currentChapterIndex] = currentChapterSize;
     }
     
-    ESP_LOGI(TAG, "Loaded chapter %d, size: %u, images: %zu", index, (unsigned)currentChapterSize, currentChapterImages.size());
+    ESP_LOGI(TAG, "Loaded chapter %d, size: %u, images: %zu, math: %zu", 
+             index, (unsigned)currentChapterSize, currentChapterImages.size(), currentChapterMath.size());
 }
 
 bool EpubLoader::jumpToChapter(int index) {
@@ -1105,6 +1162,18 @@ bool EpubLoader::hasImageAtOffset(size_t textOffset) const {
         }
     }
     return false;
+}
+
+const EpubMath* EpubLoader::findMathAtOffset(size_t textOffset, size_t tolerance) const {
+    for (const auto& math : currentChapterMath) {
+        if (textOffset >= math.textOffset && textOffset <= math.textOffset + tolerance) {
+            return &math;
+        }
+        if (math.textOffset >= textOffset && math.textOffset <= textOffset + tolerance) {
+            return &math;
+        }
+    }
+    return nullptr;
 }
 
 std::string EpubLoader::resolveImagePath(const std::string& src) {

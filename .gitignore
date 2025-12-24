@@ -9,6 +9,7 @@ old-books/
 games/
 regular-fonts/
 test_spiffs_dir/
+math_examples/
 
 # ESP-IDF specific
 sdkconfig

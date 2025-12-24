@@ -56,6 +56,22 @@ FONT_JOBS = [
             range(0x2000, 0x2070),  # Punctuation
         ])
     ]),
+    ("spiffs_image/fonts/math.vlw", 20, [
+        ("regular-fonts/latinmodern-math.otf", [
+            range(0x0020, 0x007E),   # Basic Latin
+            range(0x00A0, 0x00FF),   # Latin-1 Supplement
+            range(0x0370, 0x03FF),   # Greek and Coptic
+            range(0x2000, 0x206F),   # General Punctuation
+            range(0x2070, 0x209F),   # Superscripts and Subscripts
+            range(0x20A0, 0x20CF),   # Currency Symbols
+            range(0x2100, 0x214F),   # Letterlike Symbols
+            range(0x2150, 0x218F),   # Number Forms
+            range(0x2190, 0x21FF),   # Arrows
+            range(0x2200, 0x22FF),   # Mathematical Operators
+            range(0x2300, 0x23FF),   # Miscellaneous Technical
+            range(0x2A00, 0x2AFF),   # Supplemental Mathematical Operators
+        ]),
+    ]),
 ]
 
 def build_vlw(out_path: Path, size: int, sources: List[Tuple[str, List[Iterable[int]]]]) -> None:
