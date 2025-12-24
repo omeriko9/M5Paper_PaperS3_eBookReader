@@ -982,7 +982,10 @@ void GUI::backgroundIndexerTaskLoop()
             needsRedraw = true;
             lastRedraw = now;
         }
-        esp_task_wdt_reset(); });
+        esp_task_wdt_reset(); },
+        [this]() {
+            return bookOpenInProgress;
+        });
     indexingScanActive = false;
 
     if (newBooksFound)

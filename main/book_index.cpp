@@ -66,10 +66,10 @@ bool BookIndex::validateBooks()
     return false;
 }
 
-bool BookIndex::scanForNewBooks(ProgressCallback callback)
+bool BookIndex::scanForNewBooks(ProgressCallback callback, std::function<bool()> shouldPause)
 {
     bool foundNewBooks = validateBooks();
-    foundNewBooks |= scanDirectory("/spiffs", callback);
+    foundNewBooks |= scanDirectory("/spiffs", callback, shouldPause);
     
     DeviceHAL& hal = DeviceHAL::getInstance();
     if (hal.isSDCardMounted()) {
@@ -77,7 +77,7 @@ bool BookIndex::scanForNewBooks(ProgressCallback callback)
         if (sdPath) {
             // Scan /sdcard/books instead of root
             std::string booksPath = std::string(sdPath) + "/books";
-            foundNewBooks |= scanDirectory(booksPath.c_str(), callback);
+            foundNewBooks |= scanDirectory(booksPath.c_str(), callback, shouldPause);
         }
     }
     
@@ -252,7 +252,7 @@ bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>&
     return true;
 }
 
-bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
+bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback, std::function<bool()> shouldPause)
 {
     // We don't take the mutex for the whole function anymore to avoid freezing the UI.
     // Instead, we take it only when accessing shared data.
@@ -284,6 +284,17 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback)
     while ((entry = readdir(dir)) != NULL)
     {
         esp_task_wdt_reset();
+        
+        // Check if we should pause (e.g. user is opening a book)
+        if (shouldPause && shouldPause()) {
+            ESP_LOGI(TAG, "Scan paused by request");
+            while (shouldPause && shouldPause()) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                esp_task_wdt_reset();
+            }
+            ESP_LOGI(TAG, "Scan resumed");
+        }
+
         // Yield to let UI task run - but not too much
         if (processedFiles % 5 == 0) vTaskDelay(1);
         

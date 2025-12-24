@@ -29,7 +29,7 @@ public:
     bool init(bool fastMode = false, ProgressCallback callback = nullptr);
     
     // Background scanning
-    bool scanForNewBooks(ProgressCallback callback = nullptr);
+    bool scanForNewBooks(ProgressCallback callback = nullptr, std::function<bool()> shouldPause = nullptr);
     bool validateBooks(); // Check if books still exist
 
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
@@ -42,7 +42,7 @@ public:
     std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);
     BookEntry getBook(int id);
     int getBookIdByPath(const std::string& path);
-    bool scanDirectory(const char* basePath, ProgressCallback callback = nullptr);
+    bool scanDirectory(const char* basePath, ProgressCallback callback = nullptr, std::function<bool()> shouldPause = nullptr);
     
     // Favorites management
     void setFavorite(int id, bool favorite);

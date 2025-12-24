@@ -293,6 +293,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
         // Stored (no compression) - stream append to avoid large allocs
         size_t remaining = compressedSize;
         while (remaining > 0) {
+            esp_task_wdt_reset();
             size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
             size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
             if (bytesRead == 0) break;
@@ -318,6 +319,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
         int ret = Z_OK;
 
         while (ret != Z_STREAM_END) {
+            esp_task_wdt_reset();
             if (strm.avail_in == 0 && remaining > 0) {
                 size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
                 size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
