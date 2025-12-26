@@ -50,7 +50,6 @@ static constexpr const char *NVS_KEY_LAST_BOOK_OFFSET = "lb_of";
 static constexpr const char *NVS_KEY_LAST_BOOK_FONT = "lb_f";
 static constexpr const char *NVS_KEY_LAST_BOOK_FONT_SIZE = "lb_fs";
 
-
 // Math renderer instance
 extern MathRenderer mathRenderer;
 
@@ -404,19 +403,22 @@ static std::string reshapeArabic(const std::string &text)
     return result;
 }
 
-
 static inline uint8_t utf8LeadLen(uint8_t c)
 {
-    if ((c & 0x80) == 0x00) return 1;        // 0xxxxxxx
-    if ((c & 0xE0) == 0xC0) return 2;        // 110xxxxx
-    if ((c & 0xF0) == 0xE0) return 3;        // 1110xxxx
-    if ((c & 0xF8) == 0xF0) return 4;        // 11110xxx
-    return 0;                                // invalid lead byte
+    if ((c & 0x80) == 0x00)
+        return 1; // 0xxxxxxx
+    if ((c & 0xE0) == 0xC0)
+        return 2; // 110xxxxx
+    if ((c & 0xF0) == 0xE0)
+        return 3; // 1110xxxx
+    if ((c & 0xF8) == 0xF0)
+        return 4; // 11110xxx
+    return 0;     // invalid lead byte
 }
 
 static std::string reverseHebrewWord(const std::string &text)
 {
-    const char* s = text.data();
+    const char *s = text.data();
     const size_t n = text.size();
 
     std::string out;
@@ -431,7 +433,8 @@ static std::string reverseHebrewWord(const std::string &text)
         if (b >= (uint8_t)'0' && b <= (uint8_t)'9')
         {
             size_t j = i - 1;
-            while (j > 0 && ((uint8_t)s[j - 1] >= (uint8_t)'0' && (uint8_t)s[j - 1] <= (uint8_t)'9')) --j;
+            while (j > 0 && ((uint8_t)s[j - 1] >= (uint8_t)'0' && (uint8_t)s[j - 1] <= (uint8_t)'9'))
+                --j;
             out.append(s + j, i - j);
             i = j;
             continue;
@@ -455,7 +458,7 @@ static std::string reverseHebrewWord(const std::string &text)
         }
 
         const uint8_t lead = (uint8_t)s[k];
-        const uint8_t len  = utf8LeadLen(lead);
+        const uint8_t len = utf8LeadLen(lead);
 
         // Validate shape: lead length matches the end position.
         if (len != 0 && k + len == i)
@@ -3864,7 +3867,7 @@ void GUI::drawStandaloneSettings()
     auto drawSettingsButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor, uint16_t textColor)
     {
         target->fillRect(x, y, w, h, fillColor);
-        target->drawRect(x, y, w, h, TFT_DARKCYAN); //TFT_BLACK);
+        target->drawRect(x, y, w, h, TFT_DARKCYAN); // TFT_BLACK);
         target->setTextDatum(textdatum_t::middle_center);
         target->setTextColor(textColor, fillColor);
         target->drawString(label, x + w / 2, y + h / 2);
@@ -4160,8 +4163,10 @@ void GUI::processReaderTap(int x, int y, bool isDouble)
     // First, check if tap is on a rendered image
     for (const auto &ri : pageRenderedImages)
     {
-        if (x >= ri.x && x <= ri.x + ri.width &&
-            y >= ri.y && y <= ri.y + ri.height)
+        int minxoffset = ri.width <= 25 ? 5 : 30;
+        int minyoffset = ri.height <= 25 ? 5 : 20;
+        if (x >= (ri.x + minxoffset) && x <= ri.x + (ri.width - minxoffset) &&
+            y >= ri.y + minyoffset && y <= ri.y + (ri.height - minyoffset))
         {
             // Tapped on an image - open full screen viewer
             ESP_LOGI(TAG, "Tap on image at (%d, %d), opening viewer", x, y);
@@ -5717,24 +5722,33 @@ void GUI::saveLastBook()
     {
         esp_err_t err;
         err = nvs_set_i32(my_handle, NVS_KEY_LAST_BOOK_ID, (int32_t)currentBook.id);
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_ID, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_ID, esp_err_to_name(err));
         err = nvs_set_i32(my_handle, NVS_KEY_LAST_STATE, (int)currentState);
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_STATE, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_STATE, esp_err_to_name(err));
         err = nvs_set_str(my_handle, NVS_KEY_LAST_BOOK_PATH, currentBook.path.c_str());
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_PATH, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_PATH, esp_err_to_name(err));
         err = nvs_set_str(my_handle, NVS_KEY_LAST_BOOK_TITLE, currentBook.title.c_str());
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_TITLE, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_TITLE, esp_err_to_name(err));
         err = nvs_set_i32(my_handle, NVS_KEY_LAST_BOOK_CHAPTER, chIdx);
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_CHAPTER, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_CHAPTER, esp_err_to_name(err));
         ESP_LOGI(TAG, "Saving last book chapter=%d", chIdx);
         err = nvs_set_u32(my_handle, NVS_KEY_LAST_BOOK_OFFSET, (uint32_t)currentTextOffset);
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_u32(%s) failed: %s", NVS_KEY_LAST_BOOK_OFFSET, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_u32(%s) failed: %s", NVS_KEY_LAST_BOOK_OFFSET, esp_err_to_name(err));
         err = nvs_set_str(my_handle, NVS_KEY_LAST_BOOK_FONT, currentFont.c_str());
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_FONT, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_FONT, esp_err_to_name(err));
         err = nvs_set_i32(my_handle, NVS_KEY_LAST_BOOK_FONT_SIZE, (int32_t)(fontSize * 10));
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_FONT_SIZE, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_FONT_SIZE, esp_err_to_name(err));
         err = nvs_commit(my_handle);
-        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
         nvs_close(my_handle);
     }
 
@@ -5764,15 +5778,18 @@ bool GUI::loadLastBook()
     {
         esp_err_t err;
         err = nvs_get_i32(my_handle, NVS_KEY_LAST_BOOK_ID, &lastId);
-        if (err != ESP_OK) ESP_LOGW(TAG, "nvs_get_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_ID, esp_err_to_name(err));
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "nvs_get_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_ID, esp_err_to_name(err));
         err = nvs_get_i32(my_handle, NVS_KEY_LAST_BOOK_CHAPTER, &lastChapter);
-        if (err != ESP_OK) {
+        if (err != ESP_OK)
+        {
             ESP_LOGW(TAG, "nvs_get_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_CHAPTER, esp_err_to_name(err));
             lastChapter = 0;
         }
         ESP_LOGI(TAG, "Loaded last book ID=%d, chapter=%d", lastId, lastChapter);
         err = nvs_get_u32(my_handle, NVS_KEY_LAST_BOOK_OFFSET, &lastOffset);
-        if (err != ESP_OK) {
+        if (err != ESP_OK)
+        {
             ESP_LOGW(TAG, "nvs_get_u32(%s) failed: %s", NVS_KEY_LAST_BOOK_OFFSET, esp_err_to_name(err));
             lastOffset = 0;
         }
@@ -5927,7 +5944,7 @@ bool GUI::loadLastBook()
     if (xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
         ESP_LOGI(TAG, "Loading last book: ID=%d, path=%s, chapter=%d, offset=%zu",
-                 currentBook.id, currentBook.path.c_str(), currentBook.currentChapter, currentBook.currentOffset);  
+                 currentBook.id, currentBook.path.c_str(), currentBook.currentChapter, currentBook.currentOffset);
         loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
         if (loaded)
         {
@@ -7848,98 +7865,112 @@ void GUI::showWallpaperAndSleep()
 
     if (hal.isSDCardMounted())
     {
+        struct dirent *entry;
+        std::vector<std::string> images;
+
+        auto getImages = [&images](dirent *entry, std::string &path)
+        {
+            if (entry->d_type == DT_REG)
+            {
+                std::string fname = entry->d_name;
+                if (fname.length() > 4)
+                {
+                    std::string ext = fname.substr(fname.length() - 4);
+                    for (char &c : ext)
+                        c = tolower(c);
+                    if (ext == ".jpg" || ext == ".png" || ext == ".bmp")
+                    {
+                        ESP_LOGI(TAG, "Found wallpaper image: %s/%s", path.c_str(), fname.c_str());
+                        images.push_back(path + "/" + fname);
+                    }
+                    // Also check 5-char extension for .jpeg
+                    if (fname.length() > 5)
+                    {
+                        std::string ext5 = fname.substr(fname.length() - 5);
+                        for (char &c : ext5)
+                            c = tolower(c);
+                        if (ext5 == ".jpeg")
+                        {
+                            images.push_back(path + "/" + fname);
+                        }
+                    }
+                }
+            }
+        };
+
         std::string wallpaperPath = std::string(hal.getSDCardMountPoint()) + "/wallpaper";
+        std::string spiffsWallpaperPath = "/spiffs/wallpaper";
         DIR *dir = opendir(wallpaperPath.c_str());
         if (dir)
         {
-            // Collect image files
-            std::vector<std::string> images;
-            struct dirent *entry;
             while ((entry = readdir(dir)) != NULL)
             {
-                if (entry->d_type == DT_REG)
-                {
-                    std::string fname = entry->d_name;
-                    if (fname.length() > 4)
-                    {
-                        std::string ext = fname.substr(fname.length() - 4);
-                        for (char &c : ext)
-                            c = tolower(c);
-                        if (ext == ".jpg" || ext == ".png" || ext == ".bmp")
-                        {
-                            images.push_back(wallpaperPath + "/" + fname);
-                        }
-                        // Also check 5-char extension for .jpeg
-                        if (fname.length() > 5)
-                        {
-                            std::string ext5 = fname.substr(fname.length() - 5);
-                            for (char &c : ext5)
-                                c = tolower(c);
-                            if (ext5 == ".jpeg")
-                            {
-                                images.push_back(wallpaperPath + "/" + fname);
-                            }
-                        }
-                    }
-                }
+                getImages(entry, wallpaperPath);
             }
             closedir(dir);
-
-            if (!images.empty())
+        }
+        dir = opendir("/spiffs/images");
+        if (dir)
+        {
+            while ((entry = readdir(dir)) != NULL)
             {
-                // Pick random image using time-based seed
-                uint32_t seed = (uint32_t)(esp_timer_get_time() / 1000);
-                std::mt19937 gen(seed);
-                std::uniform_int_distribution<> dis(0, images.size() - 1);
-                std::string imagePath = images[dis(gen)];
+                getImages(entry, spiffsWallpaperPath);
+            }
+            closedir(dir);
+        }
 
-                ESP_LOGI(TAG, "Showing wallpaper: %s", imagePath.c_str());
+        ESP_LOGI(TAG, "Total wallpaper images found: %d", images.size());
 
-                // Load and display the image
-                FILE *f = fopen(imagePath.c_str(), "rb");
-                if (f)
+        if (!images.empty())
+        {
+            // Pick random image using time-based seed
+            uint32_t seed = (uint32_t)(esp_timer_get_time() / 1000);
+            std::mt19937 gen(seed);
+            std::uniform_int_distribution<> dis(0, images.size() - 1);
+            std::string imagePath = images[dis(gen)];
+
+            ESP_LOGI(TAG, "Showing wallpaper: %s", imagePath.c_str());
+
+            // Load and display the image
+            FILE *f = fopen(imagePath.c_str(), "rb");
+            if (f)
+            {
+                fseek(f, 0, SEEK_END);
+                size_t size = ftell(f);
+                fseek(f, 0, SEEK_SET);
+
+                if (size < 2 * 1024 * 1024) // Limit to 2MB images
                 {
-                    fseek(f, 0, SEEK_END);
-                    size_t size = ftell(f);
-                    fseek(f, 0, SEEK_SET);
-
-                    if (size < 2 * 1024 * 1024) // Limit to 2MB images
+                    std::vector<uint8_t> imageData(size);
+                    if (fread(imageData.data(), 1, size, f) == size)
                     {
-                        std::vector<uint8_t> imageData(size);
-                        if (fread(imageData.data(), 1, size, f) == size)
+                        // Use ImageHandler to decode and display
+                        ImageHandler &imgHandler = ImageHandler::getInstance();
+                        M5.Display.fillScreen(TFT_WHITE);
+
+                        ImageDecodeResult result = imgHandler.decodeAndRender(
+                            imageData.data(),
+                            imageData.size(),
+                            &M5.Display,
+                            0, 0,
+                            M5.Display.width(),
+                            M5.Display.height(),
+                            ImageDisplayMode::BLOCK);
+
+                        if (result.success)
                         {
-                            // Use ImageHandler to decode and display
-                            ImageHandler &imgHandler = ImageHandler::getInstance();
-                            M5.Display.fillScreen(TFT_WHITE);
-
-                            ImageDecodeResult result = imgHandler.decodeAndRender(
-                                imageData.data(),
-                                imageData.size(),
-                                &M5.Display,
-                                0, 0,
-                                M5.Display.width(),
-                                M5.Display.height(),
-                                ImageDisplayMode::BLOCK);
-
-                            if (result.success)
-                            {
-                                M5.Display.display();
-                                M5.Display.waitDisplay();
-                                showedWallpaper = true;
-                            }
+                            M5.Display.display();
+                            M5.Display.waitDisplay();
+                            showedWallpaper = true;
                         }
                     }
-                    fclose(f);
                 }
-            }
-            else
-            {
-                ESP_LOGI(TAG, "No images in wallpaper/ folder");
+                fclose(f);
             }
         }
         else
         {
-            ESP_LOGI(TAG, "No wallpaper/ folder on SD card");
+            ESP_LOGI(TAG, "No images in wallpaper/ folders");
         }
     }
 
@@ -7950,15 +7981,19 @@ void GUI::showWallpaperAndSleep()
     }
 
     // Enter deep sleep with touch wake so user can resume reading
-    deviceHAL.enterDeepSleepWithTouchWake();
+    // set timer to wake after 5 minutes to change the wallpaper
+    esp_sleep_enable_timer_wakeup(10 * 1000000); // 5 * 60 * 1000000);
+
 #else
     // Non-S3 devices: show sleep symbol and enter deep sleep with touch wake
     drawSleepSymbol("Zz");
-    deviceHAL.enterDeepSleepWithTouchWake();
+
 #endif
+    deviceHAL.enterDeepSleepWithTouchWake();
 }
 
 // Static member function implementation
-std::string GUI::decodeHtmlEntities(const std::string& str) {
+std::string GUI::decodeHtmlEntities(const std::string &str)
+{
     return ::decodeHtmlEntities(str);
 }

@@ -99,6 +99,8 @@ public:
     void metricsTaskLoop();
     void backgroundIndexerTaskLoop();
 
+    void showWallpaperAndSleep(); // Show random wallpaper before sleep (S3 only)
+
 private:
     AppState currentState = AppState::MAIN_MENU;
     AppState previousState = AppState::MAIN_MENU; // For returning from settings
@@ -278,8 +280,7 @@ private:
     void loadSettings();
     void saveLastBook(); // Save current book and page to NVS
     bool loadLastBook(); // Load and open last book, returns success
-    void goToSleep();
-    void showWallpaperAndSleep(); // Show random wallpaper before sleep (S3 only)
+    void goToSleep();    
 
     size_t drawPageContent(bool draw);
     size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target = nullptr, volatile bool *abort = nullptr);
