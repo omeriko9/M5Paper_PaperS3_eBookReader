@@ -225,6 +225,16 @@
             </div>
 
             <div class="card">
+                <h2>Sleep & Reset</h2>
+                <div class="form-group">
+                    <label>Put Device to Sleep</label>
+                    <div class="form-row"><button class="btn" onclick="putDeviceToSleep()">Sleep</button></div>
+                    <label>Restart Device</label>
+                    <div class="form-row"><button class="btn danger" onclick="restartDevice()">Restart</button></div>
+                </div>
+            </div>
+
+            <div class="card">
                 <h2>System Update</h2>
                 <div class="form-group">
                     <label>Update Web Interface (index.html)</label>
@@ -485,6 +495,19 @@
                 .then(r => r.text())
                 .then(msg => showToast(msg))
                 .catch(e => showToast("Error syncing time"));
+        }
+
+        function putDeviceToSleep() {
+            fetch('/api/multi?action=sleep', {method: 'GET'})
+                .then(() => showToast('Device is going to sleep...'))
+                .catch(() => showToast('Error putting device to sleep'));
+        }
+
+        function restartDevice() {
+            if(!confirm('Are you sure you want to restart the device?')) return;
+            fetch('/api/multi?action=restart', {method: 'GET'})
+                .then(() => showToast('Device is restarting...'))
+                .catch(() => showToast('Error restarting device'));
         }
 
         function formatSD() {

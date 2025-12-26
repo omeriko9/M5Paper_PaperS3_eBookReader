@@ -20,36 +20,39 @@ static const char *TAG = "WEB";
 extern WifiManager wifiManager;
 extern BookIndex bookIndex;
 extern GUI gui;
-extern DeviceHAL& deviceHAL;
+extern DeviceHAL &deviceHAL;
 extern void syncRtcFromNtp();
 
 // Static member initialization
 uint32_t WebServer::lastHttpActivityTime = 0;
 
-void WebServer::updateActivityTime() {
+void WebServer::updateActivityTime()
+{
     lastHttpActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 }
 
-uint32_t WebServer::getLastActivityTime() {
+uint32_t WebServer::getLastActivityTime()
+{
     return lastHttpActivityTime;
 }
 
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 // --- Helper for Timezone ---
-static const char* resolve_timezone(const char* tz) {
-    if (strcmp(tz, "Asia/Jerusalem") == 0) return "IST-2IDT,M3.4.4/26,M10.5.0";
-    if (strcmp(tz, "Asia/Tel_Aviv") == 0) return "IST-2IDT,M3.4.4/26,M10.5.0";
+static const char *resolve_timezone(const char *tz)
+{
+    if (strcmp(tz, "Asia/Jerusalem") == 0)
+        return "IST-2IDT,M3.4.4/26,M10.5.0";
+    if (strcmp(tz, "Asia/Tel_Aviv") == 0)
+        return "IST-2IDT,M3.4.4/26,M10.5.0";
     return tz;
 }
 
-
-
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 // --- HTML Content ---
 
-static const char* CAPTIVE_HTML = R"rawliteral(
+static const char *CAPTIVE_HTML = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
@@ -90,7 +93,7 @@ function saveWifi() {
 </html>
 )rawliteral";
 
-static const char* MANAGER_HTML = R"rawliteral(
+static const char *MANAGER_HTML = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -751,71 +754,98 @@ static const char* MANAGER_HTML = R"rawliteral(
 static void url_decode(char *dst, const char *src)
 {
     char a, b;
-    while (*src) {
+    while (*src)
+    {
         if ((*src == '%') &&
             ((a = src[1]) && (b = src[2])) &&
-            (isxdigit(a) && isxdigit(b))) {
-            if (a >= 'a') a -= 'a'-'A';
-            if (a >= 'A') a -= ('A' - 10);
-            else a -= '0';
-            if (b >= 'a') b -= 'a'-'A';
-            if (b >= 'A') b -= ('A' - 10);
-            else b -= '0';
-            *dst++ = 16*a+b;
-            src+=3;
-        } else if (*src == '+') {
+            (isxdigit(a) && isxdigit(b)))
+        {
+            if (a >= 'a')
+                a -= 'a' - 'A';
+            if (a >= 'A')
+                a -= ('A' - 10);
+            else
+                a -= '0';
+            if (b >= 'a')
+                b -= 'a' - 'A';
+            if (b >= 'A')
+                b -= ('A' - 10);
+            else
+                b -= '0';
+            *dst++ = 16 * a + b;
+            src += 3;
+        }
+        else if (*src == '+')
+        {
             *dst++ = ' ';
             src++;
-        } else {
+        }
+        else
+        {
             *dst++ = *src++;
         }
     }
     *dst++ = '\0';
 }
 
-static void sanitize_filename(char* name) {
+static void sanitize_filename(char *name)
+{
     // Truncate to 28 chars to be safe (SPIFFS limit is 32 bytes including null)
-    if (strlen(name) > 28) {
+    if (strlen(name) > 28)
+    {
         // Keep extension if possible
-        char* ext = strrchr(name, '.');
-        if (ext) {
+        char *ext = strrchr(name, '.');
+        if (ext)
+        {
             int ext_len = strlen(ext);
-            if (ext_len < 28) {
+            if (ext_len < 28)
+            {
                 int base_len = 28 - ext_len;
                 memmove(name + base_len, ext, ext_len + 1);
-            } else {
+            }
+            else
+            {
                 name[28] = 0;
             }
-        } else {
+        }
+        else
+        {
             name[28] = 0;
         }
     }
     // Replace invalid chars and spaces
-    for(int i=0; name[i]; i++) {
-        if(name[i] == '/' || name[i] == '\\' || name[i] == ':' || name[i] == '"' || name[i] == ' ' || name[i] < 32 || name[i] > 126) {
+    for (int i = 0; name[i]; i++)
+    {
+        if (name[i] == '/' || name[i] == '\\' || name[i] == ':' || name[i] == '"' || name[i] == ' ' || name[i] < 32 || name[i] > 126)
+        {
             name[i] = '_';
         }
     }
 }
 
-static size_t getFreeSpace() {
+static size_t getFreeSpace()
+{
     size_t total = 0, used = 0;
-    if (esp_spiffs_info("storage", &total, &used) == ESP_OK) {
+    if (esp_spiffs_info("storage", &total, &used) == ESP_OK)
+    {
         return total - used;
     }
     return 0;
 }
 
-static esp_err_t jump_handler(httpd_req_t *req) {
+static esp_err_t jump_handler(httpd_req_t *req)
+{
     WebServer::updateActivityTime();
     char buf[128];
     ESP_LOGI(TAG, "jump_handler called: uri=%s", req->uri);
-    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK)
+    {
         char param[32];
 
         // Support both 'percent' and 'pct' (web UI used pct) for percent jumps
         if (httpd_query_key_value(buf, "percent", param, sizeof(param)) == ESP_OK ||
-            httpd_query_key_value(buf, "pct", param, sizeof(param)) == ESP_OK) {
+            httpd_query_key_value(buf, "pct", param, sizeof(param)) == ESP_OK)
+        {
             float p = atof(param);
             ESP_LOGI(TAG, "jump_handler: percent param=%s -> %f", param, p);
 
@@ -826,11 +856,14 @@ static esp_err_t jump_handler(httpd_req_t *req) {
             size_t chapterSize = gui.getCurrentChapterSize();
             size_t newOffset = (size_t)((p / 100.0f) * chapterSize);
 
-            if (gui.canJump()) {
+            if (gui.canJump())
+            {
                 gui.jumpTo(p);
                 int len = snprintf(out, sizeof(out), "{\"result\":\"ok\",\"action\":\"percent\",\"percent\":%.2f,\"offset\":%u,\"chapterSize\":%u,\"applied\":true}", p, (unsigned)newOffset, (unsigned)chapterSize);
                 httpd_resp_send(req, out, len);
-            } else {
+            }
+            else
+            {
                 int len = snprintf(out, sizeof(out), "{\"result\":\"error\",\"reason\":\"not in reader state\",\"applied\":false}");
                 httpd_resp_send(req, out, len);
             }
@@ -839,23 +872,29 @@ static esp_err_t jump_handler(httpd_req_t *req) {
 
         // Support both 'chapter' and 'ch' (web UI used ch)
         if (httpd_query_key_value(buf, "chapter", param, sizeof(param)) == ESP_OK ||
-            httpd_query_key_value(buf, "ch", param, sizeof(param)) == ESP_OK) {
+            httpd_query_key_value(buf, "ch", param, sizeof(param)) == ESP_OK)
+        {
             int c = atoi(param);
             ESP_LOGI(TAG, "jump_handler: chapter param=%s -> %d", param, c);
             httpd_resp_set_type(req, "application/json");
             char out[256];
 
-            if (gui.canJump()) {
+            if (gui.canJump())
+            {
                 gui.jumpToChapter(c);
                 int len = snprintf(out, sizeof(out), "{\"result\":\"ok\",\"action\":\"chapter\",\"chapter\":%d,\"applied\":true}", c);
                 httpd_resp_send(req, out, len);
-            } else {
+            }
+            else
+            {
                 int len = snprintf(out, sizeof(out), "{\"result\":\"error\",\"reason\":\"not in reader state\",\"applied\":false}");
                 httpd_resp_send(req, out, len);
             }
             return ESP_OK;
         }
-    } else {
+    }
+    else
+    {
         ESP_LOGW(TAG, "jump_handler: no query string provided");
     }
 
@@ -869,40 +908,44 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     esp_task_wdt_add(NULL);
     // Update activity time at start of upload to prevent sleep
     WebServer::updateActivityTime();
-    
+
     char filename[256];
-    const char* uri = req->uri;
-    const char* filename_start = strstr(uri, "/upload/");
-    if (!filename_start) {
+    const char *uri = req->uri;
+    const char *filename_start = strstr(uri, "/upload/");
+    if (!filename_start)
+    {
         httpd_resp_send_500(req);
         esp_task_wdt_delete(NULL);
         return ESP_FAIL;
     }
     filename_start += 8; // Skip "/upload/"
-    
+
     // Decode URL to get the real title
     url_decode(filename, filename_start);
-    
+
     // Add to index and get the safe filesystem path
     std::string safePath = bookIndex.addBook(filename);
     ESP_LOGI(TAG, "Uploading '%s' to '%s'", filename, safePath.c_str());
-    
+
     // Check if file exists and delete it first to ensure clean write
     struct stat st;
-    if (stat(safePath.c_str(), &st) == 0) {
+    if (stat(safePath.c_str(), &st) == 0)
+    {
         unlink(safePath.c_str());
     }
 
     FILE *f = fopen(safePath.c_str(), "w");
-    if (!f) {
+    if (!f)
+    {
         ESP_LOGE(TAG, "Failed to open file for writing: %s (errno: %d)", safePath.c_str(), errno);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file");
         esp_task_wdt_delete(NULL);
         return ESP_FAIL;
     }
 
-    char *buf = (char*)malloc(4096);
-    if (!buf) {
+    char *buf = (char *)malloc(4096);
+    if (!buf)
+    {
         fclose(f);
         ESP_LOGE(TAG, "Failed to allocate buffer");
         httpd_resp_send_500(req);
@@ -914,19 +957,23 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     int remaining = req->content_len;
     int64_t lastLogTime = 0;
 
-    while (remaining > 0) {
+    while (remaining > 0)
+    {
         esp_task_wdt_reset();
         // Update activity time during upload to prevent sleep on large files
         WebServer::updateActivityTime();
 
         int64_t now = esp_timer_get_time();
-        if (now - lastLogTime > 2000000) { // Log every 2 seconds
+        if (now - lastLogTime > 2000000)
+        { // Log every 2 seconds
             lastLogTime = now;
             ESP_LOGI(TAG, "Upload progress: %d bytes remaining. Activity time updated.", remaining);
         }
-        
-        if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+
+        if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0)
+        {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT)
+            {
                 continue;
             }
             ESP_LOGE(TAG, "httpd_req_recv failed with %d", received);
@@ -938,7 +985,8 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         size_t written = fwrite(buf, 1, received, f);
-        if (written != received) {
+        if (written != received)
+        {
             free(buf);
             fclose(f);
             ESP_LOGE(TAG, "File write failed");
@@ -950,35 +998,55 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     }
     free(buf);
     fclose(f);
-    
+
     gui.refreshLibrary();
-    
+
     httpd_resp_send_chunk(req, NULL, 0);
     esp_task_wdt_delete(NULL);
     return ESP_OK;
 }
 
 // Helper to escape JSON strings
-static std::string escapeJsonString(const std::string& input) {
+static std::string escapeJsonString(const std::string &input)
+{
     std::string output;
     output.reserve(input.length() * 2);
-    for (char c : input) {
-        switch (c) {
-            case '"': output += "\\\""; break;
-            case '\\': output += "\\\\"; break;
-            case '\b': output += "\\b"; break;
-            case '\f': output += "\\f"; break;
-            case '\n': output += "\\n"; break;
-            case '\r': output += "\\r"; break;
-            case '\t': output += "\\t"; break;
-            default:
-                if (c >= 0 && c < 32) {
-                    char hex[8];
-                    snprintf(hex, sizeof(hex), "\\u%04x", (unsigned char)c);
-                    output += hex;
-                } else {
-                    output += c;
-                }
+    for (char c : input)
+    {
+        switch (c)
+        {
+        case '"':
+            output += "\\\"";
+            break;
+        case '\\':
+            output += "\\\\";
+            break;
+        case '\b':
+            output += "\\b";
+            break;
+        case '\f':
+            output += "\\f";
+            break;
+        case '\n':
+            output += "\\n";
+            break;
+        case '\r':
+            output += "\\r";
+            break;
+        case '\t':
+            output += "\\t";
+            break;
+        default:
+            if (c >= 0 && c < 32)
+            {
+                char hex[8];
+                snprintf(hex, sizeof(hex), "\\u%04x", (unsigned char)c);
+                output += hex;
+            }
+            else
+            {
+                output += c;
+            }
         }
     }
     return output;
@@ -989,28 +1057,30 @@ static esp_err_t api_list_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
     auto books = bookIndex.getBooks();
-    
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "[", 1);
-    
+
     bool first = true;
-    for (const auto& book : books) {
-        if (!first) httpd_resp_send_chunk(req, ",", 1);
-        
+    for (const auto &book : books)
+    {
+        if (!first)
+            httpd_resp_send_chunk(req, ",", 1);
+
         std::string escapedTitle = escapeJsonString(book.title);
         std::string escapedAuthor = escapeJsonString(book.author);
-        
+
         char buf[1024];
-        snprintf(buf, sizeof(buf), 
-            "{\"name\":\"%s\",\"author\":\"%s\",\"id\":%d,\"favorite\":%s}", 
-            escapedTitle.c_str(), 
-            escapedAuthor.c_str(),
-            book.id,
-            book.isFavorite ? "true" : "false");
+        snprintf(buf, sizeof(buf),
+                 "{\"name\":\"%s\",\"author\":\"%s\",\"id\":%d,\"favorite\":%s}",
+                 escapedTitle.c_str(),
+                 escapedAuthor.c_str(),
+                 book.id,
+                 book.isFavorite ? "true" : "false");
         httpd_resp_send_chunk(req, buf, strlen(buf));
         first = false;
     }
-    
+
     httpd_resp_send_chunk(req, "]", 1);
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
@@ -1022,20 +1092,23 @@ static esp_err_t api_delete_handler(httpd_req_t *req)
     WebServer::updateActivityTime();
     char buf[100];
     size_t buf_len = sizeof(buf);
-    
-    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
+
+    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK)
+    {
         char param[32];
-        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
+        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK)
+        {
             int id = atoi(param);
-            
+
             BookEntry book = bookIndex.getBook(id);
-            if (book.id != 0) {
+            if (book.id != 0)
+            {
                 ESP_LOGI(TAG, "Deleting ID %d (%s)", id, book.path.c_str());
                 unlink(book.path.c_str()); // Delete actual file
-                bookIndex.removeBook(id); // Update index (also deletes metrics)
-                
+                bookIndex.removeBook(id);  // Update index (also deletes metrics)
+
                 gui.refreshLibrary();
-                
+
                 httpd_resp_send(req, "OK", 2);
                 return ESP_OK;
             }
@@ -1054,11 +1127,14 @@ static esp_err_t api_open_handler(httpd_req_t *req)
     char buf[100];
     size_t buf_len = sizeof(buf);
 
-    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
+    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK)
+    {
         char param[32];
-        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
+        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK)
+        {
             int id = atoi(param);
-            if (gui.openBookById(id)) {
+            if (gui.openBookById(id))
+            {
                 httpd_resp_send(req, "OK", 2);
                 esp_task_wdt_delete(NULL);
                 return ESP_OK;
@@ -1077,9 +1153,11 @@ static esp_err_t api_favorite_handler(httpd_req_t *req)
     char buf[100];
     size_t buf_len = sizeof(buf);
 
-    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
+    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK)
+    {
         char param[32];
-        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK) {
+        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK)
+        {
             int id = atoi(param);
             bool currentFav = bookIndex.isFavorite(id);
             bookIndex.setFavorite(id, !currentFav);
@@ -1099,12 +1177,14 @@ static esp_err_t api_favorite_handler(httpd_req_t *req)
 static esp_err_t api_settings_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
-    if (req->method == HTTP_GET) {
+    if (req->method == HTTP_GET)
+    {
         char tz[64] = {0};
         // Load TZ from NVS
         nvs_handle_t my_handle;
         esp_err_t err = nvs_open("storage", NVS_READONLY, &my_handle);
-        if (err == ESP_OK) {
+        if (err == ESP_OK)
+        {
             size_t required_size = sizeof(tz);
             nvs_get_str(my_handle, "timezone", tz, &required_size);
             nvs_close(my_handle);
@@ -1112,66 +1192,75 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
 
         char buf[512];
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-        snprintf(buf, sizeof(buf), 
-            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"sdFreeSpace\":%llu, \"timezone\":\"%s\", "
-            "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s}", 
-            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
-            (unsigned int)getFreeSpace(), deviceHAL.getSDCardFreeSize(), tz,
-            deviceHAL.getDeviceName(),
-            gui.isBuzzerEnabled() ? "true" : "false",
-            gui.isAutoRotateEnabled() ? "true" : "false");
+        snprintf(buf, sizeof(buf),
+                 "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"sdFreeSpace\":%llu, \"timezone\":\"%s\", "
+                 "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s}",
+                 gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
+                 (unsigned int)getFreeSpace(), deviceHAL.getSDCardFreeSize(), tz,
+                 deviceHAL.getDeviceName(),
+                 gui.isBuzzerEnabled() ? "true" : "false",
+                 gui.isAutoRotateEnabled() ? "true" : "false");
 #else
-        snprintf(buf, sizeof(buf), 
-            "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\"}", 
-            gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
-            (unsigned int)getFreeSpace(), tz,
-            deviceHAL.getDeviceName());
+        snprintf(buf, sizeof(buf),
+                 "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\"}",
+                 gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
+                 (unsigned int)getFreeSpace(), tz,
+                 deviceHAL.getDeviceName());
 #endif
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, strlen(buf));
         return ESP_OK;
-    } else if (req->method == HTTP_POST) {
+    }
+    else if (req->method == HTTP_POST)
+    {
         char buf[256];
         int ret, remaining = req->content_len;
-        if (remaining >= sizeof(buf)) {
+        if (remaining >= sizeof(buf))
+        {
             httpd_resp_send_500(req);
             return ESP_FAIL;
         }
-        
-        if ((ret = httpd_req_recv(req, buf, remaining)) <= 0) {
+
+        if ((ret = httpd_req_recv(req, buf, remaining)) <= 0)
+        {
             return ESP_FAIL;
         }
         buf[ret] = '\0';
-        
+
         // Simple JSON parsing
-        char* pSize = strstr(buf, "\"fontSize\":");
-        if (pSize) {
+        char *pSize = strstr(buf, "\"fontSize\":");
+        if (pSize)
+        {
             float size = atof(pSize + 11);
             gui.setFontSize(size);
         }
-        
-        char* pFont = strstr(buf, "\"font\":\"");
-        if (pFont) {
-            char* fontStart = pFont + 8;
-            char* fontEnd = strchr(fontStart, '"');
-            if (fontEnd) {
+
+        char *pFont = strstr(buf, "\"font\":\"");
+        if (pFont)
+        {
+            char *fontStart = pFont + 8;
+            char *fontEnd = strchr(fontStart, '"');
+            if (fontEnd)
+            {
                 std::string fontName(fontStart, fontEnd - fontStart);
                 gui.setFont(fontName);
             }
         }
-        
-        char* pLineSpacing = strstr(buf, "\"lineSpacing\":");
-        if (pLineSpacing) {
+
+        char *pLineSpacing = strstr(buf, "\"lineSpacing\":");
+        if (pLineSpacing)
+        {
             float spacing = atof(pLineSpacing + 14);
             gui.setLineSpacing(spacing);
         }
 
-        char* pShowImages = strstr(buf, "\"showImages\":");
-        if (pShowImages) {
+        char *pShowImages = strstr(buf, "\"showImages\":");
+        if (pShowImages)
+        {
             bool show = (strncmp(pShowImages + 13, "true", 4) == 0);
             gui.setShowImages(show);
         }
-        
+
         httpd_resp_send(req, "OK", 2);
         return ESP_OK;
     }
@@ -1182,40 +1271,45 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
 static esp_err_t api_s3_settings_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
-    
+
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-    if (req->method == HTTP_POST) {
+    if (req->method == HTTP_POST)
+    {
         char buf[256];
         int ret, remaining = req->content_len;
-        if (remaining >= sizeof(buf)) {
+        if (remaining >= sizeof(buf))
+        {
             httpd_resp_send_500(req);
             return ESP_FAIL;
         }
-        
-        if ((ret = httpd_req_recv(req, buf, remaining)) <= 0) {
+
+        if ((ret = httpd_req_recv(req, buf, remaining)) <= 0)
+        {
             return ESP_FAIL;
         }
         buf[ret] = '\0';
-        
+
         // Parse buzzerEnabled
-        char* pBuzzer = strstr(buf, "\"buzzerEnabled\":");
-        if (pBuzzer) {
+        char *pBuzzer = strstr(buf, "\"buzzerEnabled\":");
+        if (pBuzzer)
+        {
             bool enabled = (strstr(pBuzzer + 16, "true") != nullptr);
             gui.setBuzzerEnabled(enabled);
         }
-        
+
         // Parse autoRotate
-        char* pRotate = strstr(buf, "\"autoRotate\":");
-        if (pRotate) {
+        char *pRotate = strstr(buf, "\"autoRotate\":");
+        if (pRotate)
+        {
             bool enabled = (strstr(pRotate + 13, "true") != nullptr);
             gui.setAutoRotateEnabled(enabled);
         }
-        
+
         httpd_resp_send(req, "OK", 2);
         return ESP_OK;
     }
 #endif
-    
+
     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Not supported");
     return ESP_FAIL;
 }
@@ -1225,25 +1319,25 @@ static esp_err_t api_sd_status_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
     httpd_resp_set_type(req, "application/json");
-    
+
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     char buf[256];
     bool mounted = deviceHAL.isSDCardMounted();
     bool available = deviceHAL.hasSDCardSlot();
     uint64_t totalSize = deviceHAL.getSDCardTotalSize();
     uint64_t freeSize = deviceHAL.getSDCardFreeSize();
-    
-    snprintf(buf, sizeof(buf), 
-        "{\"available\":%s, \"mounted\":%s, \"totalSize\":%llu, \"freeSize\":%llu}",
-        available ? "true" : "false",
-        mounted ? "true" : "false",
-        (unsigned long long)totalSize,
-        (unsigned long long)freeSize);
+
+    snprintf(buf, sizeof(buf),
+             "{\"available\":%s, \"mounted\":%s, \"totalSize\":%llu, \"freeSize\":%llu}",
+             available ? "true" : "false",
+             mounted ? "true" : "false",
+             (unsigned long long)totalSize,
+             (unsigned long long)freeSize);
     httpd_resp_send(req, buf, strlen(buf));
 #else
     httpd_resp_send(req, "{\"available\":false, \"mounted\":false}", HTTPD_RESP_USE_STRLEN);
 #endif
-    
+
     return ESP_OK;
 }
 
@@ -1252,23 +1346,59 @@ static esp_err_t api_format_sd_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
     httpd_resp_set_type(req, "application/json");
-    
+
 #ifdef CONFIG_EBOOK_ENABLE_SD_CARD
     ESP_LOGW(TAG, "Formatting SD card via web request");
-    
-    bool success = deviceHAL.formatSDCard([](int progress) {
-        ESP_LOGI(TAG, "Format progress: %d%%", progress);
-    });
-    
-    if (success) {
+
+    bool success = deviceHAL.formatSDCard([](int progress)
+                                          { ESP_LOGI(TAG, "Format progress: %d%%", progress); });
+
+    if (success)
+    {
         httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
-    } else {
+    }
+    else
+    {
         httpd_resp_send(req, "{\"success\":false, \"error\":\"Format failed\"}", HTTPD_RESP_USE_STRLEN);
     }
 #else
     httpd_resp_send(req, "{\"success\":false, \"error\":\"SD card not supported\"}", HTTPD_RESP_USE_STRLEN);
 #endif
-    
+
+    return ESP_OK;
+}
+
+static esp_err_t api_multi_handler(httpd_req_t *req)
+{
+    // parse query params
+    WebServer::updateActivityTime();
+    httpd_resp_set_type(req, "text/plain");
+    ESP_LOGI(TAG, "api_multi_handler called: uri=%s", req->uri);
+
+    char buf[128];
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK)
+    {
+        char param[32];
+        if (httpd_query_key_value(buf, "action", param, sizeof(param)) == ESP_OK)
+        {
+            if (strcmp(param, "restart") == 0)
+            {
+                httpd_resp_send(req, "Restarting...", HTTPD_RESP_USE_STRLEN);
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                esp_restart();
+                return ESP_OK;
+            }
+            if (strcmp(param, "sleep") == 0)
+            {
+                httpd_resp_send(req, "Performing deep sleep...", HTTPD_RESP_USE_STRLEN);
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                GUI g;
+                g.showWallpaperAndSleep();
+                return ESP_OK;
+            }
+        }
+    }
+
     return ESP_OK;
 }
 
@@ -1276,17 +1406,19 @@ static esp_err_t api_format_sd_handler(httpd_req_t *req)
 static esp_err_t update_ui_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
-    
+
     // We expect the file content in the body
     FILE *f = fopen("/spiffs/index.html", "w");
-    if (!f) {
+    if (!f)
+    {
         ESP_LOGE(TAG, "Failed to open /spiffs/index.html for writing");
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
-    char *buf = (char*)malloc(4096);
-    if (!buf) {
+    char *buf = (char *)malloc(4096);
+    if (!buf)
+    {
         fclose(f);
         httpd_resp_send_500(req);
         return ESP_FAIL;
@@ -1294,10 +1426,13 @@ static esp_err_t update_ui_handler(httpd_req_t *req)
 
     int received;
     int remaining = req->content_len;
-    
-    while (remaining > 0) {
-        if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+
+    while (remaining > 0)
+    {
+        if ((received = httpd_req_recv(req, buf, MIN(remaining, 4096))) <= 0)
+        {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT)
+            {
                 continue;
             }
             free(buf);
@@ -1309,7 +1444,7 @@ static esp_err_t update_ui_handler(httpd_req_t *req)
     }
     free(buf);
     fclose(f);
-    
+
     httpd_resp_send(req, "UI Updated", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
@@ -1318,17 +1453,22 @@ static esp_err_t update_ui_handler(httpd_req_t *req)
 static esp_err_t index_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
-    if (wifiManager.isConnected()) {
+    if (wifiManager.isConnected())
+    {
         // Check if custom index.html exists
         struct stat st;
-        if (stat("/spiffs/index.html", &st) == 0) {
-            FILE* f = fopen("/spiffs/index.html", "r");
-            if (f) {
-                char* buf = (char*)malloc(4096);
-                if (buf) {
+        if (stat("/spiffs/index.html", &st) == 0)
+        {
+            FILE *f = fopen("/spiffs/index.html", "r");
+            if (f)
+            {
+                char *buf = (char *)malloc(4096);
+                if (buf)
+                {
                     httpd_resp_set_type(req, "text/html");
                     size_t read;
-                    while ((read = fread(buf, 1, 4096, f)) > 0) {
+                    while ((read = fread(buf, 1, 4096, f)) > 0)
+                    {
                         httpd_resp_send_chunk(req, buf, read);
                     }
                     httpd_resp_send_chunk(req, NULL, 0);
@@ -1341,7 +1481,9 @@ static esp_err_t index_handler(httpd_req_t *req)
         }
         // Fallback to embedded HTML
         httpd_resp_send(req, MANAGER_HTML, HTTPD_RESP_USE_STRLEN);
-    } else {
+    }
+    else
+    {
         httpd_resp_send(req, CAPTIVE_HTML, HTTPD_RESP_USE_STRLEN);
     }
     return ESP_OK;
@@ -1353,44 +1495,49 @@ static esp_err_t wifi_post_handler(httpd_req_t *req)
     WebServer::updateActivityTime();
     char buf[128];
     int ret, remaining = req->content_len;
-    if (remaining >= sizeof(buf)) {
+    if (remaining >= sizeof(buf))
+    {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
-    
-    if ((ret = httpd_req_recv(req, buf, remaining)) <= 0) {
+
+    if ((ret = httpd_req_recv(req, buf, remaining)) <= 0)
+    {
         return ESP_FAIL;
     }
     buf[ret] = '\0';
-    
+
     char ssid[32] = {0};
     char pass[64] = {0};
-    
-    char* p_ssid = strstr(buf, "ssid=");
-    char* p_pass = strstr(buf, "pass=");
-    
-    if (p_ssid && p_pass) {
+
+    char *p_ssid = strstr(buf, "ssid=");
+    char *p_pass = strstr(buf, "pass=");
+
+    if (p_ssid && p_pass)
+    {
         p_ssid += 5;
-        char* end_ssid = strchr(p_ssid, '&');
-        if (end_ssid) {
+        char *end_ssid = strchr(p_ssid, '&');
+        if (end_ssid)
+        {
             int len = end_ssid - p_ssid;
-            if(len > 31) len = 31;
+            if (len > 31)
+                len = 31;
             strncpy(ssid, p_ssid, len);
             ssid[len] = 0;
-            
+
             p_pass += 5;
             // URL decode pass if needed, simplified here
             strcpy(pass, p_pass);
-            
+
             wifiManager.saveCredentials(ssid, pass);
             httpd_resp_send(req, "Saved. Restarting...", HTTPD_RESP_USE_STRLEN);
-            
+
             // Schedule restart
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             esp_restart();
         }
     }
-    
+
     return ESP_OK;
 }
 
@@ -1408,32 +1555,35 @@ static esp_err_t set_time_handler(httpd_req_t *req)
 {
     WebServer::updateActivityTime();
     char buf[100];
-    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK)
+    {
         char tz_encoded[64] = {0};
-        if (httpd_query_key_value(buf, "tz", tz_encoded, sizeof(tz_encoded)) == ESP_OK) {
+        if (httpd_query_key_value(buf, "tz", tz_encoded, sizeof(tz_encoded)) == ESP_OK)
+        {
             char tz[64] = {0};
             url_decode(tz, tz_encoded);
-            
-            const char* posix_tz = resolve_timezone(tz);
-            
+
+            const char *posix_tz = resolve_timezone(tz);
+
             ESP_LOGI(TAG, "Setting timezone to: %s (resolved from %s)", posix_tz, tz);
-            
+
             // Save to NVS
             nvs_handle_t my_handle;
             esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
-            if (err == ESP_OK) {
+            if (err == ESP_OK)
+            {
                 nvs_set_str(my_handle, "timezone", posix_tz);
                 nvs_commit(my_handle);
                 nvs_close(my_handle);
             }
-            
+
             // Set TZ environment variable
             setenv("TZ", posix_tz, 1);
             tzset();
-            
+
             // Sync with NTP
             syncRtcFromNtp();
-            
+
             httpd_resp_send(req, "Timezone set and time synced!", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         }
@@ -1442,158 +1592,153 @@ static esp_err_t set_time_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
-void WebServer::init(const char* basePath) {
-    if (server != NULL) return; // Already running
+void WebServer::init(const char *basePath)
+{
+    if (server != NULL)
+        return; // Already running
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 24; // Increased for M5PaperS3 endpoints
-    config.stack_size = 8192; // Increase stack for file ops
+    config.max_uri_handlers = 26;
+    config.stack_size = 8192;      // Increase stack for file ops
     config.recv_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
     config.send_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
 
-    if (httpd_start(&server, &config) == ESP_OK) {
+    if (httpd_start(&server, &config) == ESP_OK)
+    {
         httpd_uri_t index_uri = {
-            .uri       = "/",
-            .method    = HTTP_GET,
-            .handler   = index_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/",
+            .method = HTTP_GET,
+            .handler = index_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &index_uri);
 
         httpd_uri_t list_api_uri = {
-            .uri       = "/api/list",
-            .method    = HTTP_GET,
-            .handler   = api_list_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/list",
+            .method = HTTP_GET,
+            .handler = api_list_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &list_api_uri);
-        
+
         httpd_uri_t del_api_uri = {
-            .uri       = "/api/delete",
-            .method    = HTTP_POST,
-            .handler   = api_delete_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/delete",
+            .method = HTTP_POST,
+            .handler = api_delete_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &del_api_uri);
 
         httpd_uri_t open_api_uri = {
-            .uri       = "/api/open",
-            .method    = HTTP_POST,
-            .handler   = api_open_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/open",
+            .method = HTTP_POST,
+            .handler = api_open_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &open_api_uri);
 
         httpd_uri_t favorite_api_uri = {
-            .uri       = "/api/favorite",
-            .method    = HTTP_POST,
-            .handler   = api_favorite_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/favorite",
+            .method = HTTP_POST,
+            .handler = api_favorite_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &favorite_api_uri);
 
         httpd_uri_t settings_api_uri = {
-            .uri       = "/api/settings",
-            .method    = HTTP_GET,
-            .handler   = api_settings_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/settings",
+            .method = HTTP_GET,
+            .handler = api_settings_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &settings_api_uri);
-        
+
         httpd_uri_t settings_post_uri = {
-            .uri       = "/api/settings",
-            .method    = HTTP_POST,
-            .handler   = api_settings_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/settings",
+            .method = HTTP_POST,
+            .handler = api_settings_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &settings_post_uri);
 
         httpd_uri_t jump_api_uri = {
-            .uri       = "/api/jump",
-            .method    = HTTP_GET,
-            .handler   = jump_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/jump",
+            .method = HTTP_GET,
+            .handler = jump_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &jump_api_uri);
 
         httpd_uri_t set_time_uri = {
-            .uri       = "/set_time",
-            .method    = HTTP_GET,
-            .handler   = set_time_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/set_time",
+            .method = HTTP_GET,
+            .handler = set_time_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &set_time_uri);
 
         httpd_uri_t upload_uri = {
-            .uri       = "/upload/*",
-            .method    = HTTP_POST,
-            .handler   = upload_post_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/upload/*",
+            .method = HTTP_POST,
+            .handler = upload_post_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &upload_uri);
-        
+
         httpd_uri_t update_ui_uri = {
-            .uri       = "/update_ui",
-            .method    = HTTP_POST,
-            .handler   = update_ui_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/update_ui",
+            .method = HTTP_POST,
+            .handler = update_ui_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &update_ui_uri);
-        
+
         httpd_uri_t wifi_uri = {
-            .uri       = "/wifi",
-            .method    = HTTP_POST,
-            .handler   = wifi_post_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/wifi",
+            .method = HTTP_POST,
+            .handler = wifi_post_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &wifi_uri);
-        
+
         httpd_uri_t jump_uri = {
-            .uri       = "/jump",
-            .method    = HTTP_GET,
-            .handler   = jump_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/jump",
+            .method = HTTP_GET,
+            .handler = jump_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &jump_uri);
-        
+
         // M5PaperS3 specific endpoints
         httpd_uri_t s3_settings_uri = {
-            .uri       = "/api/s3_settings",
-            .method    = HTTP_POST,
-            .handler   = api_s3_settings_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/s3_settings",
+            .method = HTTP_POST,
+            .handler = api_s3_settings_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &s3_settings_uri);
-        
+
         httpd_uri_t sd_status_uri = {
-            .uri       = "/api/sd_status",
-            .method    = HTTP_GET,
-            .handler   = api_sd_status_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/sd_status",
+            .method = HTTP_GET,
+            .handler = api_sd_status_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &sd_status_uri);
-        
+
         httpd_uri_t format_sd_uri = {
-            .uri       = "/api/format_sd",
-            .method    = HTTP_POST,
-            .handler   = api_format_sd_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/api/format_sd",
+            .method = HTTP_POST,
+            .handler = api_format_sd_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &format_sd_uri);
-        
+
+        httpd_uri_t multi_uri = {
+            .uri = "/api/multi",
+            .method = HTTP_GET,
+            .handler = api_multi_handler,
+            .user_ctx = NULL};
+        httpd_register_uri_handler(server, &multi_uri);
+
         httpd_uri_t catch_all_uri = {
-            .uri       = "/*",
-            .method    = HTTP_GET,
-            .handler   = captive_portal_handler,
-            .user_ctx  = NULL
-        };
+            .uri = "/*",
+            .method = HTTP_GET,
+            .handler = captive_portal_handler,
+            .user_ctx = NULL};
         httpd_register_uri_handler(server, &catch_all_uri);
     }
 }
 
-void WebServer::stop() {
-    if (server) {
+void WebServer::stop()
+{
+    if (server)
+    {
         httpd_stop(server);
         server = NULL;
     }

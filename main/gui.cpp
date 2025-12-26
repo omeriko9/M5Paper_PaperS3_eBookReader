@@ -32,6 +32,7 @@
 #include "sdkconfig.h"
 #include <ctime>
 #include <random>
+#include <unordered_set>
 #include <sys/stat.h>
 
 // Image placeholder character (U+E000 in UTF-8)
@@ -182,7 +183,7 @@ size_t GUI::getCurrentOffset() const
     return currentTextOffset;
 }
 static constexpr int PAGEINFO_ESTIMATE_MIN_CHARS = 50;
-static constexpr uint64_t LIGHT_SLEEP_TO_DEEP_SLEEP_US = 5ULL * 60ULL * 1000000ULL; // 5 minutes
+static constexpr uint64_t LIGHT_SLEEP_TO_DEEP_SLEEP_US = 2ULL * 60ULL * 1000000ULL; // 5 minutes
 
 // Helper to split string by delimiters but keep delimiters if needed
 // For word wrapping, we split by space.
@@ -638,6 +639,11 @@ void GUI::enterDeepSleepShutdown()
     ESP_LOGI(TAG, "Entering Deep Sleep Shutdown (Stage 2)...");
     deviceHAL.enterDeepSleepShutdown();
     // HAL handles everything and does not return
+}
+
+void GUI::smallInit()
+{
+    ImageHandler::getInstance().init();
 }
 
 void GUI::init(bool isWakeFromSleep)
@@ -7899,7 +7905,7 @@ void GUI::showWallpaperAndSleep()
         };
 
         std::string wallpaperPath = std::string(hal.getSDCardMountPoint()) + "/wallpaper";
-        std::string spiffsWallpaperPath = "/spiffs/wallpaper";
+        std::string spiffsImagesPath = "/spiffs/wallpaper";
         DIR *dir = opendir(wallpaperPath.c_str());
         if (dir)
         {
@@ -7909,12 +7915,15 @@ void GUI::showWallpaperAndSleep()
             }
             closedir(dir);
         }
-        dir = opendir("/spiffs/images");
+        ESP_LOGI(TAG, "Checking SPIFFS wallpaper folder: %s", spiffsImagesPath.c_str());
+        dir = opendir(spiffsImagesPath.c_str());
         if (dir)
         {
+            ESP_LOGI(TAG, "Opened SPIFFS wallpaper folder");
             while ((entry = readdir(dir)) != NULL)
             {
-                getImages(entry, spiffsWallpaperPath);
+                ESP_LOGI(TAG, "SPIFFS entry: %s", entry->d_name);
+                getImages(entry, spiffsImagesPath);
             }
             closedir(dir);
         }
@@ -7923,11 +7932,148 @@ void GUI::showWallpaperAndSleep()
 
         if (!images.empty())
         {
-            // Pick random image using time-based seed
-            uint32_t seed = (uint32_t)(esp_timer_get_time() / 1000);
-            std::mt19937 gen(seed);
-            std::uniform_int_distribution<> dis(0, images.size() - 1);
-            std::string imagePath = images[dis(gen)];
+            // Helper: pick next wallpaper path (tries to skip missing files and cleans NVS list)
+            auto getNextWallpaperPath = [&images]() -> std::string
+            {
+                static constexpr const char *NVS_KEY_WALLPAPERC = "wallpaperc";
+                nvs_handle_t my_handle;
+                std::vector<std::string> displayedPaths;
+                bool nvsOpened = false;
+                if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
+                {
+                    nvsOpened = true;
+                    size_t required = 0;
+                    if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, NULL, &required) == ESP_OK && required > 0)
+                    {
+                        std::string buf(required, '\0');
+                        if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, buf.data(), &required) == ESP_OK)
+                        {
+                            size_t start = 0;
+                            while (start < buf.size())
+                            {
+                                size_t pos = buf.find(';', start);
+                                if (pos == std::string::npos)
+                                    pos = buf.size();
+                                std::string token = buf.substr(start, pos - start);
+                                if (!token.empty())
+                                    displayedPaths.push_back(token);
+                                start = pos + 1;
+                            }
+                        }
+                    }
+                }
+
+                // Filter out missing files and remove them from displayedPaths
+                bool nvsModified = false;
+                std::vector<std::string> filtered;
+                filtered.reserve(displayedPaths.size());
+                for (const auto &p : displayedPaths)
+                {
+                    FILE *f = fopen(p.c_str(), "rb");
+                    if (f)
+                    {
+                        fclose(f);
+                        filtered.push_back(p);
+                    }
+                    else
+                    {
+                        ESP_LOGI(TAG, "Wallpaper missing from storage, removing from NVS list: %s", p.c_str());
+                        nvsModified = true;
+                    }
+                }
+
+                // Build fast lookup for filtered
+                std::unordered_set<std::string> filteredSet(filtered.begin(), filtered.end());
+
+                // Try to find first unseen image (in the 'images' vector order)
+                for (const auto &img : images)
+                {
+                    if (filteredSet.find(img) == filteredSet.end())
+                    {
+                        // verify file exists right now
+                        FILE *f = fopen(img.c_str(), "rb");
+                        if (f)
+                        {
+                            fclose(f);
+                            // append to filtered (but we'll only persist to NVS after successful display)
+                            if (nvsOpened && nvsModified)
+                            {
+                                // we'll save changes (missing cleaned) before returning
+                                std::string out;
+                                for (size_t i = 0; i < filtered.size(); ++i)
+                                {
+                                    out += filtered[i];
+                                    if (i + 1 < filtered.size())
+                                        out += ";";
+                                }
+                                if (out.empty())
+                                    nvs_erase_key(my_handle, NVS_KEY_WALLPAPERC);
+                                else
+                                    nvs_set_str(my_handle, NVS_KEY_WALLPAPERC, out.c_str());
+                                nvs_commit(my_handle);
+                            }
+                            if (nvsOpened)
+                                nvs_close(my_handle);
+                            return img;
+                        }
+                        else
+                        {
+                            ESP_LOGI(TAG, "Candidate image missing while selecting: %s", img.c_str());
+                            // not present, continue
+                        }
+                    }
+                }
+
+                // If all images have been seen (filtered contains them), pick FIFO front
+                if (!filtered.empty())
+                {
+                    // verify front still exists
+                    std::string front = filtered.front();
+                    FILE *f = fopen(front.c_str(), "rb");
+                    if (f)
+                    {
+                        fclose(f);
+                        if (nvsOpened && nvsModified)
+                        {
+                            std::string out;
+                            for (size_t i = 0; i < filtered.size(); ++i)
+                            {
+                                out += filtered[i];
+                                if (i + 1 < filtered.size())
+                                    out += ";";
+                            }
+                            if (out.empty())
+                                nvs_erase_key(my_handle, NVS_KEY_WALLPAPERC);
+                            else
+                                nvs_set_str(my_handle, NVS_KEY_WALLPAPERC, out.c_str());
+                            nvs_commit(my_handle);
+                        }
+                        if (nvsOpened)
+                            nvs_close(my_handle);
+                        return front;
+                    }
+                    else
+                    {
+                        ESP_LOGI(TAG, "Front wallpaper missing: %s", front.c_str());
+                        // will fall through and return empty
+                    }
+                }
+
+                if (nvsOpened)
+                    nvs_close(my_handle);
+                return std::string();
+            };
+
+            // Select next wallpaper from NVS FIFO / unseen logic
+            std::string imagePath = getNextWallpaperPath();
+            if (imagePath.empty())
+            {
+                ESP_LOGI(TAG, "No valid wallpaper candidate found");
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Selected wallpaper: %s", imagePath.c_str());
+            }
 
             ESP_LOGI(TAG, "Showing wallpaper: %s", imagePath.c_str());
 
@@ -7944,6 +8090,7 @@ void GUI::showWallpaperAndSleep()
                     std::vector<uint8_t> imageData(size);
                     if (fread(imageData.data(), 1, size, f) == size)
                     {
+                        ESP_LOGI(TAG, "Image loaded, size=%zu bytes", size);
                         // Use ImageHandler to decode and display
                         ImageHandler &imgHandler = ImageHandler::getInstance();
                         M5.Display.fillScreen(TFT_WHITE);
@@ -7962,13 +8109,90 @@ void GUI::showWallpaperAndSleep()
                             M5.Display.display();
                             M5.Display.waitDisplay();
                             showedWallpaper = true;
+
+                            // Update NVS FIFO list: add displayed image or rotate it to the back
+                            static constexpr const char *NVS_KEY_WALLPAPERC = "wallpaperc";
+                            nvs_handle_t my_handle;
+                            if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
+                            {
+                                size_t required = 0;
+                                std::vector<std::string> list;
+                                if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, NULL, &required) == ESP_OK && required > 0)
+                                {
+                                    std::string buf(required, '\0');
+                                    if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, buf.data(), &required) == ESP_OK)
+                                    {
+                                        size_t start = 0;
+                                        while (start < buf.size())
+                                        {
+                                            size_t pos = buf.find(';', start);
+                                            if (pos == std::string::npos)
+                                                pos = buf.size();
+                                            std::string token = buf.substr(start, pos - start);
+                                            if (!token.empty())
+                                                list.push_back(token);
+                                            start = pos + 1;
+                                        }
+                                    }
+                                }
+
+                                // Remove missing entries
+                                std::vector<std::string> newList;
+                                for (const auto &p : list)
+                                {
+                                    FILE *f = fopen(p.c_str(), "rb");
+                                    if (f)
+                                    {
+                                        fclose(f);
+                                        newList.push_back(p);
+                                    }
+                                    else
+                                    {
+                                        ESP_LOGI(TAG, "Removing missing wallpaper from NVS: %s", p.c_str());
+                                    }
+                                }
+
+                                // Ensure no duplicates; find if imagePath exists
+                                auto it = std::find(newList.begin(), newList.end(), imagePath);
+                                if (it == newList.end())
+                                {
+                                    newList.push_back(imagePath);
+                                }
+                                else
+                                {
+                                    // Move this entry to the back to maintain FIFO rotation
+                                    newList.erase(it);
+                                    newList.push_back(imagePath);
+                                }
+
+                                // Persist
+                                std::string out;
+                                for (size_t i = 0; i < newList.size(); ++i)
+                                {
+                                    out += newList[i];
+                                    if (i + 1 < newList.size())
+                                        out += ";";
+                                }
+
+                                if (out.empty())
+                                    nvs_erase_key(my_handle, NVS_KEY_WALLPAPERC);
+                                else
+                                    nvs_set_str(my_handle, NVS_KEY_WALLPAPERC, out.c_str());
+                                nvs_commit(my_handle);
+                                nvs_close(my_handle);
+                            }
+                        }
+                        else // log error
+                        {
+                            ESP_LOGE(TAG, "Failed to decode wallpaper image: %s", result.errorMsg.c_str());
+
                         }
                     }
                 }
                 fclose(f);
             }
         }
-        else
+        if (images.empty())
         {
             ESP_LOGI(TAG, "No images in wallpaper/ folders");
         }
@@ -7982,14 +8206,17 @@ void GUI::showWallpaperAndSleep()
 
     // Enter deep sleep with touch wake so user can resume reading
     // set timer to wake after 5 minutes to change the wallpaper
-    esp_sleep_enable_timer_wakeup(10 * 1000000); // 5 * 60 * 1000000);
+    // esp_sleep_enable_timer_wakeup(10 * 1000000); // 5 * 60 * 1000000);
+    // deep sleep wake up after 10 seconds:
+
+    M5.Power.deepSleep(10 * 1000000, true);
 
 #else
     // Non-S3 devices: show sleep symbol and enter deep sleep with touch wake
     drawSleepSymbol("Zz");
-
-#endif
     deviceHAL.enterDeepSleepWithTouchWake();
+#endif
+    
 }
 
 // Static member function implementation

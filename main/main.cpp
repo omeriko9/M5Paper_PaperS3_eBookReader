@@ -213,7 +213,7 @@ extern "C" void app_main(void)
                 ESP_LOGI(TAG, "Timezone not set, using default: %s", defaultTz);
                 setenv("TZ", defaultTz, 1);
                 tzset();
-            }           
+            }
         }
         else
         {
@@ -222,7 +222,7 @@ extern "C" void app_main(void)
             tzset();
         }
     }
-    
+
     // Initialize M5Unified AFTER SD card is mounted
     auto cfg = M5.config();
     cfg.clear_display = !is_wake_from_sleep; // Don't clear on wake - saves time
@@ -305,15 +305,8 @@ extern "C" void app_main(void)
     esp_task_wdt_reset();
 #endif
 
-    // Switch wallpaper here
-    if (shouldJustSwitchWallpaper != 0)
-    {
-        ESP_LOGI(TAG, "Switching wallpaper on wake as requested");
-        gui.showWallpaperAndSleep();        
-    }
-
     // Skip "Initializing..." message on wake - saves ~100ms and we want fast restore
-    if (!is_wake_from_sleep)
+    if (!is_wake_from_sleep && !shouldJustSwitchWallpaper)
     {
         // Will attempt to draw welcome image after SPIFFS is mounted (see below).
         // Fall back to a simple text message so the UI is not blank if image isn't available yet.
@@ -363,6 +356,17 @@ extern "C" void app_main(void)
                 {
                     ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
                 }
+
+                // Switch wallpaper here
+
+                if (shouldJustSwitchWallpaper)
+                {
+                    ESP_LOGI(TAG, "Switching wallpaper on wake as requested");
+                    M5.Display.display();
+                    gui.smallInit();
+                    gui.showWallpaperAndSleep();
+                }
+
                 // Show welcome image if available and we're on a cold boot.
                 if (!is_wake_from_sleep)
                 {

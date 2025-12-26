@@ -47,6 +47,7 @@ class GUI
 {
 public:
     void init(bool isWakeFromSleep = false);
+    void smallInit();
     void update(); // Main loop
 
     void setWifiStatus(bool connected, int rssi);
@@ -157,7 +158,7 @@ private:
     std::map<std::string, float> fontSizes; // Font name -> size
     float fontSize = 1.0f;                  // Current font size
     float lineSpacing = 1.1f;               // Line height multiplier (1.0 = tight, 2.0 = double spaced)
-    int lightSleepMinutes = 5;              // Time before deep sleep (minutes)
+    int lightSleepMinutes = 2;              // Time before deep sleep (minutes)
     std::string currentFont = "Default";
     std::string previousFont = "Default";
     bool fontChanged = false;
