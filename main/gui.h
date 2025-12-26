@@ -8,6 +8,8 @@
 #include "epub_loader.h"
 #include "gesture_detector.h"
 #include <map>
+#include <vector>
+#include <algorithm>
 
 enum class AppState
 {
@@ -25,7 +27,8 @@ enum class AppState
     GAME_PLAYING,   // Active game
     CHAPTER_MENU,   // In-book chapter jump menu
     FONT_SELECTION, // Font selection screen (S3 only)
-    MUSIC_COMPOSER  // Music sequencer screen
+    MUSIC_COMPOSER, // Music sequencer screen
+    RECENT_BOOKS    // Recent books list
 };
 
 struct RenderRequest
@@ -93,6 +96,14 @@ public:
     bool isAutoRotateEnabled() const;
     void checkOrientation(); // Check and update rotation from gyroscope
 
+    // Sleep settings
+    void setLightSleepTimeout(int seconds);
+    int getLightSleepTimeout() const;
+    void setDeepSleepTimeout(int seconds);
+    int getDeepSleepTimeout() const;
+    void setWallpaperTimer(int seconds);
+    int getWallpaperTimer() const;
+
     static void enterDeepSleepShutdown();
 
     // Public for the task to access
@@ -130,6 +141,7 @@ private:
     // Reader State
     size_t currentTextOffset = 0;
     std::vector<size_t> pageHistory;
+    std::vector<int> recentBookIds;
 
     // Buffering
     M5Canvas canvasCurrent;
@@ -258,6 +270,7 @@ private:
     void onGamesMenuClick(int x, int y);     // Handle games menu clicks
     void onMusicComposerClick(int x, int y); // Handle music composer clicks
     void onFontSelectionClick(int x, int y); // Handle font selection clicks
+    void onRecentBooksClick(int x, int y);   // Handle recent books clicks
 
     // Image rendering helpers
     bool renderImageAtOffset(size_t offset, M5Canvas *target, int x, int y, int maxWidth, int maxHeight);
@@ -283,6 +296,11 @@ private:
     bool loadLastBook(); // Load and open last book, returns success
     void goToSleep();    
 
+    void drawRecentBooks();
+    void addToRecentBooks(int id);
+    void saveRecentHistory();
+    void loadRecentHistory();
+
     size_t drawPageContent(bool draw);
     size_t drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target = nullptr, volatile bool *abort = nullptr);
     PageInfo calculatePageInfo();
@@ -299,6 +317,11 @@ private:
     bool webServerEnabled = true;
     bool settingsNeedsUnderlayRefresh = false;
     bool justWokeUp = false;
+
+    // Sleep settings
+    int lightSleepTimeout = 30; // Default 30s
+    int deepSleepTimeout = 60; // Default 60s
+    int wallpaperTimer = 300; // Default 5m
 
     // M5PaperS3 features
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3

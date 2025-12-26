@@ -1194,18 +1194,20 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         snprintf(buf, sizeof(buf),
                  "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"sdFreeSpace\":%llu, \"timezone\":\"%s\", "
-                 "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s}",
+                 "\"deviceName\":\"%s\", \"buzzerEnabled\":%s, \"autoRotate\":%s, \"lightSleep\":%d, \"deepSleep\":%d, \"wallpaperTimer\":%d}",
                  gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
                  (unsigned int)getFreeSpace(), deviceHAL.getSDCardFreeSize(), tz,
                  deviceHAL.getDeviceName(),
                  gui.isBuzzerEnabled() ? "true" : "false",
-                 gui.isAutoRotateEnabled() ? "true" : "false");
+                 gui.isAutoRotateEnabled() ? "true" : "false",
+                 gui.getLightSleepTimeout(), gui.getDeepSleepTimeout(), gui.getWallpaperTimer());
 #else
         snprintf(buf, sizeof(buf),
-                 "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\"}",
+                 "{\"fontSize\":%.1f, \"font\":\"%s\", \"lineSpacing\":%.1f, \"showImages\":%s, \"freeSpace\":%u, \"timezone\":\"%s\", \"deviceName\":\"%s\", \"lightSleep\":%d, \"deepSleep\":%d, \"wallpaperTimer\":%d}",
                  gui.getFontSize(), gui.getFont().c_str(), gui.getLineSpacing(), gui.isShowImages() ? "true" : "false",
                  (unsigned int)getFreeSpace(), tz,
-                 deviceHAL.getDeviceName());
+                 deviceHAL.getDeviceName(),
+                 gui.getLightSleepTimeout(), gui.getDeepSleepTimeout(), gui.getWallpaperTimer());
 #endif
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, strlen(buf));
@@ -1259,6 +1261,27 @@ static esp_err_t api_settings_handler(httpd_req_t *req)
         {
             bool show = (strncmp(pShowImages + 13, "true", 4) == 0);
             gui.setShowImages(show);
+        }
+
+        char *pLightSleep = strstr(buf, "\"lightSleep\":");
+        if (pLightSleep)
+        {
+            int val = atoi(pLightSleep + 13);
+            gui.setLightSleepTimeout(val);
+        }
+
+        char *pDeepSleep = strstr(buf, "\"deepSleep\":");
+        if (pDeepSleep)
+        {
+            int val = atoi(pDeepSleep + 12);
+            gui.setDeepSleepTimeout(val);
+        }
+
+        char *pWallpaperTimer = strstr(buf, "\"wallpaperTimer\":");
+        if (pWallpaperTimer)
+        {
+            int val = atoi(pWallpaperTimer + 17);
+            gui.setWallpaperTimer(val);
         }
 
         httpd_resp_send(req, "OK", 2);

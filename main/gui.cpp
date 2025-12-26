@@ -679,6 +679,7 @@ void GUI::init(bool isWakeFromSleep)
     }
 
     loadSettings();
+    loadRecentHistory();
     loadFonts();
     ensureMathFontLoaded();
 
@@ -1429,6 +1430,9 @@ void GUI::update()
             break;
         case AppState::FONT_SELECTION:
             drawFontSelection();
+            break;
+        case AppState::RECENT_BOOKS:
+            drawRecentBooks();
             break;
         }
         needsRedraw = false;
@@ -3597,7 +3601,7 @@ void GUI::goToSleep()
     // M5PaperS3 specific: 5 minutes light sleep with GPIO 48 wake-up
     // Touch interrupt is connected to GPIO48 which is NOT an RTC GPIO,
     // therefore touch wakeup only works with light sleep.
-    esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_TO_DEEP_SLEEP_US);
+    esp_sleep_enable_timer_wakeup((uint64_t)deepSleepTimeout * 60 * 1000000ULL);
     gpio_wakeup_enable((gpio_num_t)48, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
 
@@ -3610,7 +3614,7 @@ void GUI::goToSleep()
     gpio_wakeup_disable((gpio_num_t)48);
 #else
     ESP_LOGI(TAG, "Starting light sleep (M5Paper)...");
-    M5.Power.lightSleep(LIGHT_SLEEP_TO_DEEP_SLEEP_US, true);
+    M5.Power.lightSleep((uint64_t)deepSleepTimeout * 60 * 1000000ULL, true);
     ESP_LOGI(TAG, "Woke from light sleep (M5Paper)");
 #endif
 
@@ -4441,6 +4445,29 @@ void GUI::handleGesture(const GestureEvent &event)
         break;
 
     case GestureType::LONG_PRESS:
+        if (currentState == AppState::MAIN_MENU)
+        {
+            // Check if long press is on the "Last Book" button
+            int screenW = M5.Display.width();
+            int screenH = M5.Display.height();
+            int availableH = screenH - STATUS_BAR_HEIGHT - 20;
+            int availableW = screenW - 20;
+            int cols = 2;
+            int btnGap = 12;
+            int btnW = (availableW - btnGap) / cols;
+            int btnH = (availableH - btnGap * 2) / 3; // 3 rows
+            int startX = 10;
+            int startY = STATUS_BAR_HEIGHT + 10;
+
+            if (event.endX >= startX && event.endX < startX + btnW &&
+                event.endY >= startY && event.endY < startY + btnH)
+            {
+                ESP_LOGI(TAG, "Long press on Last Book button - showing recent books");
+                currentState = AppState::RECENT_BOOKS;
+                needsRedraw = true;
+                return;
+            }
+        }
         if (currentState == AppState::MUSIC_COMPOSER)
         {
             if (ComposerUI::getInstance().handleLongPress(event.endX, event.endY))
@@ -4783,14 +4810,14 @@ void GUI::handleTap(int x, int y)
         onChapterMenuClick(x, y);
         justWokeUp = false;
     }
+    else if (currentState == AppState::RECENT_BOOKS)
+    {
+        onRecentBooksClick(x, y);
+        justWokeUp = false;
+    }
     else if (currentState == AppState::FONT_SELECTION)
     {
         onFontSelectionClick(x, y);
-        justWokeUp = false;
-    }
-    else if (currentState == AppState::MUSIC_COMPOSER)
-    {
-        onMusicComposerClick(x, y);
         justWokeUp = false;
     }
 }
@@ -4798,14 +4825,6 @@ void GUI::handleTap(int x, int y)
 void GUI::handleTouch()
 {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-
-    // Check pending click timeout - reduced from 400ms to 150ms for faster response
-    if (clickPending && (now - lastClickTime > 150))
-    {
-        clickPending = false;
-        // Execute Single Click (Page Turn)
-        processReaderTap(lastClickX, lastClickY, false); // false = single
-    }
 
     // Check orientation periodically for auto-rotate (M5PaperS3)
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
@@ -4867,312 +4886,21 @@ void GUI::handleTouch()
             deviceHAL.playClickSound();
 #endif
 
-            // If gesture is in progress, don't process taps yet
-            // UNLESS we are in a mode that requires instant response (non-Reader)
-            // For Music Composer, we want both instant response for notes AND gestures for scrolling
-            bool instantResponse = (currentState != AppState::READER && currentState != AppState::MUSIC_COMPOSER);
-
-            if (gestureDetector.isGestureInProgress() && !instantResponse)
-            {
-                // For Music Composer, we still want to allow the touch to be processed by the composer
-                // but we don't want to reset the gesture detector.
-                if (currentState == AppState::MUSIC_COMPOSER)
-                {
-                    onMusicComposerClick(t.x, t.y);
-                    justWokeUp = false;
-                    return;
-                }
-                return;
-            }
-
-            if (instantResponse)
-            {
-                gestureDetector.reset();
-            }
-
-            if (justWokeUp)
-            {
-                ESP_LOGI(TAG, "Processing wake-up touch at %d, %d", t.x, t.y);
-            }
-
-            // Handle main menu
-            if (currentState == AppState::MAIN_MENU)
-            {
-                onMainMenuClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::LIBRARY || currentState == AppState::FAVORITES)
-            {
-                // Status bar tap returns to main menu
-                if (t.y < STATUS_BAR_HEIGHT)
-                {
-                    currentState = AppState::MAIN_MENU;
-                    searchQuery.clear();
-                    showFavoritesOnly = false;
-                    libraryPage = 0;
-                    needsRedraw = true;
-                    justWokeUp = false;
-                    return;
-                }
-                onLibraryClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::READER)
-            {
-                // Top tap (status bar) to return to main menu
-                if (t.y < STATUS_BAR_HEIGHT)
-                {
-                    clickPending = false; // Cancel any pending
-                    // Save progress before exiting
-                    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
-                    {
-                        xSemaphoreGive(epubMutex);
-                    }
-                    // Save progress before exiting using centralized helper
-                    saveLastBook();
-
-                    currentState = AppState::MAIN_MENU;
-                    epubLoader.close();
-                    bookMetricsComputed = false;
-                    totalBookChars = 0;
-                    chapterPrefixSums.clear();
-                    needsRedraw = true;
-                    justWokeUp = false;
-                    return;
-                }
-
-                // Bottom status bar area (footer) -> Book Settings overlay
-                // Changed from bottom 1/5 to specifically the footer area (last ~50px)
-                int footerY = M5.Display.height() - 50;
-                if (t.y > footerY)
-                {
-                    clickPending = false; // Cancel any pending
-                    previousState = currentState;
-                    currentState = AppState::BOOK_SETTINGS;
-                    needsRedraw = true;
-                    justWokeUp = false;
-                    return;
-                }
-
-                // Middle area - Page Turn / Chapter Skip
-                // When waking up from sleep, process the touch immediately as a page turn
-                // to avoid re-rendering the current page first
-                if (justWokeUp)
-                {
-                    clickPending = false;
-                    processReaderTap(t.x, t.y, false); // Single tap = page turn
-                }
-                else if (clickPending)
-                {
-                    // Check if second click
-                    bool sameSide = (t.x < M5.Display.width() / 2) == (lastClickX < M5.Display.width() / 2);
-                    if (sameSide)
-                    {
-                        // Double Click!
-                        clickPending = false;
-                        processReaderTap(t.x, t.y, true); // true = double
-                    }
-                    else
-                    {
-                        // Different side - treat previous as single, and this as new pending
-                        clickPending = false;
-                        processReaderTap(lastClickX, lastClickY, false);
-
-                        lastClickTime = now;
-                        lastClickX = t.x;
-                        lastClickY = t.y;
-                        clickPending = true;
-                    }
-                }
-                else
-                {
-                    // First click
-                    lastClickTime = now;
-                    lastClickX = t.x;
-                    lastClickY = t.y;
-                    clickPending = true;
-                }
-            }
-            else if (currentState == AppState::BOOK_SETTINGS)
-            {
-                // In-book settings overlay (half-page)
-                SettingsLayout layout = computeSettingsLayout();
-
-                // Close if clicked outside the panel (upper half)
-                if (t.y < layout.panelTop)
-                {
-                    currentState = previousState;
-                    needsRedraw = true;
-                    if (settingsCanvasCreated)
-                    {
-                        settingsCanvas.deleteSprite();
-                        settingsCanvasCreated = false;
-                    }
-                    return;
-                }
-
-                int fontButtonY = layout.row1Y + (layout.rowHeight - layout.fontButtonH) / 2;
-                int changeButtonY = layout.row2Y + (layout.rowHeight - layout.fontButtonH) / 2;
-                int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
-                int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
-                int closeButtonY = layout.closeY;
-
-                // Font Size [-]
-                if (t.y >= fontButtonY && t.y <= fontButtonY + layout.fontButtonH && t.x >= layout.fontMinusX && t.x <= layout.fontMinusX + layout.fontButtonW)
-                {
-                    setFontSize(fontSize - 0.1f);
-                    settingsNeedsUnderlayRefresh = true;
-                }
-                // Font Size [+]
-                else if (t.y >= fontButtonY && t.y <= fontButtonY + layout.fontButtonH && t.x >= layout.fontPlusX && t.x <= layout.fontPlusX + layout.fontButtonW)
-                {
-                    setFontSize(fontSize + 0.1f);
-                    settingsNeedsUnderlayRefresh = true;
-                }
-                // Font Change
-                else if (t.y >= changeButtonY && t.y <= changeButtonY + layout.fontButtonH && t.x >= layout.changeButtonX && t.x <= layout.changeButtonX + layout.changeButtonW)
-                {
-                    if (currentFont == "Default")
-                        setFont("Hebrew");
-                    else if (currentFont == "Hebrew")
-                        setFont("Arabic");
-                    else if (currentFont == "Arabic")
-                        setFont("Roboto");
-                    else
-                        setFont("Default");
-                    settingsNeedsUnderlayRefresh = true;
-                }
-                // WiFi Toggle
-                else if (t.y >= toggleButtonY && t.y <= toggleButtonY + layout.fontButtonH && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
-                {
-                    wifiEnabled = !wifiEnabled;
-                    saveSettings();
-
-                    if (wifiEnabled)
-                    {
-                        if (!wifiManager.isInitialized())
-                        {
-                            wifiManager.init();
-                        }
-                        wifiManager.connect();
-                        webServer.init("/spiffs");
-                    }
-                    else
-                    {
-                        webServer.stop();
-                        wifiManager.disconnect();
-                        wifiConnected = false;
-                    }
-                    needsRedraw = true;
-                }
-                // Sleep Delay [-]
-                else if (t.y >= layout.row5Y && t.y <= layout.row5Y + layout.rowHeight && t.x >= layout.fontMinusX && t.x <= layout.fontMinusX + layout.fontButtonW)
-                {
-                    if (lightSleepMinutes > 1)
-                        lightSleepMinutes--;
-                    saveSettings();
-                    settingsNeedsUnderlayRefresh = true;
-                }
-                // Sleep Delay [+]
-                else if (t.y >= layout.row5Y && t.y <= layout.row5Y + layout.rowHeight && t.x >= layout.fontPlusX && t.x <= layout.fontPlusX + layout.fontButtonW)
-                {
-                    if (lightSleepMinutes < 60)
-                        lightSleepMinutes++;
-                    saveSettings();
-                    settingsNeedsUnderlayRefresh = true;
-                }
-                // Favorite Toggle
-                else if (t.y >= layout.row6Y && t.y <= layout.row6Y + layout.rowHeight && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
-                {
-                    bool isFav = bookIndex.isFavorite(lastBookId);
-                    bookIndex.setFavorite(lastBookId, !isFav);
-                    needsRedraw = true;
-                }
-                // Refresh Toggle
-                else if (t.y >= layout.row7Y && t.y <= layout.row7Y + layout.rowHeight && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
-                {
-                    setFastRefresh(!fastRefresh);
-                }
-                // Close
-                else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
-                {
-                    currentState = previousState;
-                    needsRedraw = true;
-                    if (settingsCanvasCreated)
-                    {
-                        settingsCanvas.deleteSprite();
-                        settingsCanvasCreated = false;
-                    }
-                }
-            }
-            else if (currentState == AppState::SETTINGS)
-            {
-                // Standalone settings (from main menu)
-                // Status bar tap returns to main menu
-                if (t.y < STATUS_BAR_HEIGHT)
-                {
-                    currentState = AppState::MAIN_MENU;
-                    needsRedraw = true;
-                    justWokeUp = false;
-                    return;
-                }
-                onSettingsClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::WIFI_SCAN)
-            {
-                // Status bar tap returns to main menu
-                if (t.y < STATUS_BAR_HEIGHT)
-                {
-                    currentState = AppState::MAIN_MENU;
-                    needsRedraw = true;
-                    justWokeUp = false;
-                    return;
-                }
-                onWifiScanClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::WIFI_PASSWORD)
-            {
-                onWifiPasswordClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::GAMES_MENU)
-            {
-                onGamesMenuClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::GAME_PLAYING)
-            {
-                // Let game manager handle the touch
-                GameManager &gm = GameManager::getInstance();
-                if (gm.handleTouch(t.x, t.y))
-                {
-                    needsRedraw = true;
-                }
-                // Check if game wants to return to menu
-                if (gm.shouldReturnToMenu())
-                {
-                    gm.clearReturnFlag();
-                    currentState = AppState::GAMES_MENU;
-                    needsRedraw = true;
-                }
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::CHAPTER_MENU)
-            {
-                onChapterMenuClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::IMAGE_VIEWER)
-            {
-                onImageViewerClick(t.x, t.y);
-                justWokeUp = false;
-            }
-            else if (currentState == AppState::MUSIC_COMPOSER)
+            // If we are in Music Composer, we want instant response for notes
+            if (currentState == AppState::MUSIC_COMPOSER)
             {
                 onMusicComposerClick(t.x, t.y);
                 justWokeUp = false;
+                return;
+            }
+
+            // For all other states, we let the GestureDetector handle the touch
+            // to distinguish between TAP, LONG_PRESS, and SWIPE.
+            // handleTap() will be called when a TAP is confirmed.
+            
+            if (justWokeUp)
+            {
+                ESP_LOGI(TAG, "Processing wake-up touch at %d, %d", t.x, t.y);
             }
         }
     }
@@ -5372,6 +5100,8 @@ bool GUI::openBookById(int id)
     // Save as last book immediately
     saveLastBook();
 
+    addToRecentBooks(id);
+
     return true;
 }
 
@@ -5426,6 +5156,11 @@ void GUI::saveSettings()
 
         // Save light sleep duration
         nvs_set_i32(my_handle, "sleep_min", lightSleepMinutes);
+
+        // Save deep sleep duration
+        nvs_set_i32(my_handle, "deep_sleep_m", deepSleepTimeout);
+        // Save wallpaper timer
+        nvs_set_i32(my_handle, "wallpapert", wallpaperTimer);
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
         // Save M5PaperS3-specific settings
@@ -5647,10 +5382,24 @@ void GUI::loadSettings()
         }
 
         // Load light sleep duration
-        int32_t sleepMin = 5;
+        int32_t sleepMin = 2;
         if (nvs_get_i32(my_handle, "sleep_min", &sleepMin) == ESP_OK)
         {
             lightSleepMinutes = sleepMin;
+        }
+
+        // Load deep sleep duration
+        int32_t deepSleepMin = 2;
+        if (nvs_get_i32(my_handle, "deep_sleep_m", &deepSleepMin) == ESP_OK)
+        {
+            deepSleepTimeout = deepSleepMin;
+        }
+
+        // Load wallpaper timer
+        int32_t wallT = 5;
+        if (nvs_get_i32(my_handle, "wallpapert", &wallT) == ESP_OK)
+        {
+            wallpaperTimer = wallT;
         }
 
         // Load per-font size settings
@@ -8237,7 +7986,7 @@ void GUI::showWallpaperAndSleep()
     // esp_sleep_enable_timer_wakeup(10 * 1000000); // 5 * 60 * 1000000);
     // deep sleep wake up after 10 seconds:
 
-    M5.Power.deepSleep(10 * 1000000, true);
+    M5.Power.deepSleep((uint64_t)wallpaperTimer * 60 * 1000000ULL, true);
 
 #else
     // Non-S3 devices: show sleep symbol and enter deep sleep with touch wake
@@ -8252,3 +8001,163 @@ std::string GUI::decodeHtmlEntities(const std::string &str)
 {
     return ::decodeHtmlEntities(str);
 }
+
+void GUI::setLightSleepTimeout(int minutes)
+{
+    if (minutes < 1) minutes = 1;
+    if (minutes > 60) minutes = 60;
+    lightSleepMinutes = minutes;
+    saveSettings();
+}
+
+int GUI::getLightSleepTimeout() const
+{
+    return lightSleepMinutes;
+}
+
+void GUI::setDeepSleepTimeout(int minutes)
+{
+    if (minutes < 1) minutes = 1;
+    if (minutes > 60) minutes = 60;
+    deepSleepTimeout = minutes;
+    saveSettings();
+}
+
+int GUI::getDeepSleepTimeout() const
+{
+    return deepSleepTimeout;
+}
+
+void GUI::setWallpaperTimer(int minutes)
+{
+    if (minutes < 1) minutes = 1;
+    if (minutes > 60) minutes = 60;
+    wallpaperTimer = minutes;
+    saveSettings();
+}
+
+int GUI::getWallpaperTimer() const
+{
+    return wallpaperTimer;
+}
+
+void GUI::saveRecentHistory()
+{
+    FILE *f = fopen("/sdcard/lastbooks.txt", "w");
+    if (f)
+    {
+        for (int id : recentBookIds)
+        {
+            fprintf(f, "%d\n", id);
+        }
+        fclose(f);
+    }
+}
+
+void GUI::loadRecentHistory()
+{
+    recentBookIds.clear();
+    FILE *f = fopen("/sdcard/lastbooks.txt", "r");
+    if (f)
+    {
+        char line[32];
+        while (fgets(line, sizeof(line), f))
+        {
+            int id = atoi(line);
+            if (id > 0)
+            {
+                recentBookIds.push_back(id);
+            }
+        }
+        fclose(f);
+    }
+}
+
+void GUI::addToRecentBooks(int id)
+{
+    // Remove if already exists to move it to the front
+    recentBookIds.erase(std::remove(recentBookIds.begin(), recentBookIds.end(), id), recentBookIds.end());
+    recentBookIds.insert(recentBookIds.begin(), id);
+
+    // Keep only last 10 books
+    if (recentBookIds.size() > 10)
+    {
+        recentBookIds.pop_back();
+    }
+    saveRecentHistory();
+}
+
+void GUI::drawRecentBooks()
+{
+    M5.Display.fillScreen(TFT_WHITE);
+    drawStatusBar(nullptr);
+
+    M5.Display.setFont(&fonts::FreeSansBold18pt7b);
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.setTextDatum(top_center);
+    M5.Display.drawString("Recent Books", M5.Display.width() / 2, STATUS_BAR_HEIGHT + 10);
+
+    int y = LIBRARY_LIST_START_Y;
+    for (int id : recentBookIds)
+    {
+        BookEntry book = bookIndex.getBook(id);
+        if (book.id != 0)
+        {
+            M5.Display.drawFastHLine(20, y, M5.Display.width() - 40, TFT_LIGHTGREY);
+            M5.Display.setFont(&fonts::FreeSans12pt7b);
+            M5.Display.setTextDatum(middle_left);
+            std::string title = book.title;
+            if (M5.Display.textWidth(title.c_str()) > M5.Display.width() - 60)
+            {
+                while (M5.Display.textWidth(title.c_str()) > M5.Display.width() - 80)
+                {
+                    title.pop_back();
+                }
+                title += "...";
+            }
+            M5.Display.drawString(title.c_str(), 30, y + LIBRARY_LINE_HEIGHT / 2);
+            y += LIBRARY_LINE_HEIGHT;
+        }
+    }
+
+    // Draw Back Button at bottom
+    int btnW = 200;
+    int btnH = 50;
+    int btnX = (M5.Display.width() - btnW) / 2;
+    int btnY = M5.Display.height() - 70;
+    M5.Display.fillRoundRect(btnX, btnY, btnW, btnH, 10, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString("Back", M5.Display.width() / 2, btnY + btnH / 2);
+}
+
+void GUI::onRecentBooksClick(int x, int y)
+{
+    // Back button
+    int btnW = 200;
+    int btnH = 50;
+    int btnX = (M5.Display.width() - btnW) / 2;
+    int btnY = M5.Display.height() - 70;
+    if (x >= btnX && x < btnX + btnW && y >= btnY && y < btnY + btnH)
+    {
+        currentState = AppState::MAIN_MENU;
+        needsRedraw = true;
+        return;
+    }
+
+    // Book selection
+    if (y >= LIBRARY_LIST_START_Y && y < LIBRARY_LIST_START_Y + (int)recentBookIds.size() * LIBRARY_LINE_HEIGHT)
+    {
+        int idx = (y - LIBRARY_LIST_START_Y) / LIBRARY_LINE_HEIGHT;
+        if (idx >= 0 && idx < (int)recentBookIds.size())
+        {
+            if (openBookById(recentBookIds[idx]))
+            {
+                // openBookById sets currentState to READER
+                needsRedraw = true;
+            }
+        }
+    }
+}
+
+

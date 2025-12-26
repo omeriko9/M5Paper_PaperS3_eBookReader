@@ -225,6 +225,34 @@
             </div>
 
             <div class="card">
+                <h2>Sleep & Reset</h2>
+                <div class="form-group">
+                    <label>Light Sleep Timeout (minutes)</label>
+                    <div class="form-row">
+                        <input type="number" id="lightSleep" min="1" max="60" onchange="updateSettings()">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Deep Sleep Timeout (minutes)</label>
+                    <div class="form-row">
+                        <input type="number" id="deepSleep" min="1" max="60" onchange="updateSettings()">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Wallpaper Interval (minutes)</label>
+                    <div class="form-row">
+                        <input type="number" id="wallpaperTimer" min="1" max="60" onchange="updateSettings()">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Put Device to Sleep</label>
+                    <div class="form-row"><button class="btn" onclick="putDeviceToSleep()">Sleep</button></div>
+                    <label>Restart Device</label>
+                    <div class="form-row"><button class="btn danger" onclick="restartDevice()">Restart</button></div>
+                </div>
+            </div>
+
+            <div class="card">
                 <h2>System Update</h2>
                 <div class="form-group">
                     <label>Update Web Interface (index.html)</label>
@@ -286,6 +314,10 @@
                 
                 if(s.timezone) document.getElementById('tzStr').value = s.timezone;
                 if(typeof s.showImages !== 'undefined') document.getElementById('showImages').checked = s.showImages;
+                
+                if(s.lightSleep) document.getElementById('lightSleep').value = s.lightSleep;
+                if(s.deepSleep) document.getElementById('deepSleep').value = s.deepSleep;
+                if(s.wallpaperTimer) document.getElementById('wallpaperTimer').value = s.wallpaperTimer;
                 
                 if(s.deviceName) {
                     document.getElementById('device-name').innerText = s.deviceName;
@@ -410,10 +442,19 @@
             document.getElementById('lineSpacingVal').innerText = currentLineSpacing.toFixed(1);
             document.getElementById('customLineSpacing').value = currentLineSpacing.toFixed(1);
             
+            const lightSleep = document.getElementById('lightSleep') ? document.getElementById('lightSleep').value : null;
+            const deepSleep = document.getElementById('deepSleep') ? document.getElementById('deepSleep').value : null;
+            const wallpaperTimer = document.getElementById('wallpaperTimer') ? document.getElementById('wallpaperTimer').value : null;
+
+            const payload = {fontSize: currentSize, font: font, lineSpacing: currentLineSpacing};
+            if(lightSleep) payload.lightSleep = lightSleep;
+            if(deepSleep) payload.deepSleep = deepSleep;
+            if(wallpaperTimer) payload.wallpaperTimer = wallpaperTimer;
+
             fetch('/api/settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({fontSize: currentSize, font: font, lineSpacing: currentLineSpacing})
+                body: JSON.stringify(payload)
             });
         }
 
