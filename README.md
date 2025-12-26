@@ -13,6 +13,7 @@
 - Customizable wallpapers on sleep
 - Supports Hebrew and Arabic
 - Support HTML <math> tags (WIP)
+- Add your own fonts
 
 ## Building / switching targets
 
