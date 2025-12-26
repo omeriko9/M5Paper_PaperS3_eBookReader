@@ -20,6 +20,21 @@
 - Support for HTML <math> tags (Work in Progress)
 - Custom font support with VLW bitmap fonts
 
+## Usage
+
+### Reading Navigation
+- **Single tap**: Advance to next page
+- **Double tap**: Jump to next chapter
+- **Top bar tap**: Return to main menu from anywhere in the app
+
+### Gestures (Available in book reading mode)
+- **Swipe up from bottom**: Open settings menu
+- **Swipe left to right**: Open chapter selection menu
+
+### Last Book Button
+- **Short press**: Open the most recently read book
+- **Long press** (hold for 2 seconds): Show list of all recently read books (with audible notification)
+
 ## Custom Fonts
 
 ### Generating VLW Fonts from TTF/OTF
