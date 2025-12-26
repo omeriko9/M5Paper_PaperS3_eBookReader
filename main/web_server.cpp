@@ -99,7 +99,7 @@ static const char *MANAGER_HTML = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OKeysh - E-Book Reader</title>
+    <title>E-Book Reader</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         :root {
@@ -179,7 +179,7 @@ static const char *MANAGER_HTML = R"rawliteral(
 <body>
     <div class="container">
         <header>
-            <h1>OKeysh</h1>
+            <h1>eBook Reader</h1>
             <div id="device-name" style="font-size: 14px; color: var(--text-secondary);">Connecting...</div>
         </header>
 
