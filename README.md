@@ -85,10 +85,15 @@ This is an ESP-IDF firmware project for M5Paper and M5PaperS3 e-book readers. Th
   - Pre-built fonts (VLW format)
   - Icons and images
   - Web interface files (`index.html`)
-- `tools/`: Development utilities
-  - `generate_vlw_fonts.py`: Font generation from TTF/OTF
-  - `prepare_epubs.py`: Book preparation scripts
-  - Other helper scripts
+- `tools/`: Development utilities and book preparation tools
+
+### Development Tools
+- `generate_vlw_fonts.py`: Converts TTF/OTF fonts to VLW bitmap format for the device
+- `prepare_epubs.py`: Pre-processes EPUB files for optimal device performance
+- `rename_books.py`: Renames EPUB files to a standardized format (book_1.epub, book_2.epub, etc.)
+- `resize_icons.py`: Resizes icon images to the correct dimensions (96x96 pixels)
+- `spiffsgen_debug.py`: SPIFFS filesystem image generation tool
+- `test_spiffs_gen.py`: Testing utility for SPIFFS image generation
 - `build/`: Build artifacts and ESP-IDF build files
 - `managed_components/`: ESP-IDF managed components (M5Stack libraries, zlib)
 
@@ -97,6 +102,88 @@ This is an ESP-IDF firmware project for M5Paper and M5PaperS3 e-book readers. Th
 - `sdkconfig*`: Build configuration files
 - `Kconfig.projbuild`: Project-specific configuration options
 - `partitions.csv`: Flash partition layout
+
+## Development Tools
+
+The `tools/` directory contains various utilities for preparing content and building the project.
+
+### prepare_epubs.py
+
+This is a comprehensive EPUB preprocessing tool that optimizes books for the e-book reader's limited resources and provides significant performance improvements.
+
+**What it does in detail:**
+
+1. **Image Optimization**:
+   - **Downscaling mode** (default): Resizes images larger than 960x540 pixels to fit the device's display resolution while maintaining aspect ratio
+   - **Remove mode**: Completely strips all images from EPUBs for minimal file size
+   - Updates OPF manifest to remove references to deleted images
+
+2. **Font Cleanup**:
+   - Removes all embedded fonts (TTF/OTF/WOFF) from EPUBs to save storage space
+   - Cleans up OPF references to removed fonts
+
+3. **Smart Renaming**:
+   - Extracts title and author from EPUB metadata (OPF file)
+   - Renames files to "Title - Author.epub" format
+   - Falls back to original filename if metadata is missing
+
+4. **Performance Metrics Generation**:
+   - Creates `m_filename.bin` files containing pre-calculated chapter navigation data
+   - Calculates text length for each chapter using the same algorithm as the device
+   - Stores cumulative character offsets for instant chapter jumping
+   - Format: version, total_chars, chapter_count, [chapter_offsets...]
+
+5. **Book Index Creation**:
+   - Generates `index.txt` with book metadata for fast loading
+   - Format: `id|title|chapter|offset|path|size|hasMetrics|author|isFavorite|lastFont|lastFontSize`
+
+**Why run it before uploading to SD card:**
+
+- **10x faster chapter navigation**: Pre-calculated metrics enable instant jumping to any chapter
+- **50-80% smaller files**: Image downscaling and font removal significantly reduce EPUB sizes
+- **Instant book loading**: Index file allows immediate display of book list without parsing
+- **Better display**: Images are optimized for the device's 960x540 resolution
+- **Reduced memory usage**: Smaller images load faster and use less RAM
+- **Progress tracking**: Metrics enable accurate reading progress calculation
+
+**Without preprocessing:**
+- Device must parse entire EPUB on first load (slow)
+- Large images cause display issues and slow loading
+- No chapter navigation until book is fully indexed
+- Higher memory usage and potential crashes
+
+**Usage examples:**
+
+```bash
+# Process all EPUBs in current directory (recommended for most users)
+python tools/prepare_epubs.py
+
+# Process EPUBs in specific directory
+python tools/prepare_epubs.py /path/to/my/books
+
+# Minimal size mode - remove all images (for very limited storage)
+python tools/prepare_epubs.py --mode=remove /path/to/books
+
+# Process and prepare for SD card upload
+python tools/prepare_epubs.py /path/to/books
+# Then copy the processed EPUBs, .bin files, and index.txt to SD card
+```
+
+**Output files:**
+- `filename.epub` - Optimized EPUB file
+- `m_filename.bin` - Navigation metrics (binary)
+- `index.txt` - Book index for fast loading
+
+**Website alternative:**
+Some online EPUB tools can strip images, but they won't generate the device-specific metrics files that enable fast navigation and progress tracking. The local script provides complete optimization for this specific e-reader.
+
+### Other Tools
+
+- **`generate_vlw_fonts.py`**: Converts TrueType/OpenType fonts to VLW bitmap format used by the device. Run this when adding new fonts to `regular-fonts/`.
+- **`rename_books.py`**: Renames EPUB files to a simple numbered format (book_1.epub, book_2.epub, etc.) for consistent naming.
+- **`resize_icons.py`**: Resizes icon images in `spiffs_image/icons/` to 96x96 pixels for proper display.
+- **`spiffsgen_debug.py`**: Advanced SPIFFS filesystem image generator with debugging capabilities.
+- **`test_spiffs_gen.py`**: Test utility for validating SPIFFS image generation with sample content.
 
 ## Building / switching targets
 
