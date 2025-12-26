@@ -22,6 +22,7 @@
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #include "esp_wifi.h"
 #include <dirent.h>
 #include <errno.h>
@@ -38,6 +39,17 @@ static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
 static const size_t IMAGE_PLACEHOLDER_LEN = 3;
 
 static const char *TAG = "GUI";
+
+// NVS keys for last-book state (short to fit NVS limits)
+static constexpr const char *NVS_KEY_LAST_BOOK_ID = "lb_id";
+static constexpr const char *NVS_KEY_LAST_STATE = "lb_st";
+static constexpr const char *NVS_KEY_LAST_BOOK_PATH = "lb_path";
+static constexpr const char *NVS_KEY_LAST_BOOK_TITLE = "lb_t";
+static constexpr const char *NVS_KEY_LAST_BOOK_CHAPTER = "lb_ch";
+static constexpr const char *NVS_KEY_LAST_BOOK_OFFSET = "lb_of";
+static constexpr const char *NVS_KEY_LAST_BOOK_FONT = "lb_f";
+static constexpr const char *NVS_KEY_LAST_BOOK_FONT_SIZE = "lb_fs";
+
 
 // Math renderer instance
 extern MathRenderer mathRenderer;
@@ -5698,17 +5710,31 @@ void GUI::saveLastBook()
 
     // Save last book ID and state to NVS
     nvs_handle_t my_handle;
+
+    ESP_LOGI(TAG, "Saving last book ID=%ld, chapter=%d, offset=%zu", currentBook.id, chIdx, currentTextOffset);
+
     if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
     {
-        nvs_set_i32(my_handle, "last_book_id", currentBook.id);
-        nvs_set_i32(my_handle, "last_state", (int)currentState);
-        nvs_set_str(my_handle, "last_book_path", currentBook.path.c_str());
-        nvs_set_str(my_handle, "last_book_title", currentBook.title.c_str());
-        nvs_set_i32(my_handle, "last_book_chapter", chIdx);
-        nvs_set_u32(my_handle, "last_book_offset", (uint32_t)currentTextOffset);
-        nvs_set_str(my_handle, "last_book_font", currentFont.c_str());
-        nvs_set_i32(my_handle, "last_book_font_size", (int32_t)(fontSize * 10));
-        nvs_commit(my_handle);
+        esp_err_t err;
+        err = nvs_set_i32(my_handle, NVS_KEY_LAST_BOOK_ID, (int32_t)currentBook.id);
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_ID, esp_err_to_name(err));
+        err = nvs_set_i32(my_handle, NVS_KEY_LAST_STATE, (int)currentState);
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_STATE, esp_err_to_name(err));
+        err = nvs_set_str(my_handle, NVS_KEY_LAST_BOOK_PATH, currentBook.path.c_str());
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_PATH, esp_err_to_name(err));
+        err = nvs_set_str(my_handle, NVS_KEY_LAST_BOOK_TITLE, currentBook.title.c_str());
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_TITLE, esp_err_to_name(err));
+        err = nvs_set_i32(my_handle, NVS_KEY_LAST_BOOK_CHAPTER, chIdx);
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_CHAPTER, esp_err_to_name(err));
+        ESP_LOGI(TAG, "Saving last book chapter=%d", chIdx);
+        err = nvs_set_u32(my_handle, NVS_KEY_LAST_BOOK_OFFSET, (uint32_t)currentTextOffset);
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_u32(%s) failed: %s", NVS_KEY_LAST_BOOK_OFFSET, esp_err_to_name(err));
+        err = nvs_set_str(my_handle, NVS_KEY_LAST_BOOK_FONT, currentFont.c_str());
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_str(%s) failed: %s", NVS_KEY_LAST_BOOK_FONT, esp_err_to_name(err));
+        err = nvs_set_i32(my_handle, NVS_KEY_LAST_BOOK_FONT_SIZE, (int32_t)(fontSize * 10));
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_set_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_FONT_SIZE, esp_err_to_name(err));
+        err = nvs_commit(my_handle);
+        if (err != ESP_OK) ESP_LOGE(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
         nvs_close(my_handle);
     }
 
@@ -5736,49 +5762,87 @@ bool GUI::loadLastBook()
     float lastFontSize = 0.0f;
     if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
     {
-        nvs_get_i32(my_handle, "last_book_id", &lastId);
-        nvs_get_i32(my_handle, "last_book_chapter", &lastChapter);
-        nvs_get_u32(my_handle, "last_book_offset", &lastOffset);
+        esp_err_t err;
+        err = nvs_get_i32(my_handle, NVS_KEY_LAST_BOOK_ID, &lastId);
+        if (err != ESP_OK) ESP_LOGW(TAG, "nvs_get_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_ID, esp_err_to_name(err));
+        err = nvs_get_i32(my_handle, NVS_KEY_LAST_BOOK_CHAPTER, &lastChapter);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_get_i32(%s) failed: %s", NVS_KEY_LAST_BOOK_CHAPTER, esp_err_to_name(err));
+            lastChapter = 0;
+        }
+        ESP_LOGI(TAG, "Loaded last book ID=%d, chapter=%d", lastId, lastChapter);
+        err = nvs_get_u32(my_handle, NVS_KEY_LAST_BOOK_OFFSET, &lastOffset);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_get_u32(%s) failed: %s", NVS_KEY_LAST_BOOK_OFFSET, esp_err_to_name(err));
+            lastOffset = 0;
+        }
 
         size_t pathLen = 0;
-        if (nvs_get_str(my_handle, "last_book_path", NULL, &pathLen) == ESP_OK && pathLen > 1)
+        err = nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_PATH, NULL, &pathLen);
+        if (err == ESP_OK && pathLen > 1)
         {
             char *pathBuf = new char[pathLen];
-            if (nvs_get_str(my_handle, "last_book_path", pathBuf, &pathLen) == ESP_OK)
+            if (nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_PATH, pathBuf, &pathLen) == ESP_OK)
             {
                 lastPath = pathBuf;
+            }
+            else
+            {
+                ESP_LOGW(TAG, "nvs_get_str(%s) failed while reading: %s", NVS_KEY_LAST_BOOK_PATH, esp_err_to_name(err));
             }
             delete[] pathBuf;
         }
 
         size_t titleLen = 0;
-        if (nvs_get_str(my_handle, "last_book_title", NULL, &titleLen) == ESP_OK && titleLen > 1)
+        err = nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_TITLE, NULL, &titleLen);
+        if (err == ESP_OK && titleLen > 1)
         {
             char *titleBuf = new char[titleLen];
-            if (nvs_get_str(my_handle, "last_book_title", titleBuf, &titleLen) == ESP_OK)
+            if (nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_TITLE, titleBuf, &titleLen) == ESP_OK)
             {
                 lastTitle = titleBuf;
+            }
+            else
+            {
+                ESP_LOGW(TAG, "nvs_get_str(%s) failed while reading: %s", NVS_KEY_LAST_BOOK_TITLE, esp_err_to_name(err));
             }
             delete[] titleBuf;
         }
 
         size_t fontLen = 0;
-        if (nvs_get_str(my_handle, "last_book_font", NULL, &fontLen) == ESP_OK && fontLen > 1)
+        err = nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_FONT, NULL, &fontLen);
+        if (err == ESP_OK && fontLen > 1)
         {
             char *fontBuf = new char[fontLen];
-            if (nvs_get_str(my_handle, "last_book_font", fontBuf, &fontLen) == ESP_OK)
+            if (nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_FONT, fontBuf, &fontLen) == ESP_OK)
             {
                 lastFont = fontBuf;
+            }
+            else
+            {
+                ESP_LOGW(TAG, "nvs_get_str(%s) failed while reading: %s", NVS_KEY_LAST_BOOK_FONT, esp_err_to_name(err));
             }
             delete[] fontBuf;
         }
 
         int32_t fontSizeInt = 0;
-        if (nvs_get_i32(my_handle, "last_book_font_size", &fontSizeInt) == ESP_OK)
+        err = nvs_get_i32(my_handle, NVS_KEY_LAST_BOOK_FONT_SIZE, &fontSizeInt);
+        if (err == ESP_OK)
         {
             lastFontSize = fontSizeInt / 10.0f;
         }
         nvs_close(my_handle);
+    }
+
+    // If NVS didn't have a useful chapter value, try BookIndex progress as a fallback
+    if (lastChapter == 0 && bookIndexReady && lastId > 0)
+    {
+        BookEntry entry = bookIndex.getBook(lastId);
+        if (entry.id > 0 && entry.currentChapter != 0)
+        {
+            ESP_LOGI(TAG, "Using chapter=%d from bookIndex for book %d (NVS had %d)", entry.currentChapter, lastId, lastChapter);
+            lastChapter = entry.currentChapter;
+        }
     }
 
     if (lastId > 0)
@@ -5862,6 +5926,8 @@ bool GUI::loadLastBook()
     bookOpenInProgress = true;
     if (xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
+        ESP_LOGI(TAG, "Loading last book: ID=%d, path=%s, chapter=%d, offset=%zu",
+                 currentBook.id, currentBook.path.c_str(), currentBook.currentChapter, currentBook.currentOffset);  
         loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
         if (loaded)
         {
