@@ -45,8 +45,6 @@ cmake_install.cmake
 # Partition table
 partition_table/
 
-# SPIFFS image
-spiffs_image/
 
 # Tools output
 tools/*.vlw

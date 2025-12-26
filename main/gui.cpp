@@ -1103,7 +1103,17 @@ void GUI::backgroundIndexerTaskLoop()
             // Note: We don't take epubMutex here because we are using a separate loader instance
             // and separate file handle. SPIFFS is thread-safe.
 
-            if (localLoader.load(book.path.c_str(), -1, false))
+            // Diagnostic timings for load/chapter processing to find any long blocking operations
+            uint64_t t_load_start = esp_timer_get_time();
+            bool loaded = localLoader.load(book.path.c_str(), -1, false);
+            uint64_t t_load_end = esp_timer_get_time();
+            uint64_t load_ms = (t_load_end - t_load_start) / 1000;
+            ESP_LOGI(TAG, "BgIndexer: localLoader.load(book=%d \"%s\") took %llu ms -> %s",
+                     book.id, book.title.c_str(),
+                     (unsigned long long)load_ms, loaded ? "OK" : "FAIL");
+            esp_task_wdt_reset();
+
+            if (loaded)
             {
                 int chapters = localLoader.getTotalChapters();
                 std::vector<size_t> sums;
@@ -1112,6 +1122,7 @@ void GUI::backgroundIndexerTaskLoop()
 
                 for (int i = 0; i < chapters; ++i)
                 {
+                    uint64_t t_ch_start = esp_timer_get_time();
                     esp_task_wdt_reset();
                     // Yield frequently to keep UI responsive
                     vTaskDelay(pdMS_TO_TICKS(5));
@@ -1149,6 +1160,7 @@ void GUI::backgroundIndexerTaskLoop()
                     if (currentState == AppState::READER && currentBook.id == book.id)
                     {
                         ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it", book.id);
+                        localLoader.close();
                         goto next_book;
                     }
 
@@ -1173,6 +1185,15 @@ void GUI::backgroundIndexerTaskLoop()
                     }
 
                     size_t len = localLoader.getChapterTextLength(i);
+                    uint64_t t_ch_end = esp_timer_get_time();
+                    uint64_t ch_ms = (t_ch_end - t_ch_start) / 1000;
+                    if (ch_ms > 200)
+                    {
+                        ESP_LOGW(TAG, "BgIndexer: Slow chapter read: book=%d chapter=%d took %llu ms len=%zu",
+                                 book.id, i, (unsigned long long)ch_ms, len);
+                    }
+                    esp_task_wdt_reset();
+
                     cumulative += len;
                     sums[i + 1] = cumulative;
                 }
@@ -1192,10 +1213,11 @@ void GUI::backgroundIndexerTaskLoop()
                 }
 
                 localLoader.close();
+                esp_task_wdt_reset();
             }
             else
             {
-                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d (%s), marking as failed", book.id, book.path.c_str());
+                ESP_LOGW(TAG, "BgIndexer: Failed to load book %d (%s), load time %llu ms, marking as failed", book.id, book.path.c_str(), (unsigned long long)load_ms);
                 bookIndex.markAsFailed(book.id);
                 indexNeedsSave = true;
             }
@@ -2336,7 +2358,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             {
                 // Replace HTML entities
                 displayWord = decodeHtmlEntities(displayWord);
-                ESP_LOGI(TAG, "drawLine: Hebrew word before reverse: '%s'", displayWord.c_str());
+                ESP_LOGD(TAG, "drawLine: Hebrew word before reverse: '%s'", displayWord.c_str());
                 displayWord = reverseHebrewWord(displayWord);
             }
 
@@ -3830,7 +3852,7 @@ void GUI::drawStandaloneSettings()
     auto drawSettingsButton = [&](int x, int y, int w, int h, const char *label, uint16_t fillColor, uint16_t textColor)
     {
         target->fillRect(x, y, w, h, fillColor);
-        target->drawRect(x, y, w, h, TFT_BLACK);
+        target->drawRect(x, y, w, h, TFT_DARKCYAN); //TFT_BLACK);
         target->setTextDatum(textdatum_t::middle_center);
         target->setTextColor(textColor, fillColor);
         target->drawString(label, x + w / 2, y + h / 2);
@@ -3845,7 +3867,7 @@ void GUI::drawStandaloneSettings()
     target->setTextDatum(textdatum_t::middle_left);
 
     int startY = STATUS_BAR_HEIGHT + 70;
-    target->setTextSize(1.8f);
+    target->setTextSize(1.9f);
 
     // --- Font Size ---
     int row1Y = startY;
@@ -3936,7 +3958,7 @@ void GUI::drawStandaloneSettings()
 
     int row7Y = startY + rowHeight * 6;
     int row7CenterY = row7Y + rowHeight / 2;
-    target->drawString("Buzzer", padding, row6CenterY);
+    target->drawString("Buzzer", padding, row7CenterY);
     btnY = row7Y + (rowHeight - buttonH) / 2;
 
     uint16_t buzzerFill = buzzerEnabled ? TFT_BLACK : TFT_WHITE;

@@ -15,6 +15,7 @@
 #include "sdmmc_cmd.h"
 #include <dirent.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include "driver/gpio.h"
 #include <time.h>
 #include "esp_sleep.h"
@@ -178,13 +179,11 @@ extern "C" void app_main(void)
     //     return; // Should not reach here
     // }
 
-
     // set GUI log verbosity to warnings only:
-    //esp_log_level_set("GUI", ESP_LOG_WARN);
+    // esp_log_level_set("GUI", ESP_LOG_WARN);
     esp_log_level_set("GUI", ESP_LOG_INFO);
-    //esp_log_level_set("ZIP", ESP_LOG_WARN);
+    // esp_log_level_set("ZIP", ESP_LOG_WARN);
     esp_log_level_set("ZIP", ESP_LOG_INFO);
-
 
     bool is_wake_from_sleep = (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || wakeup_reason == ESP_SLEEP_WAKEUP_EXT1);
 
@@ -437,6 +436,8 @@ extern "C" void app_main(void)
     // Skip "Initializing..." message on wake - saves ~100ms and we want fast restore
     if (!is_wake_from_sleep)
     {
+        // Will attempt to draw welcome image after SPIFFS is mounted (see below).
+        // Fall back to a simple text message so the UI is not blank if image isn't available yet.
         M5.Display.setTextDatum(textdatum_t::middle_center);
         M5.Display.drawString("Initializing...", M5.Display.width() / 2, M5.Display.height() / 2);
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
@@ -483,6 +484,24 @@ extern "C" void app_main(void)
                 {
                     ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
                 }
+                // Show welcome image if available and we're on a cold boot.
+                if (!is_wake_from_sleep)
+                {
+                    struct stat st;
+                    if (stat("/spiffs/images/welcome.png", &st) == 0)
+                    {
+                        ESP_LOGI(TAG, "Drawing welcome image from SPIFFS");
+                        esp_task_wdt_reset();
+                        M5.Display.drawPngFile("/spiffs/images/welcome.png", 0, 0);
+                        M5.Display.display();
+                        M5.Display.waitDisplay();
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "Welcome image not found: /spiffs/images/welcome.png");
+                    }
+                }
+
                 esp_task_wdt_reset();
             }
         }
