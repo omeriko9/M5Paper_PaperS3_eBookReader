@@ -1,0 +1,993 @@
+I (19198) GUI: Found next word boundary, wordLen=2
+I (19202) GUI: Measured word, width=41
+I (19206) GUI: Checked if word fits
+I (19209) GUI: Added word to current line
+I (19213) GUI: Advanced i to 10
+I (19215) GUI: Handled newline if present
+I (19219) GUI: Checked abort flag
+I (19222) GUI: linesDrawn     == 0 Reset watchdog 
+I (19227) GUI: Handled image placeholder
+I (19230) GUI: Handled math markers
+I (19234) GUI: Found next word boundary, wordLen=4
+I (19238) GUI: Measured word, width=76
+I (19242) GUI: Checked if word fits
+I (19245) GUI: Added word to current line
+I (19249) GUI: Advanced i to 15
+I (19251) GUI: Handled newline if present
+I (19255) GUI: Checked abort flag
+I (19258) GUI: linesDrawn     == 0 Reset watchdog
+I (19263) GUI: Handled image placeholder
+I (19266) GUI: Handled math markers
+I (19270) GUI: Found next word boundary, wordLen=5
+I (19274) GUI: Measured word, width=74
+I (19278) GUI: Checked if word fits
+I (19281) GUI: Added word to current line
+I (19284) GUI: Advanced i to 21
+I (19287) GUI: Handled newline if present
+I (19291) GUI: Checked abort flag
+I (19294) GUI: linesDrawn     == 0 Reset watchdog
+I (19299) GUI: Handled image placeholder
+I (19302) GUI: Handled math markers
+I (19306) GUI: Found next word boundary, wordLen=8
+I (19310) GUI: Measured word, width=172
+I (19314) GUI: Word does not fit, flushing current line
+I (19319) GUI: drawLine: Checking for RTL in line with 4 words
+I (19324) GUI: drawLine: word='bottom' w=147 space=15 isRTL=0 startX=20 y=56
+I (19331) GUI: Drawing LTR word at x=20
+I (19336) GUI: drawLine: word='of' w=41 space=15 isRTL=0 startX=182 y=56
+I (19341) GUI: Drawing LTR word at x=182
+I (19345) GUI: drawLine: word='this' w=76 space=15 isRTL=0 startX=238 y=56
+I (19351) GUI: Drawing LTR word at x=238
+I (19356) GUI: drawLine: word='file.' w=74 space=15 isRTL=0 startX=329 y=56
+I (19362) GUI: Drawing LTR word at x=329
+I (19366) GUI: Checked if word fits
+I (19368) GUI: Added word to current line
+I (19372) GUI: Advanced i to 30
+I (19375) GUI: Handled newline if present
+I (19379) GUI: Checked abort flag
+I (19382) GUI: Handled image placeholder
+I (19385) GUI: Handled math markers
+I (19389) GUI: Found next word boundary, wordLen=2
+I (19393) GUI: Measured word, width=33
+I (19396) GUI: Checked if word fits
+I (19400) GUI: Added word to current line
+I (19403) GUI: Advanced i to 33
+I (19406) GUI: Handled newline if present
+I (19410) GUI: Checked abort flag
+I (19413) GUI: Handled image placeholder
+I (19417) GUI: Handled math markers
+I (19420) GUI: Found next word boundary, wordLen=9
+I (19424) GUI: Measured word, width=201
+I (19428) GUI: Checked if word fits
+I (19431) GUI: Added word to current line
+I (19435) GUI: Advanced i to 43
+I (19438) GUI: Handled newline if present
+I (19441) GUI: Checked abort flag
+I (19445) GUI: Handled image placeholder
+I (19448) GUI: Handled math markers
+I (19452) GUI: Found next word boundary, wordLen=11
+I (19456) GUI: Measured word, width=236
+I (19460) GUI: Word does not fit, flushing current line
+I (19465) GUI: drawLine: Checking for RTL in line with 3 words
+I (19470) GUI: drawLine: word='Included' w=172 space=15 isRTL=0 startX=20 y=116
+I (19477) GUI: Drawing LTR word at x=20
+I (19483) GUI: drawLine: word='is' w=33 space=15 isRTL=0 startX=207 y=116
+I (19487) GUI: Drawing LTR word at x=207
+I (19491) GUI: Drawing LTR word at x=255
+I (19497) GUI: Checked if word fits
+I (19498) GUI: Added word to current line
+I (19501) GUI: Advanced i to 55
+I (19504) GUI: Handled newline if present
+I (19508) GUI: Checked abort flag
+I (19511) GUI: Handled image placeholder
+I (19515) GUI: Handled math markers
+I (19518) GUI: Found next word boundary, wordLen=5
+I (19522) GUI: Measured word, width=117
+I (19526) GUI: Checked if word fits
+I (19529) GUI: Added word to current line
+I (19533) GUI: Advanced i to 61
+I (19536) GUI: Handled newline if present
+I (19540) GUI: Checked abort flag
+I (19542) GUI: Handled image placeholder
+I (19546) GUI: Handled math markers
+I (19550) GUI: Found next word boundary, wordLen=4
+I (19554) GUI: Measured word, width=87
+I (19557) GUI: Checked if word fits
+I (19561) GUI: Added word to current line
+I (19564) GUI: Advanced i to 66
+I (19567) GUI: Handled newline if present
+I (19571) GUI: Checked abort flag
+I (19574) GUI: Handled image placeholder
+I (19578) GUI: Handled math markers
+I (19581) GUI: Found next word boundary, wordLen=8
+I (19585) GUI: Measured word, width=155
+I (19589) GUI: Word does not fit, flushing current line
+I (19594) GUI: drawLine: Checking for RTL in line with 3 words
+I (19599) GUI: Drawing LTR word at x=20
+I (19605) GUI: Drawing LTR word at x=271
+I (19608) GUI: Drawing LTR word at x=403
+I (19611) GUI: Checked if word fits
+I (19613) GUI: Added word to current line
+I (19617) GUI: Advanced i to 75
+I (19620) GUI: Handled newline if present
+I (19624) GUI: Checked abort flag
+I (19627) GUI: Handled image placeholder
+I (19630) GUI: Handled math markers
+I (19634) GUI: Found next word boundary, wordLen=6
+I (19638) GUI: Measured word, width=119
+I (19642) GUI: Checked if word fits
+I (19645) GUI: Added word to current line
+I (19649) GUI: Advanced i to 82
+I (19652) GUI: Handled newline if present
+I (19655) GUI: Checked abort flag
+I (19658) GUI: Handled image placeholder
+I (19662) GUI: Handled math markers
+I (19665) GUI: Found next word boundary, wordLen=3
+I (19670) GUI: Measured word, width=76
+I (19673) GUI: Checked if word fits
+I (19676) GUI: Added word to current line
+I (19680) GUI: Advanced i to 86
+I (19683) GUI: Handled newline if present
+I (19687) GUI: Checked abort flag
+I (19690) GUI: Handled image placeholder
+I (19693) GUI: Handled math markers
+I (19697) GUI: Found next word boundary, wordLen=12
+I (19701) GUI: Measured word, width=230
+I (19705) GUI: Word does not fit, flushing current line
+I (19710) GUI: drawLine: Checking for RTL in line with 3 words
+I (19715) GUI: Drawing LTR word at x=20
+I (19721) GUI: Drawing LTR word at x=190
+I (19724) GUI: Drawing LTR word at x=324
+I (19727) GUI: Checked if word fits
+I (19729) GUI: Added word to current line
+I (19733) GUI: Advanced i to 99
+I (19736) GUI: Handled newline if present
+I (19740) GUI: Checked abort flag
+I (19743) GUI: Handled image placeholder
+I (19746) GUI: Handled math markers
+I (19750) GUI: Found next word boundary, wordLen=2
+I (19754) GUI: Measured word, width=37
+I (19758) GUI: Checked if word fits
+I (19761) GUI: Added word to current line
+I (19764) GUI: Advanced i to 102
+I (19767) GUI: Handled newline if present
+I (19771) GUI: Checked abort flag
+I (19774) GUI: Handled image placeholder
+I (19778) GUI: Handled math markers
+I (19781) GUI: Found next word boundary, wordLen=3
+I (19786) GUI: Measured word, width=84
+I (19789) GUI: Checked if word fits
+I (19792) GUI: Added word to current line
+I (19796) GUI: Advanced i to 106
+I (19799) GUI: Handled newline if present
+I (19803) GUI: Checked abort flag
+I (19806) GUI: Handled image placeholder
+I (19809) GUI: Handled math markers
+I (19813) GUI: Found next word boundary, wordLen=3
+I (19817) GUI: Measured word, width=67
+I (19821) GUI: Checked if word fits
+I (19824) GUI: Added word to current line
+I (19827) GUI: Advanced i to 110
+I (19830) GUI: Handled newline if present
+I (19834) GUI: Checked abort flag
+I (19837) GUI: Handled image placeholder
+I (19841) GUI: Handled math markers
+I (19844) GUI: Found next word boundary, wordLen=4
+I (19849) GUI: Measured word, width=63
+I (19852) GUI: Word does not fit, flushing current line
+I (19857) GUI: drawLine: Checking for RTL in line with 4 words
+I (19863) GUI: Drawing LTR word at x=20
+I (19869) GUI: Drawing LTR word at x=265
+I (19870) GUI: Drawing LTR word at x=317
+I (19874) GUI: Drawing LTR word at x=416
+I (19878) GUI: Checked if word fits
+I (19880) GUI: Added word to current line
+I (19884) GUI: Advanced i to 115
+I (19887) GUI: Handled newline if present
+I (19891) GUI: Checked abort flag
+I (19894) GUI: linesDrawn     == 0 Reset watchdog
+I (19898) GUI: Handled image placeholder
+I (19902) GUI: Handled math markers
+I (19905) GUI: Found next word boundary, wordLen=3
+I (19910) GUI: Measured word, width=85
+I (19913) GUI: Checked if word fits
+I (19916) GUI: Added word to current line
+I (19920) GUI: Advanced i to 119
+I (19923) GUI: Handled newline if present
+I (19927) GUI: Checked abort flag
+I (19930) GUI: linesDrawn     == 0 Reset watchdog
+I (19934) GUI: Handled image placeholder
+I (19938) GUI: Handled math markers
+I (19941) GUI: Found next word boundary, wordLen=2
+I (19946) GUI: Measured word, width=50
+I (19949) GUI: Checked if word fits
+I (19952) GUI: Added word to current line
+I (19956) GUI: Advanced i to 122
+I (19959) GUI: Handled newline if present
+I (19963) GUI: Checked abort flag
+I (19966) GUI: linesDrawn     == 0 Reset watchdog 
+I (19970) GUI: Handled image placeholder
+I (19974) GUI: Handled math markers
+I (19977) GUI: Found next word boundary, wordLen=5
+I (19982) GUI: Measured word, width=109
+I (19985) GUI: Checked if word fits
+I (19988) GUI: Added word to current line
+I (19992) GUI: Advanced i to 128
+I (19995) GUI: Handled newline if present
+I (19999) GUI: Checked abort flag
+I (20002) GUI: linesDrawn     == 0 Reset watchdog
+I (20006) GUI: Handled image placeholder
+I (20010) GUI: Handled math markers
+I (20014) GUI: Found next word boundary, wordLen=3
+I (20018) GUI: Measured word, width=76
+I (20021) GUI: Checked if word fits
+I (20024) GUI: Added word to current line
+I (20028) GUI: Advanced i to 132
+I (20031) GUI: Handled newline if present
+I (20035) GUI: Checked abort flag
+I (20038) GUI: linesDrawn     == 0 Reset watchdog
+I (20042) GUI: Handled image placeholder
+I (20046) GUI: Handled math markers
+I (20050) GUI: Found next word boundary, wordLen=3
+I (20054) GUI: Measured word, width=72
+I (20057) GUI: Word does not fit, flushing current line
+I (20062) GUI: drawLine: Checking for RTL in line with 5 words
+I (20068) GUI: Drawing LTR word at x=20
+I (20072) GUI: Drawing LTR word at x=98
+I (20076) GUI: Drawing LTR word at x=198
+I (20079) GUI: Drawing LTR word at x=263
+I (20084) GUI: Drawing LTR word at x=387
+I (20087) GUI: Checked if word fits
+I (20089) GUI: Added word to current line
+I (20093) GUI: Advanced i to 136
+I (20096) GUI: Handled newline if present
+I (20099) GUI: Checked abort flag
+I (20102) GUI: Handled image placeholder
+I (20106) GUI: Handled math markers
+I (20110) GUI: Found next word boundary, wordLen=4
+I (20114) GUI: Measured word, width=81
+I (20117) GUI: Checked if word fits
+I (20120) GUI: Added word to current line
+I (20124) GUI: Advanced i to 141
+I (20127) GUI: Handled newline if present
+I (20131) GUI: Checked abort flag
+I (20134) GUI: Handled image placeholder
+I (20138) GUI: Handled math markers
+I (20141) GUI: Found next word boundary, wordLen=4
+I (20145) GUI: Measured word, width=80
+I (20149) GUI: Checked if word fits
+I (20152) GUI: Added word to current line
+I (20156) GUI: Advanced i to 146
+I (20159) GUI: Handled newline if present
+I (20162) GUI: Checked abort flag
+I (20165) GUI: Handled image placeholder
+I (20169) GUI: Handled math markers
+I (20173) GUI: Found next word boundary, wordLen=3
+I (20177) GUI: Measured word, width=67
+I (20180) GUI: Checked if word fits
+I (20184) GUI: Added word to current line
+I (20187) GUI: Advanced i to 150
+I (20190) GUI: Handled newline if present
+I (20194) GUI: Checked abort flag
+I (20197) GUI: Handled image placeholder
+I (20201) GUI: Handled math markers
+I (20204) GUI: Found next word boundary, wordLen=5
+I (20208) GUI: Measured word, width=117
+I (20212) GUI: Checked if word fits
+I (20215) GUI: Added word to current line
+I (20219) GUI: Advanced i to 156
+I (20222) GUI: Handled newline if present
+I (20226) GUI: Checked abort flag
+I (20229) GUI: Handled image placeholder
+I (20232) GUI: Handled math markers
+I (20236) GUI: Found next word boundary, wordLen=3
+I (20240) GUI: Measured word, width=84
+I (20243) GUI: Word does not fit, flushing current line
+I (20248) GUI: drawLine: Checking for RTL in line with 5 words
+I (20254) GUI: Drawing LTR word at x=20
+I (20258) GUI: Drawing LTR word at x=107
+I (20262) GUI: Drawing LTR word at x=203
+I (20266) GUI: Drawing LTR word at x=298
+I (20269) GUI: Drawing LTR word at x=380
+I (20273) GUI: Checked if word fits
+E (20276) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+E (20276) task_wdt:  - BgIndexer (CPU 1)
+E (20276) task_wdt: Tasks currently running:
+E (20276) task_wdt: CPU 0: RenderTask
+E (20276) task_wdt: CPU 1: IDLE1
+E (20276) task_wdt: Print CPU 1 backtrace
+
+
+Backtrace: 0x40379326:0x3FCA3680 0x40378769:0x3FCA36A0 0x4037C89B:0x3FCB55B0 0x4200497E:0x3FCB55D0 0x40382D75:0x3FCB55F0 0x40381BB5:0x3FCB5610
+--- 0x40379326: esp_crosscore_isr at C:/Espressif/frameworks/esp-idf-v5.5/components/esp_system/crosscore_int.c:74
+--- 0x40378769: _xt_lowint1 at C:/Espressif/frameworks/esp-idf-v5.5/components/xtensa/xtensa_vectors.S:1240
+--- 0x4037c89b: xt_utils_wait_for_intr at C:/Espressif/frameworks/esp-idf-v5.5/components/xtensa/include/xt_utils.h:82  
+--- (inlined by) esp_cpu_wait_for_intr at C:/Espressif/frameworks/esp-idf-v5.5/components/esp_hw_support/cpu.c:55       
+--- 0x4200497e: esp_vApplicationIdleHook at C:/Espressif/frameworks/esp-idf-v5.5/components/esp_system/freertos_hooks.c:58
+--- 0x40382d75: prvIdleTask at C:/Espressif/frameworks/esp-idf-v5.5/components/freertos/FreeRTOS-Kernel/tasks.c:4350    
+--- 0x40381bb5: vPortTaskWrapper at C:/Espressif/frameworks/esp-idf-v5.5/components/freertos/FreeRTOS-Kernel/portable/xtensa/port.c:139
+
+I (20275) GUI: Added word to current line
+I (20319) GUI: Advanced i to 160
+I (20322) GUI: Handled newline if present
+I (20326) GUI: Checked abort flag
+I (20329) GUI: Handled image placeholder
+I (20333) GUI: Handled math markers
+I (20336) GUI: Found next word boundary, wordLen=2
+I (20341) GUI: Measured word, width=41
+I (20344) GUI: Checked if word fits
+I (20347) GUI: Added word to current line
+I (20351) GUI: Advanced i to 163
+I (20354) GUI: Handled newline if present
+I (20358) GUI: Checked abort flag
+I (20361) GUI: Handled image placeholder
+I (20364) GUI: Handled math markers
+I (20368) GUI: Found next word boundary, wordLen=4
+I (20372) GUI: Measured word, width=111
+I (20376) GUI: Checked if word fits
+I (20379) GUI: Added word to current line
+I (20383) GUI: Advanced i to 168
+I (20385) GUI: Handled newline if present
+I (20389) GUI: Checked abort flag
+I (20392) GUI: Handled image placeholder
+I (20396) GUI: Handled math markers
+I (20399) GUI: Found next word boundary, wordLen=1
+I (20404) GUI: Measured word, width=24
+I (20407) GUI: Checked if word fits
+I (20410) GUI: Added word to current line
+I (20414) GUI: Advanced i to 170
+I (20417) GUI: Handled newline if present
+I (20421) GUI: Checked abort flag
+I (20424) GUI: Handled image placeholder
+I (20427) GUI: Handled math markers
+I (20431) GUI: Found next word boundary, wordLen=8
+I (20435) GUI: Measured word, width=178
+I (20439) GUI: Checked if word fits
+I (20442) GUI: Added word to current line
+I (20446) GUI: Advanced i to 179
+I (20449) GUI: Handled newline if present
+I (20452) GUI: Checked abort flag
+I (20455) GUI: Handled image placeholder
+I (20459) GUI: Handled math markers
+I (20462) GUI: Found next word boundary, wordLen=2
+I (20467) GUI: Measured word, width=41
+I (20470) GUI: Word does not fit, flushing current line
+I (20475) GUI: drawLine: Checking for RTL in line with 5 words
+I (20481) GUI: Drawing LTR word at x=20
+I (20485) GUI: Drawing LTR word at x=119
+I (20488) GUI: Drawing LTR word at x=175
+I (20493) GUI: Drawing LTR word at x=301
+I (20496) GUI: Drawing LTR word at x=340
+I (20501) GUI: Checked if word fits
+I (20502) GUI: Added word to current line
+I (20506) GUI: Advanced i to 182
+I (20509) GUI: Handled newline if present
+I (20512) GUI: Checked abort flag
+I (20515) GUI: Handled image placeholder
+I (20519) GUI: Handled math markers
+I (20523) GUI: Found next word boundary, wordLen=7
+I (20527) GUI: Measured word, width=143
+I (20530) GUI: Checked if word fits
+I (20534) GUI: Added word to current line
+I (20537) GUI: Advanced i to 190
+I (20540) GUI: Handled newline if present
+I (20544) GUI: Checked abort flag
+I (20547) GUI: Handled image placeholder
+I (20551) GUI: Handled math markers
+I (20554) GUI: Found next word boundary, wordLen=10
+I (20559) GUI: Measured word, width=223
+I (20562) GUI: Checked if word fits
+I (20565) GUI: Added word to current line
+I (20569) GUI: Advanced i to 201
+I (20572) GUI: Handled newline if present
+I (20576) GUI: Checked abort flag
+I (20579) GUI: Handled image placeholder
+I (20582) GUI: Handled math markers
+I (20586) GUI: Found next word boundary, wordLen=3
+I (20590) GUI: Measured word, width=76
+I (20594) GUI: Word does not fit, flushing current line
+I (20599) GUI: drawLine: Checking for RTL in line with 3 words
+I (20604) GUI: Drawing LTR word at x=20
+I (20608) GUI: Drawing LTR word at x=76
+I (20613) GUI: Drawing LTR word at x=234
+I (20617) GUI: Checked if word fits
+I (20618) GUI: Added word to current line
+I (20622) GUI: Advanced i to 205
+I (20625) GUI: Handled newline if present
+I (20629) GUI: Checked abort flag
+I (20632) GUI: Handled image placeholder
+I (20635) GUI: Handled math markers
+I (20639) GUI: Found next word boundary, wordLen=3
+I (20643) GUI: Measured word, width=84
+I (20646) GUI: Checked if word fits
+I (20650) GUI: Added word to current line
+I (20653) GUI: Advanced i to 209
+I (20656) GUI: Handled newline if present
+I (20660) GUI: Checked abort flag
+I (20663) GUI: Handled image placeholder
+I (20667) GUI: Handled math markers
+I (20670) GUI: Found next word boundary, wordLen=2
+I (20674) GUI: Measured word, width=41
+I (20678) GUI: Checked if word fits
+I (20681) GUI: Added word to current line
+I (20685) GUI: Advanced i to 212
+I (20688) GUI: Handled newline if present
+I (20692) GUI: Checked abort flag
+I (20695) GUI: Handled image placeholder
+I (20698) GUI: Handled math markers
+I (20702) GUI: Found next word boundary, wordLen=3
+I (20706) GUI: Measured word, width=67
+I (20709) GUI: Checked if word fits
+I (20713) GUI: Added word to current line
+I (20716) GUI: Advanced i to 216
+I (20719) GUI: Handled newline if present
+I (20723) GUI: Checked abort flag
+I (20726) GUI: Handled image placeholder
+I (20730) GUI: Handled math markers
+I (20733) GUI: Found next word boundary, wordLen=9
+I (20738) GUI: Measured word, width=177
+I (20741) GUI: Word does not fit, flushing current line
+I (20746) GUI: drawLine: Checking for RTL in line with 4 words
+I (20752) GUI: Drawing LTR word at x=20
+I (20756) GUI: Drawing LTR word at x=111
+I (20760) GUI: Drawing LTR word at x=210
+I (20763) GUI: Drawing LTR word at x=266
+I (20767) GUI: Checked if word fits
+I (20769) GUI: Added word to current line
+I (20773) GUI: Advanced i to 226
+I (20776) GUI: drawLine: Checking for RTL in line with 1 words
+I (20782) GUI: Drawing LTR word at x=20
+I (20787) GUI: Handled newline if present
+I (20789) GUI: Checked abort flag
+I (20792) GUI: Handled image placeholder
+I (20795) GUI: Handled math markers
+I (20799) GUI: Found next word boundary, wordLen=9
+I (20803) GUI: Measured word, width=221
+I (20807) GUI: Checked if word fits
+I (20810) GUI: Added word to current line
+I (20814) GUI: Advanced i to 236
+I (20817) GUI: Handled newline if present
+I (20820) GUI: Checked abort flag
+I (20823) GUI: Handled image placeholder
+I (20827) GUI: Handled math markers
+I (20830) GUI: Found next word boundary, wordLen=2
+I (20835) GUI: Measured word, width=52
+I (20838) GUI: Checked if word fits
+I (20841) GUI: Added word to current line
+I (20845) GUI: Advanced i to 239
+I (20848) GUI: Handled newline if present
+I (20852) GUI: Checked abort flag
+I (20855) GUI: Handled image placeholder
+I (20859) GUI: Handled math markers
+I (20862) GUI: Found next word boundary, wordLen=3
+I (20866) GUI: Measured word, width=78
+I (20870) GUI: Checked if word fits
+I (20873) GUI: Added word to current line
+I (20877) GUI: Advanced i to 243
+I (20880) GUI: Handled newline if present
+I (20883) GUI: Checked abort flag
+I (20886) GUI: Handled image placeholder
+I (20890) GUI: Handled math markers
+I (20894) GUI: Found next word boundary, wordLen=5
+I (20898) GUI: Measured word, width=117
+I (20901) GUI: Word does not fit, flushing current line
+I (20906) GUI: drawLine: Checking for RTL in line with 3 words
+I (20912) GUI: Drawing LTR word at x=20
+I (20918) GUI: Drawing LTR word at x=256
+I (20920) GUI: Drawing LTR word at x=323
+I (20923) GUI: Checked if word fits
+I (20926) GUI: Added word to current line
+I (20930) GUI: Advanced i to 249
+I (20933) GUI: Handled newline if present
+I (20936) GUI: Checked abort flag
+I (20939) GUI: Handled image placeholder
+I (20943) GUI: Handled math markers
+I (20946) GUI: Found next word boundary, wordLen=2
+I (20951) GUI: Measured word, width=41
+I (20954) GUI: Checked if word fits
+I (20957) GUI: Added word to current line
+I (20961) GUI: Advanced i to 252
+I (20964) GUI: Handled newline if present
+I (20968) GUI: Checked abort flag
+I (20971) GUI: Handled image placeholder
+I (20974) GUI: Handled math markers
+I (20978) GUI: Found next word boundary, wordLen=4
+I (20982) GUI: Measured word, width=89
+I (20986) GUI: Checked if word fits
+I (20989) GUI: Added word to current line
+I (20993) GUI: Advanced i to 257
+I (20996) GUI: Handled newline if present
+I (20999) GUI: Checked abort flag
+I (21002) GUI: Handled image placeholder
+I (21006) GUI: Handled math markers
+I (21009) GUI: Found next word boundary, wordLen=5
+I (21014) GUI: Measured word, width=100
+I (21017) GUI: Checked if word fits
+I (21020) GUI: Added word to current line
+I (21024) GUI: Advanced i to 263
+I (21027) GUI: Handled newline if present
+I (21031) GUI: Checked abort flag
+I (21034) GUI: Handled image placeholder
+I (21038) GUI: Handled math markers
+I (21041) GUI: Found next word boundary, wordLen=7
+I (21045) GUI: Measured word, width=135
+I (21049) GUI: Word does not fit, flushing current line
+I (21054) GUI: drawLine: Checking for RTL in line with 4 words
+I (21059) GUI: Drawing LTR word at x=20
+I (21064) GUI: Drawing LTR word at x=152
+I (21067) GUI: Drawing LTR word at x=208
+I (21071) GUI: Drawing LTR word at x=312
+I (21085) GUI: RenderTask: Next page rendered. Offset=538 Chars=263
+I (21085) GUI: RenderTask: Processing request offset=0 isNext=0
+I (21095) GUI: Fetched text at offset 0, length: 3000
+I (21095) GUI: Checked abort flag
+I (21096) GUI: linesDrawn     == 0 Reset watchdog
+I (21098) GUI: Handled image placeholder
+I (21101) GUI: Handled math markers
+I (21105) GUI: Found next word boundary, wordLen=3
+I (21109) GUI: Measured word, width=78
+I (21113) GUI: Checked if word fits
+I (21116) GUI: Added word to current line
+I (21120) GUI: Advanced i to 4
+I (21122) GUI: Handled newline if present
+I (21126) GUI: Checked abort flag
+I (21129) GUI: linesDrawn     == 0 Reset watchdog 
+I (21134) GUI: Handled image placeholder
+I (21137) GUI: Handled math markers
+I (21141) GUI: Found next word boundary, wordLen=7
+I (21145) GUI: Measured word, width=143
+I (21149) GUI: Checked if word fits
+I (21152) GUI: Added word to current line
+I (21156) GUI: Advanced i to 12
+I (21158) GUI: Handled newline if present
+I (21162) GUI: Checked abort flag
+I (21165) GUI: linesDrawn     == 0 Reset watchdog
+I (21170) GUI: Handled image placeholder
+I (21173) GUI: Handled math markers
+I (21177) GUI: Found next word boundary, wordLen=9
+I (21181) GUI: Measured word, width=216
+I (21185) GUI: Checked if word fits
+I (21188) GUI: Added word to current line
+I (21192) GUI: Advanced i to 22
+I (21194) GUI: Handled newline if present
+I (21198) GUI: Checked abort flag
+I (21201) GUI: linesDrawn     == 0 Reset watchdog
+I (21206) GUI: Handled image placeholder
+I (21209) GUI: Handled math markers
+I (21213) GUI: Found next word boundary, wordLen=5
+I (21217) GUI: Measured word, width=126
+I (21221) GUI: Word does not fit, flushing current line
+I (21226) GUI: drawLine: Checking for RTL in line with 3 words
+I (21231) GUI: drawLine: word='The' w=78 space=15 isRTL=0 startX=20 y=56
+I (21238) GUI: Drawing LTR word at x=20
+I (21242) GUI: drawLine: word='Project' w=143 space=15 isRTL=0 startX=113 y=56
+I (21248) GUI: Drawing LTR word at x=113
+I (21253) GUI: drawLine: word='Gutenberg' w=216 space=15 isRTL=0 startX=271 y=56
+I (21259) GUI: Drawing LTR word at x=271
+I (21265) GUI: Checked if word fits
+I (21266) GUI: Added word to current line
+I (21269) GUI: Advanced i to 28
+I (21272) GUI: Handled newline if present
+I (21276) GUI: Checked abort flag
+I (21279) GUI: Handled image placeholder
+I (21283) GUI: Handled math markers
+I (21286) GUI: Found next word boundary, wordLen=2
+I (21290) GUI: Measured word, width=41
+I (21294) GUI: Checked if word fits
+I (21297) GUI: Added word to current line
+I (21301) GUI: Advanced i to 31
+I (21304) GUI: Handled newline if present
+I (21307) GUI: Checked abort flag
+I (21310) GUI: Handled image placeholder
+I (21314) GUI: Handled math markers
+I (21318) GUI: Found next word boundary, wordLen=7
+I (21322) GUI: Measured word, width=131
+I (21325) GUI: Checked if word fits
+I (21329) GUI: Added word to current line
+I (21332) GUI: Advanced i to 39
+I (21335) GUI: Handled newline if present
+I (21339) GUI: Checked abort flag
+I (21342) GUI: Handled image placeholder
+I (21346) GUI: Handled math markers
+I (21349) GUI: Found next word boundary, wordLen=2
+I (21353) GUI: Measured word, width=48
+I (21357) GUI: Checked if word fits
+I (21360) GUI: Added word to current line
+I (21364) GUI: Advanced i to 42
+I (21367) GUI: Handled newline if present
+I (21370) GUI: Checked abort flag
+I (21373) GUI: Handled image placeholder
+I (21377) GUI: Handled math markers
+I (21381) GUI: Found next word boundary, wordLen=9
+I (21385) GUI: Measured word, width=173
+I (21388) GUI: Word does not fit, flushing current line
+I (21393) GUI: drawLine: Checking for RTL in line with 4 words
+I (21399) GUI: drawLine: word='EBook' w=126 space=15 isRTL=0 startX=20 y=116
+I (21406) GUI: Drawing LTR word at x=20
+I (21411) GUI: drawLine: word='of' w=41 space=15 isRTL=0 startX=161 y=116
+I (21416) GUI: Drawing LTR word at x=161
+I (21420) GUI: drawLine: word='Ethics,' w=131 space=15 isRTL=0 startX=217 y=116
+I (21427) GUI: Drawing LTR word at x=217
+I (21431) GUI: Drawing LTR word at x=363
+I (21434) GUI: Checked if word fits
+I (21437) GUI: Added word to current line
+I (21441) GUI: Advanced i to 52
+I (21443) GUI: Handled newline if present
+I (21447) GUI: Checked abort flag
+I (21450) GUI: Handled image placeholder
+I (21454) GUI: Handled math markers
+I (21457) GUI: Found next word boundary, wordLen=2
+I (21462) GUI: Measured word, width=52
+I (21465) GUI: Checked if word fits
+I (21468) GUI: Added word to current line
+I (21472) GUI: Advanced i to 55
+I (21475) GUI: Handled newline if present
+I (21479) GUI: Checked abort flag
+I (21482) GUI: Handled image placeholder
+I (21485) GUI: Handled math markers
+I (21489) GUI: Found next word boundary, wordLen=2
+I (21493) GUI: Measured word, width=37
+I (21496) GUI: Checked if word fits
+I (21500) GUI: Added word to current line
+I (21504) GUI: Advanced i to 58
+I (21506) GUI: Handled newline if present
+I (21510) GUI: Checked abort flag
+I (21513) GUI: Handled image placeholder
+I (21517) GUI: Handled math markers
+I (21520) GUI: Found next word boundary, wordLen=3
+I (21525) GUI: Measured word, width=67
+I (21528) GUI: Checked if word fits
+I (21531) GUI: Added word to current line
+I (21535) GUI: Advanced i to 62
+I (21538) GUI: Handled newline if present
+I (21541) GUI: Checked abort flag
+I (21544) GUI: Handled image placeholder
+I (21548) GUI: Handled math markers
+I (21552) GUI: Found next word boundary, wordLen=6
+I (21556) GUI: Measured word, width=120
+I (21559) GUI: Word does not fit, flushing current line
+I (21564) GUI: drawLine: Checking for RTL in line with 4 words
+I (21570) GUI: Drawing LTR word at x=20
+I (21576) GUI: Drawing LTR word at x=208
+I (21578) GUI: Drawing LTR word at x=275
+I (21581) GUI: Drawing LTR word at x=327
+I (21585) GUI: Checked if word fits
+I (21588) GUI: Added word to current line
+I (21591) GUI: Advanced i to 69
+I (21594) GUI: Handled newline if present
+I (21598) GUI: Checked abort flag
+I (21601) GUI: Handled image placeholder
+I (21605) GUI: Handled math markers
+I (21608) GUI: Found next word boundary, wordLen=2
+I (21612) GUI: Measured word, width=48
+I (21616) GUI: Checked if word fits
+I (21619) GUI: Added word to current line
+I (21623) GUI: Advanced i to 72
+I (21626) GUI: Handled newline if present
+I (21629) GUI: Checked abort flag
+I (21632) GUI: Handled image placeholder
+I (21636) GUI: Handled math markers
+I (21640) GUI: Found next word boundary, wordLen=9
+I (21644) GUI: Measured word, width=173
+I (21647) GUI: Checked if word fits
+I (21651) GUI: Added word to current line
+I (21654) GUI: Advanced i to 82
+I (21657) GUI: drawLine: Checking for RTL in line with 3 words
+I (21663) GUI: Drawing LTR word at x=20
+I (21668) GUI: Drawing LTR word at x=155
+I (21671) GUI: Drawing LTR word at x=218
+I (21676) GUI: Handled newline if present
+I (21677) GUI: Checked abort flag
+I (21680) GUI: Handled image placeholder
+I (21684) GUI: Handled math markers
+I (21687) GUI: Found next word boundary, wordLen=9
+I (21692) GUI: Measured word, width=195
+I (21695) GUI: Checked if word fits
+I (21698) GUI: Added word to current line
+I (21702) GUI: Advanced i to 92
+I (21705) GUI: Handled newline if present
+I (21709) GUI: Checked abort flag
+I (21712) GUI: Handled image placeholder
+I (21716) GUI: Handled math markers
+I (21719) GUI: Found next word boundary, wordLen=4
+I (21723) GUI: Measured word, width=91
+I (21727) GUI: Checked if word fits
+I (21730) GUI: Added word to current line
+I (21734) GUI: Advanced i to 97
+I (21736) GUI: Handled newline if present
+I (21740) GUI: Checked abort flag
+I (21743) GUI: Handled image placeholder
+I (21747) GUI: Handled math markers
+I (21750) GUI: Found next word boundary, wordLen=3
+I (21755) GUI: Measured word, width=65
+I (21758) GUI: Checked if word fits
+I (21761) GUI: Added word to current line
+I (21765) GUI: Advanced i to 101
+I (21768) GUI: Handled newline if present
+I (21772) GUI: Checked abort flag
+I (21775) GUI: Handled image placeholder
+I (21778) GUI: Handled math markers
+I (21782) GUI: Found next word boundary, wordLen=8
+I (21786) GUI: Measured word, width=187
+I (21790) GUI: Word does not fit, flushing current line
+I (21795) GUI: drawLine: Checking for RTL in line with 3 words
+I (21800) GUI: Drawing LTR word at x=20
+I (21806) GUI: Drawing LTR word at x=230
+I (21809) GUI: Drawing LTR word at x=336
+I (21812) GUI: Checked if word fits
+I (21814) GUI: Added word to current line
+I (21818) GUI: Advanced i to 110
+I (21821) GUI: Handled newline if present
+I (21825) GUI: Checked abort flag
+I (21828) GUI: linesDrawn     == 0 Reset watchdog 
+I (21832) GUI: Handled image placeholder
+I (21836) GUI: Handled math markers
+I (21839) GUI: Found next word boundary, wordLen=3
+I (21844) GUI: Measured word, width=46
+I (21847) GUI: Checked if word fits
+I (21850) GUI: Added word to current line
+I (21854) GUI: Advanced i to 114
+I (21857) GUI: Handled newline if present
+I (21861) GUI: Checked abort flag
+I (21864) GUI: linesDrawn     == 0 Reset watchdog
+I (21868) GUI: Handled image placeholder
+I (21872) GUI: Handled math markers
+I (21875) GUI: Found next word boundary, wordLen=4
+I (21880) GUI: Measured word, width=87
+I (21883) GUI: Checked if word fits
+I (21886) GUI: Added word to current line
+I (21890) GUI: Advanced i to 119
+I (21893) GUI: Handled newline if present
+I (21897) GUI: Checked abort flag
+I (21900) GUI: linesDrawn     == 0 Reset watchdog
+I (21904) GUI: Handled image placeholder
+I (21908) GUI: Handled math markers
+I (21911) GUI: Found next word boundary, wordLen=3
+I (21916) GUI: Measured word, width=67
+I (21919) GUI: Checked if word fits
+I (21922) GUI: Added word to current line
+I (21926) GUI: Advanced i to 123
+I (21929) GUI: Handled newline if present
+I (21933) GUI: Checked abort flag
+I (21936) GUI: linesDrawn     == 0 Reset watchdog 
+I (21940) GUI: Handled image placeholder
+I (21944) GUI: Handled math markers
+I (21947) GUI: Found next word boundary, wordLen=6
+I (21952) GUI: Measured word, width=123
+I (21955) GUI: Word does not fit, flushing current line
+I (21960) GUI: drawLine: Checking for RTL in line with 4 words
+I (21966) GUI: Drawing LTR word at x=20
+I (21971) GUI: Drawing LTR word at x=222
+I (21974) GUI: Drawing LTR word at x=283
+I (21978) GUI: Drawing LTR word at x=385
+I (21981) GUI: Checked if word fits
+I (21983) GUI: Added word to current line
+I (21987) GUI: Advanced i to 130
+I (21990) GUI: Handled newline if present
+I (21994) GUI: Checked abort flag
+I (21997) GUI: Handled image placeholder
+I (22001) GUI: Handled math markers
+I (22004) GUI: Found next word boundary, wordLen=2
+I (22008) GUI: Measured word, width=52
+I (22012) GUI: Checked if word fits
+I (22015) GUI: Added word to current line
+I (22019) GUI: Advanced i to 133
+I (22022) GUI: Handled newline if present
+I (22025) GUI: Checked abort flag
+I (22028) GUI: Handled image placeholder
+I (22032) GUI: Handled math markers
+I (22036) GUI: Found next word boundary, wordLen=4
+I (22040) GUI: Measured word, width=89
+I (22043) GUI: Checked if word fits
+I (22046) GUI: Added word to current line
+I (22050) GUI: Advanced i to 138
+I (22053) GUI: Handled newline if present
+I (22057) GUI: Checked abort flag
+I (22060) GUI: Handled image placeholder
+I (22064) GUI: Handled math markers
+I (22067) GUI: Found next word boundary, wordLen=2
+I (22071) GUI: Measured word, width=41
+I (22075) GUI: Checked if word fits
+I (22078) GUI: Added word to current line
+I (22082) GUI: Advanced i to 141
+I (22085) GUI: Handled newline if present
+I (22088) GUI: Checked abort flag
+I (22091) GUI: Handled image placeholder
+I (22095) GUI: Handled math markers
+I (22099) GUI: Found next word boundary, wordLen=5
+I (22103) GUI: Measured word, width=118
+I (22106) GUI: Checked if word fits
+I (22110) GUI: Added word to current line
+I (22113) GUI: Advanced i to 147
+I (22116) GUI: Handled newline if present
+I (22120) GUI: Checked abort flag
+I (22123) GUI: Handled image placeholder
+I (22127) GUI: Handled math markers
+I (22130) GUI: Found next word boundary, wordLen=3
+I (22134) GUI: Measured word, width=67
+I (22138) GUI: Word does not fit, flushing current line
+I (22143) GUI: drawLine: Checking for RTL in line with 5 words
+I (22148) GUI: Drawing LTR word at x=20
+I (22153) GUI: Drawing LTR word at x=158
+I (22156) GUI: Drawing LTR word at x=225
+I (22160) GUI: Drawing LTR word at x=329
+I (22163) GUI: Drawing LTR word at x=385
+I (22168) GUI: Checked if word fits
+I (22170) GUI: Added word to current line
+I (22173) GUI: Advanced i to 151
+I (22176) GUI: Handled newline if present
+I (22180) GUI: Checked abort flag
+I (22183) GUI: Handled image placeholder
+I (22187) GUI: Handled math markers
+I (22190) GUI: Found next word boundary, wordLen=9
+I (22195) GUI: Measured word, width=189
+I (22198) GUI: Checked if word fits
+I (22201) GUI: Added word to current line
+I (22205) GUI: Advanced i to 161
+I (22208) GUI: Handled newline if present
+I (22212) GUI: Checked abort flag
+I (22215) GUI: Handled image placeholder
+I (22218) GUI: Handled math markers
+I (22222) GUI: Found next word boundary, wordLen=4
+I (22226) GUI: Measured word, width=91
+I (22230) GUI: Checked if word fits
+I (22233) GUI: Added word to current line
+I (22237) GUI: Advanced i to 166
+I (22239) GUI: Handled newline if present
+I (22243) GUI: Checked abort flag
+I (22246) GUI: Handled image placeholder
+I (22250) GUI: Handled math markers
+I (22253) GUI: Found next word boundary, wordLen=3
+I (22258) GUI: Measured word, width=58
+I (22261) GUI: Checked if word fits
+I (22264) GUI: Added word to current line
+I (22268) GUI: Advanced i to 170
+I (22271) GUI: Handled newline if present
+I (22275) GUI: Checked abort flag
+I (22278) GUI: Handled image placeholder
+I (22281) GUI: Handled math markers
+I (22285) GUI: Found next word boundary, wordLen=4
+I (22289) GUI: Measured word, width=87
+I (22293) GUI: Word does not fit, flushing current line
+I (22298) GUI: drawLine: Checking for RTL in line with 4 words
+I (22303) GUI: Drawing LTR word at x=20
+I (22307) GUI: Drawing LTR word at x=102
+I (22312) GUI: Drawing LTR word at x=306
+I (22315) GUI: Drawing LTR word at x=412
+I (22318) GUI: Checked if word fits
+I (22321) GUI: Added word to current line
+I (22325) GUI: Advanced i to 175
+I (22327) GUI: Handled newline if present
+I (22331) GUI: Checked abort flag
+I (22334) GUI: Handled image placeholder
+I (22338) GUI: Handled math markers
+I (22341) GUI: Found next word boundary, wordLen=7
+I (22346) GUI: Measured word, width=154
+I (22349) GUI: Checked if word fits
+I (22352) GUI: Added word to current line
+I (22356) GUI: Advanced i to 183
+I (22359) GUI: Handled newline if present
+I (22363) GUI: Checked abort flag
+I (22366) GUI: Handled image placeholder
+I (22369) GUI: Handled math markers
+I (22373) GUI: Found next word boundary, wordLen=6
+I (22377) GUI: Measured word, width=132
+I (22381) GUI: Checked if word fits
+I (22384) GUI: Added word to current line
+I (22388) GUI: Advanced i to 190
+I (22391) GUI: Handled newline if present
+I (22394) GUI: Checked abort flag
+I (22397) GUI: Handled image placeholder
+I (22401) GUI: Handled math markers
+I (22405) GUI: Found next word boundary, wordLen=11
+I (22409) GUI: Measured word, width=258
+I (22412) GUI: Word does not fit, flushing current line
+I (22417) GUI: drawLine: Checking for RTL in line with 3 words
+I (22423) GUI: Drawing LTR word at x=20
+I (22428) GUI: Drawing LTR word at x=122
+I (22432) GUI: Drawing LTR word at x=291
+I (22435) GUI: Checked if word fits
+I (22437) GUI: Added word to current line
+I (22441) GUI: Advanced i to 202
+I (22444) GUI: Handled newline if present
+I (22447) GUI: Checked abort flag
+I (22450) GUI: Handled image placeholder
+I (22454) GUI: Handled math markers
+I (22458) GUI: Found next word boundary, wordLen=2
+I (22462) GUI: Measured word, width=41
+I (22465) GUI: Checked if word fits
+I (22469) GUI: Added word to current line
+I (22472) GUI: Advanced i to 205
+I (22475) GUI: Handled newline if present
+I (22479) GUI: Checked abort flag
+I (22482) GUI: Handled image placeholder
+I (22486) GUI: Handled math markers
+I (22489) GUI: Found next word boundary, wordLen=14
+I (22494) GUI: Measured word, width=277
+I (22497) GUI: Word does not fit, flushing current line
+I (22502) GUI: drawLine: Checking for RTL in line with 2 words
+I (22508) GUI: Drawing LTR word at x=20
+I (22514) GUI: Drawing LTR word at x=293
+I (22515) GUI: Checked if word fits
+I (22518) GUI: Added word to current line
+I (22522) GUI: Advanced i to 220
+I (22525) GUI: Handled newline if present
+I (22528) GUI: Checked abort flag
+I (22531) GUI: linesDrawn     == 0 Reset watchdog
+I (22536) GUI: Handled image placeholder
+I (22540) GUI: Handled math markers
+I (22543) GUI: Found next word boundary, wordLen=4
+I (22547) GUI: Measured word, width=76
+I (22551) GUI: Checked if word fits
+I (22554) GUI: Added word to current line
+I (22558) GUI: Advanced i to 225
+I (22561) GUI: Handled newline if present
+I (22564) GUI: Checked abort flag
+I (22567) GUI: linesDrawn     == 0 Reset watchdog
+I (22572) GUI: Handled image placeholder
+I (22576) GUI: Handled math markers
+I (22579) GUI: Found next word boundary, wordLen=2
+I (22583) GUI: Measured word, width=41
+I (22587) GUI: Checked if word fits
+I (22590) GUI: Added word to current line
+I (22594) GUI: Advanced i to 228
+I (22597) GUI: Handled newline if present
+I (22600) GUI: Checked abort flag
+I (22603) GUI: linesDrawn     == 0 Reset watchdog 
+I (22608) GUI: Handled image placeholder
+I (22612) GUI: Handled math markers
+I (22615) GUI: Found next word boundary, wordLen=3
+I (22619) GUI: Measured word, width=72
+I (22623) GUI: Word does not fit, flushing current line
+I (22628) GUI: drawLine: Checking for RTL in line with 3 words
+I (22633) GUI: Drawing LTR word at x=20
+I (22640) GUI: Drawing LTR word at x=312
+I (22641) GUI: Drawing LTR word at x=403
+I (22645) GUI: Checked if word fits
+I (22647) GUI: Added word to current line
+I (22651) GUI: Advanced i to 232
+I (22654) GUI: Handled newline if present
+I (22658) GUI: Checked abort flag
+I (22661) GUI: Handled image placeholder
+I (22664) GUI: Handled math markers
+I (22668) GUI: Found next word boundary, wordLen=5
+I (22672) GUI: Measured word, width=108
+I (22676) GUI: Checked if word fits
+I (22679) GUI: Added word to current line
+I (22683) GUI: Advanced i to 238
+I (22686) GUI: Handled newline if present
+I (22689) GUI: Checked abort flag
+I (22692) GUI: Handled image placeholder
+I (22696) GUI: Handled math markers
+I (22700) GUI: Found next word boundary, wordLen=7
+I (22704) GUI: Measured word, width=143
+I (22707) GUI: Checked if word fits
+I (22711) GUI: Added word to current line
+I (22714) GUI: Advanced i to 246
+I (22717) GUI: Handled newline if present
+I (22721) GUI: Checked abort flag
+I (22724) GUI: Handled image placeholder
+I (22728) GUI: Handled math markers
+I (22731) GUI: Found next word boundary, wordLen=9
+I (22735) GUI: Measured word, width=216
+I (22739) GUI: Word does not fit, flushing current line
+I (22744) GUI: drawLine: Checking for RTL in line with 3 words
+I (22750) GUI: Drawing LTR word at x=20
+I (22754) GUI: Drawing LTR word at x=107
+I (22758) GUI: Drawing LTR word at x=230
+I (22762) GUI: Checked if word fits
+I (22763) GUI: Added word to current line
+I (22767) GUI: Advanced i to 256
+I (22770) GUI: Handled newline if present
+I (22774) GUI: Checked abort flag
+I (22777) GUI: Handled image placeholder
+I (22781) GUI: Handled math markers
+I (22784) GUI: Found next word boundary, wordLen=6
+I (22788) GUI: Measured word, width=135
+I (22792) GUI: Checked if word fits
+I (22795) GUI: Added word to current line
+I (22799) GUI: Advanced i to 263
+I (22802) GUI: drawLine: Checking for RTL in line with 2 words
+I (22807) GUI: Drawing LTR word at x=20
+I (22813) GUI: Drawing LTR word at x=251
+I (22826) GUI: RenderTask: Prev page rendered. Offset=0 Chars=263

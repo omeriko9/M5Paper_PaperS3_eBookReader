@@ -178,6 +178,14 @@ extern "C" void app_main(void)
     //     return; // Should not reach here
     // }
 
+
+    // set GUI log verbosity to warnings only:
+    //esp_log_level_set("GUI", ESP_LOG_WARN);
+    esp_log_level_set("GUI", ESP_LOG_INFO);
+    //esp_log_level_set("ZIP", ESP_LOG_WARN);
+    esp_log_level_set("ZIP", ESP_LOG_INFO);
+
+
     bool is_wake_from_sleep = (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0 || wakeup_reason == ESP_SLEEP_WAKEUP_EXT1);
 
     if (is_wake_from_sleep)

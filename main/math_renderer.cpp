@@ -780,9 +780,11 @@ void MathRenderer::layoutUnderOver(MathNode* node, LGFX_Device* gfx, float fontS
 void MathRenderer::calculateLayout(MathNode* root, LGFX_Device* gfx, float fontSize) {
     if (!root || !gfx) return;
     
-    if (mathFontData) {
-        gfx->loadFont(mathFontData);
-    }
+    // Note: Font loading is handled by the caller (GUI) to avoid
+    // redundant load/unload cycles.
+    // if (mathFontData) {
+    //    gfx->loadFont(mathFontData);
+    // }
     
     layoutNode(root, gfx, fontSize, 1.0f);
 }
@@ -968,9 +970,11 @@ MathRenderResult MathRenderer::render(MathNode* root, M5Canvas* canvas,
     
     if (!root || !canvas) return result;
     
-    if (mathFontData) {
-        canvas->loadFont(mathFontData);
-    }
+    // Note: Font loading is handled by the caller (GUI) to avoid
+    // redundant load/unload cycles that can cause crashes with VLWfont.
+    // if (mathFontData) {
+    //    canvas->loadFont(mathFontData);
+    // }
     
     // Render from baseline position
     int topY = y - root->box.baseline;

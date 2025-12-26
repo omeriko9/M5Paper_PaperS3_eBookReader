@@ -1,5 +1,6 @@
 #include "epub_loader.h"
 #include "image_handler.h"
+#include "html_utils.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include <stdio.h>
@@ -17,7 +18,7 @@ static const int PAGE_SIZE = 800; // Characters per page (approx)
 static const size_t INVALID_CHAPTER_LENGTH = std::numeric_limits<size_t>::max();
 
 // Forward declarations
-static std::string decodeHtmlEntities(const std::string& str);
+// static std::string decodeHtmlEntities(const std::string& str); // Now in html_utils.h
 
 struct SkipCheckContext {
     std::string buffer;
@@ -608,6 +609,8 @@ struct LoadChapterContext {
     size_t mathStartOffset;  // Where the math placeholder starts
     bool inStyle = false;
     bool inScript = false;
+    bool inEntity = false;
+    std::string currentEntity;
 };
 
 struct ChapterLengthContext {
@@ -723,46 +726,6 @@ static std::string extractAttribute(const std::string& tag, const std::string& a
     return tag.substr(pos, end - pos);
 }
 
-// Helper to decode HTML entities in a string
-static std::string decodeHtmlEntities(const std::string& str) {
-    std::string result;
-    result.reserve(str.length());
-    
-    for (size_t i = 0; i < str.length(); ++i) {
-        if (str[i] == '&') {
-            // Look for entity
-            size_t end = str.find(';', i);
-            if (end != std::string::npos && end - i < 10) {
-                std::string entity = str.substr(i + 1, end - i - 1);
-                if (entity == "amp") result += '&';
-                else if (entity == "lt") result += '<';
-                else if (entity == "gt") result += '>';
-                else if (entity == "quot") result += '"';
-                else if (entity == "apos") result += '\'';
-                else if (entity == "nbsp" || entity == "160") result += ' ';
-                else if (entity[0] == '#') {
-                    // Numeric entity
-                    int code = 0;
-                    if (entity[1] == 'x' || entity[1] == 'X') {
-                        code = strtol(entity.c_str() + 2, nullptr, 16);
-                    } else {
-                        code = atoi(entity.c_str() + 1);
-                    }
-                    if (code > 0 && code < 128) result += (char)code;
-                    else result += '?';
-                } else {
-                    // Unknown entity, keep as-is
-                    result += str.substr(i, end - i + 1);
-                }
-                i = end;
-                continue;
-            }
-        }
-        result += str[i];
-    }
-    return result;
-}
-
 // Helper to resolve relative image path
 static std::string resolveRelativePath(const std::string& basePath, const std::string& relativePath) {
     // Handle absolute paths (starting with /)
@@ -798,6 +761,12 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
     for (size_t i = 0; i < len; ++i) {
         char c = data[i];
         if (c == '<') {
+            if (context->inEntity) {
+                context->content->append("&");
+                context->content->append(context->currentEntity);
+                context->inEntity = false;
+                context->currentEntity.clear();
+            }
             context->inTag = true;
             context->currentTag.clear();
             continue;
@@ -1005,6 +974,42 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
             if (context->inStyle || context->inScript) {
                 continue;
             }
+
+            if (context->inEntity) {
+                if (c == ';') {
+                    std::string entity = "&" + context->currentEntity + ";";
+                    std::string decoded = decodeHtmlEntities(entity);
+                    context->inEntity = false;
+                    context->currentEntity.clear();
+                    
+                    for (char d : decoded) {
+                        if (d == ' ') {
+                            if (!context->lastSpace) {
+                                context->content->push_back(' ');
+                                context->lastSpace = true;
+                            }
+                        } else {
+                            context->content->push_back(d);
+                            context->lastSpace = false;
+                        }
+                    }
+                } else {
+                    context->currentEntity += c;
+                    if (context->currentEntity.length() > 32) {
+                        context->content->append("&");
+                        context->content->append(context->currentEntity);
+                        context->inEntity = false;
+                        context->currentEntity.clear();
+                    }
+                }
+                continue;
+            }
+
+            if (c == '&') {
+                context->inEntity = true;
+                context->currentEntity.clear();
+                continue;
+            }
             
             // Skip newlines in HTML source
             if (c == '\n' || c == '\r') {
@@ -1051,6 +1056,7 @@ void EpubLoader::loadChapter(int index) {
         // We might use less due to tag stripping, but over-reservation is safer than reallocation
         ESP_LOGI(TAG, "Reserving %u bytes for chapter", (unsigned)size);
         currentChapterContent.reserve(size);
+        ESP_LOGI(TAG, "Reserved %u bytes for chapter", (unsigned)size);
     } else {
         currentChapterContent.reserve(8192); 
     } 
@@ -1071,7 +1077,9 @@ void EpubLoader::loadChapter(int index) {
 
     // Stream process the HTML file directly from ZIP to text
     // This avoids loading the full HTML into memory
+    ESP_LOGI(TAG, "zip.extractFile: %s", spine[index].c_str());
     zip.extractFile(spine[index], loadChapterCallback, ctx);
+    ESP_LOGI(TAG, "After zip.extractFile");
 
     delete ctx;
 

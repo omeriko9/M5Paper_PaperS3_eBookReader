@@ -273,6 +273,14 @@ std::string ZipReader::extractFile(const std::string& filename) {
 
     std::string result;
     if (info.uncompressedSize > 0) {
+        // Check if we have enough memory to reserve
+        size_t free_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        if (info.uncompressedSize > free_block - 4096) { // Leave 4KB margin
+            ESP_LOGE(TAG, "Not enough memory to extract '%s' (needed %u, largest block %u)", 
+                     filename.c_str(), info.uncompressedSize, free_block);
+            fclose(f);
+            return "";
+        }
         result.reserve(info.uncompressedSize);
     }
     constexpr size_t IN_CHUNK = 2048;
@@ -338,6 +346,19 @@ std::string ZipReader::extractFile(const std::string& filename) {
 
             size_t have = OUT_CHUNK - strm.avail_out;
             if (have) {
+                // Check if appending would exceed memory (rough check)
+                if (result.capacity() < result.size() + have) {
+                    size_t free_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+                    size_t needed = result.size() + have - result.capacity();
+                    // Vector growth usually doubles, so we need more than just 'needed'
+                    if (needed > free_block) {
+                         ESP_LOGE(TAG, "OOM appending %u bytes for '%s'", (unsigned)have, filename.c_str());
+                         result.clear();
+                         inflateEnd(&strm);
+                         fclose(f);
+                         return "";
+                    }
+                }
                 result.append(reinterpret_cast<const char*>(outBuf.get()), have);
                 if (result.size() > MAX_INFLATE_OUTPUT) {
                     ESP_LOGE(TAG, "Inflated data too large for '%s' (%u bytes)", filename.c_str(), (unsigned)result.size());
@@ -366,6 +387,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
 }
 
 bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const char*, size_t, void*), void* context) {
+    ESP_LOGV(TAG, "extractFile with callback: %s", filename.c_str());
     esp_task_wdt_reset();
     const ZipFileInfo* infoPtr = findFile(filename);
     if (!infoPtr) {
@@ -375,14 +397,17 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
 
     const ZipFileInfo& info = *infoPtr;
     FILE* f = fopen(filePath.c_str(), "rb");
+    ESP_LOGV(TAG, "extractFile After fopen");
     if (!f) return false;
 
     esp_task_wdt_reset();
     // Go to Local File Header
     fseek(f, info.localHeaderOffset, SEEK_SET);
+    ESP_LOGV(TAG, "extractFile After fseek to LFH");
     
     uint32_t sig;
     fread(&sig, 1, 4, f);
+    ESP_LOGV(TAG, "extractFile After fread LFH sig");
     if (sig != LFH_SIGNATURE) {
         fclose(f);
         return false;
@@ -390,12 +415,16 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
 
     // Skip to name length in LFH
     fseek(f, 22, SEEK_CUR); // Skip to name len
+    ESP_LOGV(TAG, "extractFile After fseek to name len");
     uint16_t nameLen, extraLen;
     fread(&nameLen, 1, 2, f);
+    ESP_LOGV(TAG, "extractFile After fread name len");
     fread(&extraLen, 1, 2, f);
+    ESP_LOGV(TAG, "extractFile After fread extra len");
     
     // Skip name and extra field to get to data
     fseek(f, nameLen + extraLen, SEEK_CUR);
+    ESP_LOGV(TAG, "extractFile After fseek to data");
     
     size_t compressedSize = info.compressedSize;
     if (compressedSize == 0) {
@@ -418,11 +447,13 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
     }
 
     if (info.compressionMethod == 0) {
+        ESP_LOGV(TAG, "extractFile: Stored method");
         // Stored (no compression)
         size_t remaining = compressedSize;
         while (remaining > 0) {
             size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
             size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
+            ESP_LOGV(TAG, "extractFile: fread %u bytes", (unsigned)bytesRead);
             if (bytesRead == 0) break;
             
             if (!callback(reinterpret_cast<const char*>(inBuf.get()), bytesRead, context)) {
@@ -436,6 +467,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             }
         }
     } else if (info.compressionMethod == 8) {
+        ESP_LOGV(TAG, "extractFile: Deflate method");
         // Deflate streaming
         z_stream strm;
         memset(&strm, 0, sizeof(strm));
@@ -455,6 +487,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
                     ESP_LOGE(TAG, "Unexpected EOF while inflating '%s'", filename.c_str());
                     break;
                 }
+                ESP_LOGV(TAG, "extractFile: fread %u bytes for inflate", (unsigned)bytesRead);
                 remaining -= bytesRead;
                 strm.next_in = inBuf.get();
                 strm.avail_in = bytesRead;
@@ -463,6 +496,9 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             strm.next_out = outBuf.get();
             strm.avail_out = OUT_CHUNK;
             ret = inflate(&strm, remaining ? Z_NO_FLUSH : Z_FINISH);
+            ESP_LOGV(TAG, "extractFile: inflate returned %d", ret);
+            esp_task_wdt_reset();
+            vTaskDelay(1);
 
             size_t have = OUT_CHUNK - strm.avail_out;
             if (have) {
@@ -487,11 +523,13 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
         }
 
         inflateEnd(&strm);
+        ESP_LOGV(TAG, "extractFile: Finished inflate");
     } else {
         ESP_LOGE(TAG, "Unsupported compression method: %u", info.compressionMethod);
     }
 
     fclose(f);
+    ESP_LOGV(TAG, "extractFile: Completed extraction of %s", filename.c_str());
     return true;
 }
 

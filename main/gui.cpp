@@ -2,6 +2,7 @@
 #include "web_server.h"
 #include "epub_loader.h"
 #include "math_renderer.h"
+#include "html_utils.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "wifi_manager.h"
@@ -93,6 +94,7 @@ struct SettingsLayout
     int row4Y;
     int row5Y;
     int row6Y; // For favorite toggle
+    int row7Y; // For refresh toggle
     int closeY;
     int buttonGap;
     int fontButtonW;
@@ -122,6 +124,7 @@ static SettingsLayout computeSettingsLayout()
     l.row4Y = l.row3Y + l.rowHeight;
     l.row5Y = l.row4Y + l.rowHeight;
     l.row6Y = l.row5Y + l.rowHeight; // Favorite row
+    l.row7Y = l.row6Y + l.rowHeight; // Refresh row
     l.closeY = l.panelTop + l.panelHeight - 60;
     l.buttonGap = 20;
     l.fontButtonW = 80;
@@ -389,66 +392,74 @@ static std::string reshapeArabic(const std::string &text)
     return result;
 }
 
-// Helper to check if a character is an ASCII digit
-static bool isAsciiDigit(unsigned char c)
+
+static inline uint8_t utf8LeadLen(uint8_t c)
 {
-    return c >= '0' && c <= '9';
+    if ((c & 0x80) == 0x00) return 1;        // 0xxxxxxx
+    if ((c & 0xE0) == 0xC0) return 2;        // 110xxxxx
+    if ((c & 0xF0) == 0xE0) return 3;        // 1110xxxx
+    if ((c & 0xF8) == 0xF0) return 4;        // 11110xxx
+    return 0;                                // invalid lead byte
 }
 
 static std::string reverseHebrewWord(const std::string &text)
 {
-    // When reversing Hebrew text for RTL display, we need to keep digit sequences
-    // in their original order (LTR). For example, "123" in Hebrew text should
-    // remain "123", not become "321".
+    const char* s = text.data();
+    const size_t n = text.size();
 
-    std::string reversed;
-    reversed.reserve(text.length());
+    std::string out;
+    out.reserve(n);
 
-    std::string currentDigitSequence;
-
-    for (size_t i = 0; i < text.length();)
+    size_t i = n;
+    while (i > 0)
     {
-        unsigned char c = (unsigned char)text[i];
-        size_t charLen = 1;
-        if ((c & 0x80) == 0)
-            charLen = 1;
-        else if ((c & 0xE0) == 0xC0)
-            charLen = 2;
-        else if ((c & 0xF0) == 0xE0)
-            charLen = 3;
-        else if ((c & 0xF8) == 0xF0)
-            charLen = 4;
+        const uint8_t b = (uint8_t)s[i - 1];
 
-        if (i + charLen > text.length())
-            break;
-
-        // Check if this is an ASCII digit (single byte)
-        if (charLen == 1 && isAsciiDigit(c))
+        // Fast path: ASCII digit run (keep order, but move as a block)
+        if (b >= (uint8_t)'0' && b <= (uint8_t)'9')
         {
-            // Accumulate digits
-            currentDigitSequence += text[i];
+            size_t j = i - 1;
+            while (j > 0 && ((uint8_t)s[j - 1] >= (uint8_t)'0' && (uint8_t)s[j - 1] <= (uint8_t)'9')) --j;
+            out.append(s + j, i - j);
+            i = j;
+            continue;
+        }
+
+        // ASCII non-digit
+        if (b < 0x80)
+        {
+            out.push_back((char)b);
+            --i;
+            continue;
+        }
+
+        // UTF-8: walk back over up to 3 continuation bytes to find a lead byte.
+        size_t k = i - 1;
+        int cont = 0;
+        while (k > 0 && (((uint8_t)s[k] & 0xC0) == 0x80) && cont < 3)
+        {
+            --k;
+            ++cont;
+        }
+
+        const uint8_t lead = (uint8_t)s[k];
+        const uint8_t len  = utf8LeadLen(lead);
+
+        // Validate shape: lead length matches the end position.
+        if (len != 0 && k + len == i)
+        {
+            out.append(s + k, len);
+            i = k;
         }
         else
         {
-            // If we have accumulated digits, insert them as a group first
-            if (!currentDigitSequence.empty())
-            {
-                reversed.insert(0, currentDigitSequence);
-                currentDigitSequence.clear();
-            }
-            // Insert the current character at the beginning (reversing)
-            reversed.insert(0, text.substr(i, charLen));
+            // Invalid UTF-8 tail or mismatch: degrade gracefully, byte-by-byte.
+            out.push_back((char)b);
+            --i;
         }
-        i += charLen;
     }
 
-    // Don't forget any trailing digits
-    if (!currentDigitSequence.empty())
-    {
-        reversed.insert(0, currentDigitSequence);
-    }
-
-    return reversed;
+    return out;
 }
 
 static std::string swapMirroredChars(const std::string &text)
@@ -458,14 +469,30 @@ static std::string swapMirroredChars(const std::string &text)
     {
         switch (result[i])
         {
-        case '(': result[i] = ')'; break;
-        case ')': result[i] = '('; break;
-        case '[': result[i] = ']'; break;
-        case ']': result[i] = '['; break;
-        case '{': result[i] = '}'; break;
-        case '}': result[i] = '{'; break;
-        case '<': result[i] = '>'; break;
-        case '>': result[i] = '<'; break;
+        case '(':
+            result[i] = ')';
+            break;
+        case ')':
+            result[i] = '(';
+            break;
+        case '[':
+            result[i] = ']';
+            break;
+        case ']':
+            result[i] = '[';
+            break;
+        case '{':
+            result[i] = '}';
+            break;
+        case '}':
+            result[i] = '{';
+            break;
+        case '<':
+            result[i] = '>';
+            break;
+        case '>':
+            result[i] = '<';
+            break;
         }
     }
     return result;
@@ -523,18 +550,7 @@ static std::string processTextForDisplay(const std::string &text)
         if (isHeb || isAra)
         {
             // Replace HTML entities before reversing
-            size_t pos = 0;
-            while ((pos = processedWord.find("&quot;", pos)) != std::string::npos) { processedWord.replace(pos, 6, "\""); pos += 1; }
-            pos = 0;
-            while ((pos = processedWord.find("&amp;", pos)) != std::string::npos) { processedWord.replace(pos, 5, "&"); pos += 1; }
-            pos = 0;
-            while ((pos = processedWord.find("&lt;", pos)) != std::string::npos) { processedWord.replace(pos, 4, "<"); pos += 1; }
-            pos = 0;
-            while ((pos = processedWord.find("&gt;", pos)) != std::string::npos) { processedWord.replace(pos, 4, ">"); pos += 1; }
-            pos = 0;
-            while ((pos = processedWord.find("&apos;", pos)) != std::string::npos) { processedWord.replace(pos, 6, "'"); pos += 1; }
-            pos = 0;
-            while ((pos = processedWord.find("&#160;", pos)) != std::string::npos) { processedWord.replace(pos, 6, " "); pos += 1; }
+            processedWord = decodeHtmlEntities(processedWord);
 
             if (isAra)
             {
@@ -925,12 +941,12 @@ void GUI::backgroundIndexerTaskLoop()
     {
         waitForBookOpen();
         ESP_LOGI(TAG, "BgIndexer: Loading book index...");
-        bookIndex.init(false, [this](int current, int total, const char *msg) {
+        bookIndex.init(false, [this](int current, int total, const char *msg)
+                       {
             if (currentState == AppState::LIBRARY || currentState == AppState::MAIN_MENU) {
                 needsRedraw = true;
             }
-            esp_task_wdt_reset();
-        });
+            esp_task_wdt_reset(); });
         bookIndexReady = true;
 
         if (pendingBookIndexSync && pendingBookId > 0)
@@ -991,9 +1007,10 @@ void GUI::backgroundIndexerTaskLoop()
             lastRedraw = now;
         }
         esp_task_wdt_reset(); },
-        [this]() {
-            return bookOpenInProgress || renderingInProgress;
-        });
+                                                   [this]()
+                                                   {
+                                                       return bookOpenInProgress || renderingInProgress;
+                                                   });
     indexingScanActive = false;
 
     if (newBooksFound)
@@ -1007,7 +1024,7 @@ void GUI::backgroundIndexerTaskLoop()
     auto books = bookIndex.getBooks();
     bool indexNeedsSave = false;
     int updatesCount = 0;
-    
+
     indexingProcessingActive = true;
     indexingTotal = books.size();
     int processedCount = 0;
@@ -1018,10 +1035,11 @@ void GUI::backgroundIndexerTaskLoop()
     {
         processedCount++;
         indexingCurrent = processedCount;
-        
+
         // Throttle redraws
         uint32_t now = xTaskGetTickCount();
-        if (currentState == AppState::MAIN_MENU && (now - lastRedrawTime > pdMS_TO_TICKS(1000))) {
+        if (currentState == AppState::MAIN_MENU && (now - lastRedrawTime > pdMS_TO_TICKS(1000)))
+        {
             needsRedraw = true;
             lastRedrawTime = now;
         }
@@ -1030,7 +1048,7 @@ void GUI::backgroundIndexerTaskLoop()
         {
             waitForBookOpen();
         }
-        
+
         // Yield to UI task
         vTaskDelay(pdMS_TO_TICKS(10));
 
@@ -1061,9 +1079,10 @@ void GUI::backgroundIndexerTaskLoop()
                 bookIndex.updateBookMetricsFlag(book.id, true);
                 indexNeedsSave = true;
                 updatesCount++;
-                
+
                 // Save periodically to avoid losing progress on crash/reboot
-                if (updatesCount >= 20) {
+                if (updatesCount >= 20)
+                {
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1097,12 +1116,14 @@ void GUI::backgroundIndexerTaskLoop()
                     // Yield frequently to keep UI responsive
                     vTaskDelay(pdMS_TO_TICKS(5));
 
-                    if (i % 10 == 0) {
+                    if (i % 10 == 0)
+                    {
                         ESP_LOGI(TAG, "BgIndexer: Processing chapter %d/%d", i, chapters);
                     }
 
                     // Timeout check
-                    if ((uint32_t)(esp_timer_get_time() / 1000) - bookStartTime > 10 * 60 * 1000) {
+                    if ((uint32_t)(esp_timer_get_time() / 1000) - bookStartTime > 10 * 60 * 1000)
+                    {
                         ESP_LOGW(TAG, "BgIndexer: Book processing timed out, skipping");
                         localLoader.close();
                         goto next_book;
@@ -1145,9 +1166,9 @@ void GUI::backgroundIndexerTaskLoop()
                         // Re-check if we should abort in case state changed while waiting
                         if (currentState == AppState::READER && currentBook.id == book.id)
                         {
-                             ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it (after render wait)", book.id);
-                             localLoader.close();
-                             goto next_book;
+                            ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it (after render wait)", book.id);
+                            localLoader.close();
+                            goto next_book;
                         }
                     }
 
@@ -1160,15 +1181,16 @@ void GUI::backgroundIndexerTaskLoop()
                 bookIndex.saveBookMetrics(book.id, cumulative, sums, false);
                 indexNeedsSave = true;
                 updatesCount++;
-                
+
                 // Save periodically
-                if (updatesCount >= 5) { // Save more frequently for expensive operations
+                if (updatesCount >= 5)
+                { // Save more frequently for expensive operations
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
                     indexNeedsSave = false;
                 }
-                
+
                 localLoader.close();
             }
             else
@@ -1180,17 +1202,18 @@ void GUI::backgroundIndexerTaskLoop()
 
         next_book:
             vTaskDelay(pdMS_TO_TICKS(100)); // Rest between books
-
         }
     }
 
-    if (indexNeedsSave) {
+    if (indexNeedsSave)
+    {
         ESP_LOGI(TAG, "BgIndexer: Saving updated index with found metrics...");
         bookIndex.save();
     }
 
     indexingProcessingActive = false;
-    if (currentState == AppState::MAIN_MENU) needsRedraw = true;
+    if (currentState == AppState::MAIN_MENU)
+        needsRedraw = true;
 
     ESP_LOGI(TAG, "BgIndexer finished");
     backgroundIndexerTaskHandle = nullptr;
@@ -1256,7 +1279,7 @@ void GUI::update()
             // The deep sleep will kill all tasks.
             // Ideally we should signal it to stop, but for now let's just sleep.
         }
-        
+
         buttonSleepRequested = false;
         ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
         goToSleep();
@@ -1289,7 +1312,7 @@ void GUI::update()
 
     // Unified Sleep and WebServer Logic
     uint32_t idleTimeout = lightSleepMinutes * 60 * 1000; // Use user setting
-    
+
     if (!indexingActive && now - lastActivityTime > idleTimeout && !recentHttpActivity)
     {
         if (currentState == AppState::LIBRARY && webServerEnabled)
@@ -2134,33 +2157,62 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
     // Pre-cache chapter images and math to avoid repeated mutex acquisitions during rendering
     // This is a major performance optimization
+    // Only cache items relevant to the current page to save memory and avoid OOM
     std::vector<EpubImage> cachedImages;
     std::vector<EpubMath> cachedMath;
     if (takeEpubMutexWithWdt(epubMutex, abort))
     {
-        cachedImages = epubLoader.getChapterImages();
-        cachedMath = epubLoader.getChapterMath();
+        const auto &allImages = epubLoader.getChapterImages();
+        const auto &allMath = epubLoader.getChapterMath();
+
+        // Estimate page range - 4000 chars should cover even dense pages (fetched text is 3000)
+        size_t endOffset = startOffset + 4000;
+
+        // Reserve some space to avoid reallocations, but keep it small
+        cachedImages.reserve(std::min(allImages.size(), (size_t)10));
+        for (const auto &img : allImages)
+        {
+            if (img.textOffset >= startOffset && img.textOffset < endOffset)
+            {
+                cachedImages.push_back(img);
+            }
+        }
+
+        cachedMath.reserve(std::min(allMath.size(), (size_t)20));
+        for (const auto &m : allMath)
+        {
+            if (m.textOffset >= startOffset && m.textOffset < endOffset)
+            {
+                cachedMath.push_back(m);
+            }
+        }
         xSemaphoreGive(epubMutex);
     }
-    
+
     // Lambda to find image at offset from cache (no mutex needed)
-    auto findCachedImage = [&cachedImages, startOffset](size_t textOffset, size_t tolerance) -> const EpubImage* {
-        for (const auto& img : cachedImages) {
-            if (img.textOffset >= startOffset && 
+    auto findCachedImage = [&cachedImages, startOffset](size_t textOffset, size_t tolerance) -> const EpubImage *
+    {
+        for (const auto &img : cachedImages)
+        {
+            if (img.textOffset >= startOffset &&
                 img.textOffset <= textOffset + tolerance &&
-                img.textOffset + tolerance >= textOffset) {
+                img.textOffset + tolerance >= textOffset)
+            {
                 return &img;
             }
         }
         return nullptr;
     };
-    
+
     // Lambda to find math at offset from cache (no mutex needed)
-    auto findCachedMath = [&cachedMath, startOffset](size_t textOffset, size_t tolerance) -> const EpubMath* {
-        for (const auto& m : cachedMath) {
-            if (m.textOffset >= startOffset && 
+    auto findCachedMath = [&cachedMath, startOffset](size_t textOffset, size_t tolerance) -> const EpubMath *
+    {
+        for (const auto &m : cachedMath)
+        {
+            if (m.textOffset >= startOffset &&
                 m.textOffset <= textOffset + tolerance &&
-                m.textOffset + tolerance >= textOffset) {
+                m.textOffset + tolerance >= textOffset)
+            {
                 return &m;
             }
         }
@@ -2188,12 +2240,15 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         bool isRTL = isRTLDocument;
         if (!isRTL)
         {
+            ESP_LOGI(TAG, "drawLine: Checking for RTL in line with %zu words", line.size());
             for (const auto &p : line)
             {
-                if (std::get<2>(p)) continue; // Skip math for RTL check
+                if (std::get<2>(p))
+                    continue; // Skip math for RTL check
                 // Check if word is Hebrew
                 size_t len = std::get<1>(p);
-                if (len == 0) continue; // Skip math blocks (length=0 marks MathML)
+                if (len == 0)
+                    continue; // Skip math blocks (length=0 marks MathML)
                 const char *wordStart = text.c_str() + std::get<0>(p);
                 for (size_t k = 0; k < len; ++k)
                 {
@@ -2219,67 +2274,69 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             bool isMath = std::get<2>(p);
             size_t wordOffset = std::get<0>(p);
             size_t wordLen = std::get<1>(p);
-            
+
             // Handle inline MathML blocks (marked by isMath=true and wordLen=0)
-            if (isMath && wordLen == 0) {
+            if (isMath && wordLen == 0)
+            {
                 // Look up the MathML content from cache (no mutex needed)
                 size_t mathTextOffset = startOffset + wordOffset;
-                const EpubMath* mathBlock = findCachedMath(mathTextOffset, 10);
-                
-                if (mathBlock && !mathBlock->mathml.empty()) {
+                ESP_LOGI(TAG, "drawLine: Inline math at text offset %zu", mathTextOffset);
+                const EpubMath *mathBlock = findCachedMath(mathTextOffset, 10);
+
+                if (mathBlock && !mathBlock->mathml.empty())
+                {
                     int mathWidth = 0, mathHeight = 0;
                     // Render inline math at baseline
-                    renderMathInline(mathBlock->mathml, (M5Canvas*)target, startX, currentY, maxWidth, mathWidth, mathHeight);
-                    
-                    if (isRTL) {
+                    ESP_LOGI(TAG, "drawLine: Measuring math block");
+                    renderMathInline(mathBlock->mathml, (M5Canvas *)target, startX, currentY, maxWidth, mathWidth, mathHeight);
+
+                    if (debugWordsLogged < 20)
+                    {
+                        ESP_LOGI(TAG, "drawLine: MATH w=%d h=%d startX=%d y=%d", mathWidth, mathHeight, startX, currentY);
+                    }
+
+                    // Restore book font because renderMathInline switched to Math font
+                    if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+                    {
+                        gfx->loadFont(fontDataHebrew.data());
+                    }
+                    else if (currentFont != "Default" && !fontData.empty())
+                    {
+                        gfx->loadFont(fontData.data());
+                    }
+                    else
+                    {
+                        gfx->unloadFont();
+                    }
+                    gfx->setTextSize(fontSize);
+
+                    if (isRTL)
+                    {
                         startX -= (mathWidth + spaceW);
-                    } else {
+                    }
+                    else
+                    {
                         startX += (mathWidth + spaceW);
                     }
                 }
                 continue;
             }
-            
+
             std::string displayWord = text.substr(wordOffset, wordLen);
-            
-            if (isMath) {
+
+            if (isMath)
+            {
                 // Old-style math word (should not happen with new code, but keep for safety)
-                if (!fontDataMath.empty()) {
+                if (!fontDataMath.empty())
+                {
                     gfx->loadFont(fontDataMath.data());
                 }
-            } else if (isHebrew(displayWord))
+            }
+            else if (isHebrew(displayWord))
             {
                 // Replace HTML entities
-                size_t pos = 0;
-                while ((pos = displayWord.find("&quot;", pos)) != std::string::npos)
-                {
-                    displayWord.replace(pos, 6, "\"");
-                    pos += 1;
-                }
-                pos = 0;
-                while ((pos = displayWord.find("&amp;", pos)) != std::string::npos)
-                {
-                    displayWord.replace(pos, 5, "&");
-                    pos += 1;
-                }
-                pos = 0;
-                while ((pos = displayWord.find("&lt;", pos)) != std::string::npos)
-                {
-                    displayWord.replace(pos, 4, "<");
-                    pos += 1;
-                }
-                pos = 0;
-                while ((pos = displayWord.find("&gt;", pos)) != std::string::npos)
-                {
-                    displayWord.replace(pos, 4, ">");
-                    pos += 1;
-                }
-                pos = 0;
-                while ((pos = displayWord.find("&apos;", pos)) != std::string::npos)
-                {
-                    displayWord.replace(pos, 6, "'");
-                    pos += 1;
-                }
+                displayWord = decodeHtmlEntities(displayWord);
+                ESP_LOGI(TAG, "drawLine: Hebrew word before reverse: '%s'", displayWord.c_str());
                 displayWord = reverseHebrewWord(displayWord);
             }
 
@@ -2290,33 +2347,42 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
             if (debugWordsLogged < 6)
             {
-                ESP_LOGI(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), w, spaceWLocal, isRTL, startX, currentY);
+                ESP_LOGV(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), w, spaceWLocal, isRTL, startX, currentY);
                 debugWordsLogged++;
             }
 
             if (isRTL)
             {
+                ESP_LOGV(TAG, "Drawing RTL word at x=%d", startX - w);
                 drawStringMixed(displayWord, startX - w, currentY, (M5Canvas *)target, fontSize, true);
                 startX -= (w + spaceWLocal);
             }
             else
             {
+                ESP_LOGV(TAG, "Drawing LTR word at x=%d", startX);
                 drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target, fontSize, true);
                 startX += (w + spaceWLocal);
             }
-            
-            if (isMath) {
+
+            if (isMath)
+            {
+                ESP_LOGI(TAG, "isMath true, loading font");
                 // Restore book font
-                if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+                if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+                {
                     gfx->loadFont(fontDataHebrew.data());
-                } else if (currentFont != "Default" && !fontData.empty()) {
+                }
+                else if (currentFont != "Default" && !fontData.empty())
+                {
                     gfx->loadFont(fontData.data());
-                } else {
+                }
+                else
+                {
                     gfx->unloadFont();
                 }
+                ESP_LOGI(TAG, "Font restored after math word");
             }
         }
-
     };
 
     int linesDrawn = 0;
@@ -2326,15 +2392,16 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         if (abort && *abort)
         {
             if (draw)
+            {
+                ESP_LOGI(TAG, "Aborting page render");
                 gfx->endWrite();
+            }
             return 0;
         }
+        ESP_LOGV(TAG, "Checked abort flag");
 
-        // Reset watchdog periodically during long rendering
-        if (linesDrawn % 5 == 0)
-        {
-            esp_task_wdt_reset();
-        }
+        // Reset watchdog on every iteration to prevent WDT timeouts during heavy logging/processing
+        esp_task_wdt_reset();
 
         // Check for image placeholder character (U+E000 = \xEE\x80\x80)
         if (i + IMAGE_PLACEHOLDER_LEN <= text.length() &&
@@ -2352,47 +2419,52 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             size_t imageOffset = startOffset + i;
             const EpubImage *image = findCachedImage(imageOffset, 10);
 
-            if (!image) {
+            if (!image)
+            {
                 i += IMAGE_PLACEHOLDER_LEN;
                 continue;
             }
 
             // Check if this is an inline math image (small symbol to render inline with text)
-            bool isInlineImage = image->isInlineMath || (!image->isBlock && 
-                                 ((image->width > 0 && image->width < 80) || 
-                                  (image->height > 0 && image->height < 40)));
-            
-            if (isInlineImage) {
+            bool isInlineImage = image->isInlineMath || (!image->isBlock &&
+                                                         ((image->width > 0 && image->width < 80) ||
+                                                          (image->height > 0 && image->height < 40)));
+
+            if (isInlineImage)
+            {
                 // For inline images (like math symbols), render inline with text
                 // We'll add this to the current line similar to how math is handled
-                
+
                 // Calculate inline image constraints - scale to fit line height
                 int inlineMaxHeight = lineHeight * 0.9; // Slightly smaller than line height
                 int inlineMaxWidth = maxWidth / 3;
-                
+
                 // For measurement, estimate width based on known dimensions or default
-                int estimatedWidth = image->width > 0 ? 
-                    std::min(image->width, inlineMaxWidth) : 
-                    lineHeight; // Default to square if unknown
-                
+                int estimatedWidth = image->width > 0 ? std::min(image->width, inlineMaxWidth) : lineHeight; // Default to square if unknown
+
                 // Check if it fits on current line
-                if (currentLineWidth + estimatedWidth > maxWidth && !currentLine.empty()) {
+                if (currentLineWidth + estimatedWidth > maxWidth && !currentLine.empty())
+                {
                     // Flush current line and start new one
+                    ESP_LOGV(TAG, "Inline image does not fit, flushing current line");
                     drawLine(currentLine, currentLineXOffset);
                     linesDrawn++;
                     currentLine.clear();
                     currentLineWidth = 0;
                     currentLineXOffset = 0;
                     currentY += lineHeight;
-                    
-                    if (currentY + lineHeight > maxY) {
+
+                    if (currentY + lineHeight > maxY)
+                    {
                         break; // Page full
                     }
                 }
-                
-                if (draw) {
+
+                if (draw)
+                {
                     // Flush any pending text before drawing the image
-                    if (!currentLine.empty()) {
+                    if (!currentLine.empty())
+                    {
                         drawLine(currentLine, currentLineXOffset);
                         currentLine.clear();
                         // Update offset for next segment (skip what we just drew)
@@ -2401,29 +2473,37 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
                     // Extract and render inline image
                     std::vector<uint8_t> imageData;
+                    ESP_LOGV(TAG, "Allocated imageData vector for inline image");
                     bool extracted = false;
                     bool resumeWrite = false;
-                    if (target == nullptr && gfx->isEPD()) {
+                    if (target == nullptr && gfx->isEPD())
+                    {
                         gfx->endWrite();
                         resumeWrite = true;
                     }
-                    if (takeEpubMutexWithWdt(epubMutex, abort)) {
+                    if (takeEpubMutexWithWdt(epubMutex, abort))
+                    {
                         extracted = epubLoader.extractImage(image->path, imageData);
                         xSemaphoreGive(epubMutex);
                     }
-                    if (resumeWrite) {
+                    ESP_LOGV(TAG, "Extracted inline image data, extracted=%d", extracted);
+                    if (resumeWrite)
+                    {
                         gfx->startWrite();
                         gfx->setTextColor(TFT_BLACK, TFT_WHITE);
                     }
+                    ESP_LOGV(TAG, "Resumed write if needed for inline image");
 
-                    if (extracted && !imageData.empty()) {
+                    if (extracted && !imageData.empty())
+                    {
                         ImageHandler &imgHandler = ImageHandler::getInstance();
+                        ESP_LOGV(TAG, "Got ImageHandler instance for inline image");
                         // Calculate X position based on current line width
-                        int imgX = (isRTLDocument ? (width - rightMargin - currentLineWidth - estimatedWidth) : 
-                                                    (x + currentLineWidth));
+                        int imgX = (isRTLDocument ? (width - rightMargin - currentLineWidth - estimatedWidth) : (x + currentLineWidth));
                         // Vertically center the image on the baseline
                         int imgY = currentY + (lineHeight - inlineMaxHeight) / 2;
-                        if (imgY < currentY) imgY = currentY;
+                        if (imgY < currentY)
+                            imgY = currentY;
 
                         ImageDecodeResult result = imgHandler.decodeAndRender(
                             imageData.data(), imageData.size(),
@@ -2431,14 +2511,18 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             inlineMaxWidth, inlineMaxHeight,
                             ImageDisplayMode::INLINE);
 
-                        if (result.success) {
+                        if (result.success)
+                        {
+                            ESP_LOGV(TAG, "Rendered inline image at (%d,%d) size=%dx%d", imgX, imgY, result.scaledWidth, result.scaledHeight);
                             // Update estimated width with actual rendered width
                             estimatedWidth = result.scaledWidth;
-                            
+
                             // Track for tap detection
-                            if (target == nullptr) {
+                            if (target == nullptr)
+                            {
                                 RenderedImageInfo ri;
-                                ri.x = imgX; ri.y = imgY;
+                                ri.x = imgX;
+                                ri.y = imgY;
                                 ri.width = result.scaledWidth;
                                 ri.height = result.scaledHeight;
                                 ri.image = *image;
@@ -2447,16 +2531,16 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                         }
                     }
                 }
-                
+
                 // Advance cursor past the image
                 currentLineWidth += estimatedWidth + 5; // Add small spacing
                 // Update offset for next text segment to start after image
                 currentLineXOffset = currentLineWidth;
-                
+
                 i += IMAGE_PLACEHOLDER_LEN;
                 continue;
             }
-            
+
             // Block image - flush current line first
             if (!currentLine.empty())
             {
@@ -2470,6 +2554,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
             if (draw)
             {
+
                 // Calculate image dimensions
                 int imgMaxWidth = maxWidth;
                 int imgMaxHeight = maxY - currentY;
@@ -2529,7 +2614,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
                             // Move Y past the image
                             currentY += result.scaledHeight + 10;
-                            ESP_LOGI(TAG, "Rendered block image at Y=%d, size=%dx%d",
+                            ESP_LOGV(TAG, "Rendered block image at Y=%d, size=%dx%d",
                                      imgY, result.scaledWidth, result.scaledHeight);
                         }
                         else
@@ -2575,23 +2660,29 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
             continue; // Continue to next word/element
         }
+        ESP_LOGV(TAG, "Handled image placeholder");
 
         // Check for math markers - render MathML blocks properly
-        if (i + MATH_MARKER_LEN <= text.length()) {
-            if (text.compare(i, MATH_MARKER_LEN, MATH_START) == 0) {
+        if (i + MATH_MARKER_LEN <= text.length())
+        {
+            if (text.compare(i, MATH_MARKER_LEN, MATH_START) == 0)
+            {
                 // Look up the MathML content using cached lookup (no mutex needed)
                 size_t mathTextOffset = startOffset + i;
-                const EpubMath* mathBlock = findCachedMath(mathTextOffset, 10);
-                
-                if (mathBlock && !mathBlock->mathml.empty()) {
+                const EpubMath *mathBlock = findCachedMath(mathTextOffset, 10);
+
+                if (mathBlock && !mathBlock->mathml.empty())
+                {
                     // Measure the math content
                     int mathWidth = 0, mathHeight = 0, mathBaseline = 0;
                     measureMath(mathBlock->mathml, mathWidth, mathHeight, mathBaseline);
-                    
+
                     // For block math, center it on its own line
-                    if (mathBlock->isBlock) {
+                    if (mathBlock->isBlock)
+                    {
                         // Flush current line first
-                        if (!currentLine.empty()) {
+                        if (!currentLine.empty())
+                        {
                             drawLine(currentLine, currentLineXOffset);
                             linesDrawn++;
                             currentLine.clear();
@@ -2599,28 +2690,50 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             currentLineXOffset = 0;
                             currentY += lineHeight;
                         }
-                        
+
                         // Check if math block fits on page
-                        if (currentY + mathHeight > maxY) {
+                        if (currentY + mathHeight > maxY)
+                        {
                             break; // Page full
                         }
-                        
+
                         // Center the math
                         int mathX = x + (maxWidth - mathWidth) / 2;
-                        
-                        if (draw && target) {
+
+                        if (draw && target)
+                        {
                             int dummy1, dummy2;
-                            renderMathInline(mathBlock->mathml, (M5Canvas*)target, mathX, currentY + mathBaseline, maxWidth, dummy1, dummy2);
-                        } else if (draw) {
+                            renderMathInline(mathBlock->mathml, (M5Canvas *)target, mathX, currentY + mathBaseline, maxWidth, dummy1, dummy2);
+                        }
+                        else if (draw)
+                        {
                             int dummy1, dummy2;
-                            M5Canvas* mainCanvas = nullptr;
+                            M5Canvas *mainCanvas = nullptr;
                             renderMathInline(mathBlock->mathml, mainCanvas, mathX, currentY + mathBaseline, maxWidth, dummy1, dummy2);
                         }
-                        
-                        currentY += mathHeight + lineHeight / 2;  // Add some spacing
-                    } else {
+
+                        // Restore book font after block math rendering
+                        if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+                        {
+                            gfx->loadFont(fontDataHebrew.data());
+                        }
+                        else if (currentFont != "Default" && !fontData.empty())
+                        {
+                            gfx->loadFont(fontData.data());
+                        }
+                        else
+                        {
+                            gfx->unloadFont();
+                        }
+                        gfx->setTextSize(fontSize);
+
+                        currentY += mathHeight + lineHeight / 2; // Add some spacing
+                    }
+                    else
+                    {
                         // Inline math - check if it fits on current line
-                        if (currentLineWidth + mathWidth > maxWidth) {
+                        if (currentLineWidth + mathWidth > maxWidth)
+                        {
                             // Doesn't fit - flush line first
                             drawLine(currentLine, currentLineXOffset);
                             linesDrawn++;
@@ -2628,50 +2741,60 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             currentLineWidth = 0;
                             currentLineXOffset = 0;
                             currentY += lineHeight;
-                            
-                            if (currentY + lineHeight > maxY) {
+
+                            if (currentY + lineHeight > maxY)
+                            {
                                 break; // Page full
                             }
                         }
-                        
+
                         // Add as a special math entry - use negative length to mark as math block index
                         // We'll store the text offset so drawLine can find the math
-                        currentLine.emplace_back(i, 0, true);  // length=0 marks as MathML block
+                        currentLine.emplace_back(i, 0, true); // length=0 marks as MathML block
                         currentLineWidth += mathWidth + gfx->textWidth(" ");
                     }
                 }
-                
+
                 // Skip to MATH_END
                 size_t mathEndPos = text.find(MATH_END, i);
-                if (mathEndPos != std::string::npos) {
+                if (mathEndPos != std::string::npos)
+                {
                     i = mathEndPos + MATH_MARKER_LEN;
-                } else {
+                }
+                else
+                {
                     i += MATH_MARKER_LEN;
                 }
                 inMathMode = false;
                 continue;
             }
-            if (text.compare(i, MATH_MARKER_LEN, MATH_END) == 0) {
+            if (text.compare(i, MATH_MARKER_LEN, MATH_END) == 0)
+            {
                 inMathMode = false;
                 i += MATH_MARKER_LEN;
                 continue;
             }
         }
+        ESP_LOGV(TAG, "Handled math markers");
 
         // Find next word boundary
         size_t nextSpace = text.find_first_of(" \n", i);
         size_t nextMathStart = text.find(MATH_START, i);
         size_t nextMathEnd = text.find(MATH_END, i);
-        
+
         size_t boundary = nextSpace;
-        if (boundary == std::string::npos) boundary = text.length();
-        
-        if (nextMathStart != std::string::npos && nextMathStart < boundary) boundary = nextMathStart;
-        if (nextMathEnd != std::string::npos && nextMathEnd < boundary) boundary = nextMathEnd;
+        if (boundary == std::string::npos)
+            boundary = text.length();
+
+        if (nextMathStart != std::string::npos && nextMathStart < boundary)
+            boundary = nextMathStart;
+        if (nextMathEnd != std::string::npos && nextMathEnd < boundary)
+            boundary = nextMathEnd;
 
         bool isNewline = (boundary < text.length() && text[boundary] == '\n');
 
         size_t wordLen = boundary - i;
+        ESP_LOGV(TAG, "Found next word boundary, wordLen=%zu", wordLen);
 
         // Measure word using reusable buffer
         tempWord.assign(text, i, wordLen);
@@ -2682,11 +2805,13 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
         // Make sure we measure with the same font that will be used to draw the word.
         bool swappedFont = false;
-        if (inMathMode && !fontDataMath.empty()) {
-             gfx->loadFont(fontDataMath.data());
-             gfx->setTextSize(fontSize);
-             swappedFont = true;
-        } else if (wordIsHebrew && !fontDataHebrew.empty() && currentFont != "Hebrew")
+        if (inMathMode && !fontDataMath.empty())
+        {
+            gfx->loadFont(fontDataMath.data());
+            gfx->setTextSize(fontSize);
+            swappedFont = true;
+        }
+        else if (wordIsHebrew && !fontDataHebrew.empty() && currentFont != "Hebrew")
         {
             gfx->loadFont(fontDataHebrew.data());
             gfx->setTextSize(fontSize);
@@ -2701,9 +2826,11 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         // Restore the display font
         if (swappedFont)
         {
-            if (currentFont == "Hebrew" && !fontDataHebrew.empty()) {
+            if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+            {
                 gfx->loadFont(fontDataHebrew.data());
-            } else if (currentFont != "Default" && !fontData.empty())
+            }
+            else if (currentFont != "Default" && !fontData.empty())
             {
                 gfx->loadFont(fontData.data());
             }
@@ -2713,10 +2840,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             }
             gfx->setTextSize(fontSize);
         }
+        ESP_LOGV(TAG, "Measured word, width=%d", w);
 
         // Check if word fits
         if (currentLineWidth + w > maxWidth)
         {
+            ESP_LOGV(TAG, "Word does not fit, flushing current line");
             drawLine(currentLine, currentLineXOffset);
             linesDrawn++;
             currentLine.clear();
@@ -2729,15 +2858,20 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 break; // Page full
             }
         }
+        ESP_LOGV(TAG, "Checked if word fits");
 
         currentLine.emplace_back(i, wordLen, inMathMode);
         currentLineWidth += w + spaceW;
+        ESP_LOGV(TAG, "Added word to current line");
 
         if (boundary < text.length())
         {
-            if (text[boundary] == ' ' || text[boundary] == '\n') {
+            if (text[boundary] == ' ' || text[boundary] == '\n')
+            {
                 i = boundary + 1;
-            } else {
+            }
+            else
+            {
                 // Marker
                 i = boundary;
             }
@@ -2746,6 +2880,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         {
             i = boundary;
         }
+        ESP_LOGV(TAG, "Advanced i to %zu", i);
         if (isNewline)
         {
             drawLine(currentLine, currentLineXOffset);
@@ -2759,6 +2894,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 break; // Page full
             }
         }
+        ESP_LOGV(TAG, "Handled newline if present");
     }
 
     // Flush remaining line
@@ -2947,6 +3083,9 @@ void GUI::drawReader(bool flush)
 {
     ESP_LOGI(TAG, "drawReader called, currentTextOffset: %zu", currentTextOffset);
 
+    // Ensure font is loaded (fix for missing glyphs)
+    loadFonts();
+
     // Ensure previous update is complete
     M5.Display.waitDisplay();
 
@@ -3012,7 +3151,9 @@ void GUI::drawReader(bool flush)
     {
         ESP_LOGI(TAG, "Calling M5.Display.display()");
         M5.Display.waitDisplay();
+        M5.Display.setEpdMode(fastRefresh ? epd_mode_t::epd_fast : epd_mode_t::epd_quality);
         M5.Display.display();
+        saveLastBook();
     }
     ESP_LOGI(TAG, "drawReader completed");
 
@@ -3100,7 +3241,7 @@ void GUI::drawMainMenu()
         bool dataLoaded = false;
     };
     static MenuIconCache iconCache[6];
-    
+
     struct MenuIconDraw
     {
         int index;
@@ -3416,12 +3557,12 @@ void GUI::goToSleep()
     esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_TO_DEEP_SLEEP_US);
     gpio_wakeup_enable((gpio_num_t)48, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
-    
+
     ESP_LOGI(TAG, "Starting light sleep (S3)...");
     fflush(stdout);
-    
+
     esp_light_sleep_start();
-    
+
     ESP_LOGI(TAG, "Woke from light sleep (S3)");
     gpio_wakeup_disable((gpio_num_t)48);
 #else
@@ -3645,6 +3786,15 @@ void GUI::drawSettings()
     drawButton(layout.toggleButtonX, favButtonY, layout.toggleButtonW, layout.fontButtonH,
                isFav ? "YES" : "NO", favFill, favText);
 
+    // --- Refresh Type ---
+    int row7CenterY = layout.row7Y + layout.rowHeight / 2;
+    target->drawString("Refresh Type", layout.padding, row7CenterY + yOffset);
+    int refreshButtonY = layout.row7Y + (layout.rowHeight - layout.fontButtonH) / 2;
+    uint16_t refreshFill = fastRefresh ? TFT_BLACK : TFT_WHITE;
+    uint16_t refreshText = fastRefresh ? TFT_WHITE : TFT_BLACK;
+    drawButton(layout.toggleButtonX, refreshButtonY, layout.toggleButtonW, layout.fontButtonH,
+               fastRefresh ? "Fast" : "Clean", refreshFill, refreshText);
+
     // --- Close Button ---
     int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
     drawButton(closeX, layout.closeY, layout.closeButtonW, layout.closeButtonH, "Close", TFT_WHITE, TFT_BLACK);
@@ -3730,24 +3880,24 @@ void GUI::drawStandaloneSettings()
     int row3Y = startY + rowHeight * 2;
     int row3CenterY = row3Y + rowHeight / 2;
     target->drawString("WiFi", padding, row3CenterY);
-    
+
     btnY = row3Y + (rowHeight - buttonH) / 2;
     uint16_t wifiFill = wifiEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t wifiText = wifiEnabled ? TFT_WHITE : TFT_BLACK;
-    drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH, 
-                      wifiEnabled ? "ON" : "OFF", wifiFill, wifiText);
+    drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
+                       wifiEnabled ? "ON" : "OFF", wifiFill, wifiText);
 
     // --- Sleep Delay ---
     int row4Y = startY + rowHeight * 3;
     int row4CenterY = row4Y + rowHeight / 2;
     target->drawString("Sleep Delay", padding, row4CenterY);
-    
+
     char sleepBuf[16];
     snprintf(sleepBuf, sizeof(sleepBuf), "%d min", lightSleepMinutes);
     target->setTextDatum(textdatum_t::middle_center);
     target->drawString(sleepBuf, screenW - padding - buttonW - 50, row4CenterY);
     target->setTextDatum(textdatum_t::middle_left);
-    
+
     btnY = row4Y + (rowHeight - buttonH) / 2;
     fontMinusX = screenW - padding - buttonW * 2 - 10;
     fontPlusX = screenW - padding - buttonW;
@@ -3770,24 +3920,36 @@ void GUI::drawStandaloneSettings()
     target->drawString(status.c_str(), padding + 180, row5CenterY);
     target->setTextSize(1.8f);
 
-    // --- Buzzer (M5PaperS3 only) ---
-#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    // --- Refresh Type ---
     int row6Y = startY + rowHeight * 5;
     int row6CenterY = row6Y + rowHeight / 2;
-    target->drawString("Buzzer", padding, row6CenterY);
-
+    target->drawString("Refresh Type", padding, row6CenterY);
     btnY = row6Y + (rowHeight - buttonH) / 2;
+
+    uint16_t refreshFill = fastRefresh ? TFT_BLACK : TFT_WHITE;
+    uint16_t refreshText = fastRefresh ? TFT_WHITE : TFT_BLACK;
+    drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
+                       fastRefresh ? "Fast" : "Clean", refreshFill, refreshText);
+
+    // --- Buzzer (M5PaperS3 only) ---
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+
+    int row7Y = startY + rowHeight * 6;
+    int row7CenterY = row7Y + rowHeight / 2;
+    target->drawString("Buzzer", padding, row6CenterY);
+    btnY = row7Y + (rowHeight - buttonH) / 2;
+
     uint16_t buzzerFill = buzzerEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t buzzerText = buzzerEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
                        buzzerEnabled ? "ON" : "OFF", buzzerFill, buzzerText);
 
     // --- Auto Rotate ---
-    int row7Y = startY + rowHeight * 6;
-    int row7CenterY = row7Y + rowHeight / 2;
-    target->drawString("Auto Rotate", padding, row7CenterY);
+    int row8Y = startY + rowHeight * 7;
+    int row8CenterY = row8Y + rowHeight / 2;
+    target->drawString("Auto Rotate", padding, row8CenterY);
 
-    btnY = row7Y + (rowHeight - buttonH) / 2;
+    btnY = row8Y + (rowHeight - buttonH) / 2;
     uint16_t rotateFill = autoRotateEnabled ? TFT_BLACK : TFT_WHITE;
     uint16_t rotateText = autoRotateEnabled ? TFT_WHITE : TFT_BLACK;
     drawSettingsButton(screenW - padding - buttonW, btnY, buttonW, buttonH,
@@ -3891,24 +4053,35 @@ void GUI::onSettingsClick(int x, int y)
     {
         if (x >= fontMinusX && x < fontMinusX + buttonW)
         {
-            if (lightSleepMinutes > 1) lightSleepMinutes--;
+            if (lightSleepMinutes > 1)
+                lightSleepMinutes--;
             saveSettings();
             needsRedraw = true;
             return;
         }
         if (x >= fontPlusX && x < fontPlusX + buttonW)
         {
-            if (lightSleepMinutes < 60) lightSleepMinutes++;
+            if (lightSleepMinutes < 60)
+                lightSleepMinutes++;
             saveSettings();
             needsRedraw = true;
             return;
         }
     }
 
-#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
-    // Buzzer Toggle
+    // Refresh Toggle
     int row6Y = startY + rowHeight * 5;
     btnY = row6Y + (rowHeight - buttonH) / 2;
+    if (y >= btnY && y <= btnY + buttonH && x >= screenW - padding - buttonW && x < screenW - padding)
+    {
+        setFastRefresh(!fastRefresh);
+        return;
+    }
+
+#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+    // Buzzer Toggle
+    int row7Y = startY + rowHeight * 6;
+    btnY = row7Y + (rowHeight - buttonH) / 2;
     if (y >= btnY && y <= btnY + buttonH && x >= screenW - padding - buttonW && x < screenW - padding)
     {
         setBuzzerEnabled(!buzzerEnabled);
@@ -3917,8 +4090,8 @@ void GUI::onSettingsClick(int x, int y)
     }
 
     // Auto Rotate Toggle
-    int row7Y = startY + rowHeight * 6;
-    btnY = row7Y + (rowHeight - buttonH) / 2;
+    int row8Y = startY + rowHeight * 7;
+    btnY = row8Y + (rowHeight - buttonH) / 2;
     if (y >= btnY && y <= btnY + buttonH && x >= screenW - padding - buttonW && x < screenW - padding)
     {
         setAutoRotateEnabled(!autoRotateEnabled);
@@ -4209,10 +4382,10 @@ void GUI::onMainMenuClick(int x, int y)
     }
 }
 
-void GUI::handleGesture(const GestureEvent& event)
+void GUI::handleGesture(const GestureEvent &event)
 {
     int screenH = M5.Display.height();
-    
+
     switch (event.type)
     {
     case GestureType::TAP:
@@ -4280,7 +4453,7 @@ void GUI::handleGesture(const GestureEvent& event)
         // Swipe up from bottom area opens settings in reader mode
         if (currentState == AppState::READER)
         {
-            if (event.startY > screenH - 150)  // Must start from bottom 150px
+            if (event.startY > screenH - 150) // Must start from bottom 150px
             {
                 ESP_LOGI(TAG, "Swipe up detected - opening book settings");
                 // Play short beep for feedback
@@ -4298,7 +4471,7 @@ void GUI::handleGesture(const GestureEvent& event)
             }
         }
         break;
-        
+
     case GestureType::SWIPE_RIGHT:
         // Swipe right in chapter menu returns to reader
         if (currentState == AppState::CHAPTER_MENU)
@@ -4314,7 +4487,7 @@ void GUI::handleGesture(const GestureEvent& event)
             }
         }
         break;
-        
+
     case GestureType::SWIPE_DOWN:
         if (currentState == AppState::MUSIC_COMPOSER)
         {
@@ -4324,7 +4497,7 @@ void GUI::handleGesture(const GestureEvent& event)
             }
         }
         break;
-        
+
     default:
         break;
     }
@@ -4398,7 +4571,7 @@ void GUI::handleTap(int x, int y)
 
         // Middle area - Page Turn
         // Single tap (GestureDetector handles double tap separation)
-        processReaderTap(x, y, false); 
+        processReaderTap(x, y, false);
         justWokeUp = false;
     }
     else if (currentState == AppState::BOOK_SETTINGS)
@@ -4476,14 +4649,16 @@ void GUI::handleTap(int x, int y)
         // Sleep Delay [-]
         else if (y >= layout.row5Y && y <= layout.row5Y + layout.rowHeight && x >= layout.fontMinusX && x <= layout.fontMinusX + layout.fontButtonW)
         {
-            if (lightSleepMinutes > 1) lightSleepMinutes--;
+            if (lightSleepMinutes > 1)
+                lightSleepMinutes--;
             saveSettings();
             settingsNeedsUnderlayRefresh = true;
         }
         // Sleep Delay [+]
         else if (y >= layout.row5Y && y <= layout.row5Y + layout.rowHeight && x >= layout.fontPlusX && x <= layout.fontPlusX + layout.fontButtonW)
         {
-            if (lightSleepMinutes < 60) lightSleepMinutes++;
+            if (lightSleepMinutes < 60)
+                lightSleepMinutes++;
             saveSettings();
             settingsNeedsUnderlayRefresh = true;
         }
@@ -4608,7 +4783,7 @@ void GUI::handleTouch()
     {
         lastActivityTime = now;
         auto t = M5.Touch.getDetail(0);
-        
+
         if (currentState == AppState::MUSIC_COMPOSER)
         {
             if (t.wasPressed() || (justWokeUp && t.isPressed()))
@@ -4618,12 +4793,12 @@ void GUI::handleTouch()
 #endif
                 ComposerUI::getInstance().handleDragStart(t.x, t.y);
             }
-            
+
             if (t.isPressed())
             {
                 ComposerUI::getInstance().handleDragMove(t.x, t.y);
             }
-            
+
             if (t.wasReleased())
             {
                 ComposerUI::getInstance().handleDragEnd(t.x, t.y);
@@ -4635,7 +4810,7 @@ void GUI::handleTouch()
                     needsRedraw = true;
                 }
             }
-            
+
             justWokeUp = false;
             return;
         }
@@ -4656,7 +4831,8 @@ void GUI::handleTouch()
             {
                 // For Music Composer, we still want to allow the touch to be processed by the composer
                 // but we don't want to reset the gesture detector.
-                if (currentState == AppState::MUSIC_COMPOSER) {
+                if (currentState == AppState::MUSIC_COMPOSER)
+                {
                     onMusicComposerClick(t.x, t.y);
                     justWokeUp = false;
                     return;
@@ -4847,14 +5023,16 @@ void GUI::handleTouch()
                 // Sleep Delay [-]
                 else if (t.y >= layout.row5Y && t.y <= layout.row5Y + layout.rowHeight && t.x >= layout.fontMinusX && t.x <= layout.fontMinusX + layout.fontButtonW)
                 {
-                    if (lightSleepMinutes > 1) lightSleepMinutes--;
+                    if (lightSleepMinutes > 1)
+                        lightSleepMinutes--;
                     saveSettings();
                     settingsNeedsUnderlayRefresh = true;
                 }
                 // Sleep Delay [+]
                 else if (t.y >= layout.row5Y && t.y <= layout.row5Y + layout.rowHeight && t.x >= layout.fontPlusX && t.x <= layout.fontPlusX + layout.fontButtonW)
                 {
-                    if (lightSleepMinutes < 60) lightSleepMinutes++;
+                    if (lightSleepMinutes < 60)
+                        lightSleepMinutes++;
                     saveSettings();
                     settingsNeedsUnderlayRefresh = true;
                 }
@@ -4863,7 +5041,12 @@ void GUI::handleTouch()
                 {
                     bool isFav = bookIndex.isFavorite(lastBookId);
                     bookIndex.setFavorite(lastBookId, !isFav);
-                    settingsNeedsUnderlayRefresh = true;
+                    needsRedraw = true;
+                }
+                // Refresh Toggle
+                else if (t.y >= layout.row7Y && t.y <= layout.row7Y + layout.rowHeight && t.x >= layout.toggleButtonX && t.x <= layout.toggleButtonX + layout.toggleButtonW)
+                {
+                    setFastRefresh(!fastRefresh);
                 }
                 // Close
                 else if (t.y >= closeButtonY && t.y <= closeButtonY + layout.closeButtonH && t.x >= closeX && t.x <= closeX + layout.closeButtonW)
@@ -5178,6 +5361,9 @@ void GUI::saveSettings()
         // Save text boldness
         nvs_set_i32(my_handle, "text_bold", textBoldness);
 
+        // Save fast refresh setting
+        nvs_set_i32(my_handle, "fast_refresh", fastRefresh ? 1 : 0);
+
         // Save per-font size settings
         std::string fontSizeStr;
         for (const auto &entry : fontSizes)
@@ -5285,7 +5471,7 @@ float GUI::getFontSize() const
     return fontSize;
 }
 
-float GUI::getFontSize(const std::string& fontName) const
+float GUI::getFontSize(const std::string &fontName) const
 {
     auto it = fontSizes.find(fontName);
     if (it != fontSizes.end())
@@ -5314,6 +5500,13 @@ void GUI::setTextBoldness(int level)
     if (level > 3)
         level = 3;
     textBoldness = level;
+    saveSettings();
+    needsRedraw = true;
+}
+
+void GUI::setFastRefresh(bool enabled)
+{
+    fastRefresh = enabled;
     saveSettings();
     needsRedraw = true;
 }
@@ -5399,6 +5592,13 @@ void GUI::loadSettings()
         if (nvs_get_i32(my_handle, "text_bold", &boldInt) == ESP_OK)
         {
             textBoldness = boldInt;
+        }
+
+        // Load fast refresh setting
+        int32_t fastRef = 0;
+        if (nvs_get_i32(my_handle, "fast_refresh", &fastRef) == ESP_OK)
+        {
+            fastRefresh = (fastRef != 0);
         }
 
         // Load light sleep duration
@@ -5584,22 +5784,30 @@ bool GUI::loadLastBook()
 
     // Check if file exists
     struct stat st;
-    if (!lastPath.empty() && stat(lastPath.c_str(), &st) != 0) {
+    if (!lastPath.empty() && stat(lastPath.c_str(), &st) != 0)
+    {
         ESP_LOGW(TAG, "Last book file not found: %s", lastPath.c_str());
         // Try to recover path from ID if index is ready
-        if (bookIndexReady && lastId > 0) {
+        if (bookIndexReady && lastId > 0)
+        {
             BookEntry entry = bookIndex.getBook(lastId);
-            if (entry.id > 0 && !entry.path.empty()) {
+            if (entry.id > 0 && !entry.path.empty())
+            {
                 std::string newPath = entry.path;
-                if (stat(newPath.c_str(), &st) == 0) {
+                if (stat(newPath.c_str(), &st) == 0)
+                {
                     ESP_LOGI(TAG, "Recovered path from index: %s", newPath.c_str());
                     lastPath = newPath;
-                } else {
+                }
+                else
+                {
                     lastPath = ""; // Invalid
                 }
             }
-        } else {
-            // If index not ready, we can't recover yet. 
+        }
+        else
+        {
+            // If index not ready, we can't recover yet.
             // But we shouldn't try to load a non-existent file.
             // We'll leave it empty so we don't crash/fail in loader.
             lastPath = "";
@@ -5607,9 +5815,11 @@ bool GUI::loadLastBook()
     }
 
     // Try to sync ID with bookIndex if available
-    if (bookIndexReady && !lastPath.empty()) {
+    if (bookIndexReady && !lastPath.empty())
+    {
         int realId = bookIndex.getBookIdByPath(lastPath);
-        if (realId > 0 && realId != lastId) {
+        if (realId > 0 && realId != lastId)
+        {
             ESP_LOGI(TAG, "Updating last book ID from %ld to %d based on path", lastId, realId);
             lastId = realId;
             lastBookId = realId;
@@ -5668,7 +5878,7 @@ bool GUI::loadLastBook()
 
             // Restore progress - currentTextOffset is the exact page position
             currentTextOffset = currentBook.currentOffset;
-            ESP_LOGI(TAG, "Restored book position: chapter=%d, offset=%zu", 
+            ESP_LOGI(TAG, "Restored book position: chapter=%d, offset=%zu",
                      currentBook.currentChapter, currentTextOffset);
             resetPageInfoCache();
 
@@ -5708,8 +5918,10 @@ uint8_t GUI::getGrayShade(int level) const
 {
     // level 0 = white, level 15 = black
     // Return grayscale value (0-255, where 255=white, 0=black)
-    if (level < 0) level = 0;
-    if (level > 15) level = 15;
+    if (level < 0)
+        level = 0;
+    if (level > 15)
+        level = 15;
     return 255 - (level * 17); // 0->255, 15->0
 }
 
@@ -5898,12 +6110,12 @@ void GUI::ensureMathFontLoaded()
         fseek(f, 0, SEEK_END);
         size_t size = ftell(f);
         fseek(f, 0, SEEK_SET);
-        
+
         fontDataMath.resize(size);
         size_t read = fread(fontDataMath.data(), 1, size, f);
         fclose(f);
         ESP_LOGI(TAG, "Math font loaded: %u bytes read", (unsigned int)read);
-        
+
         // Initialize the math renderer with the font
         mathRenderer.setMathFont(fontDataMath.data());
         // Note: baseFontSize in init() is not used by calculateLayout() - we pass
@@ -5927,39 +6139,43 @@ void GUI::ensureMathFontLoaded()
  * @param outHeight Output: rendered height
  * @return true if rendered successfully
  */
-bool GUI::renderMathInline(const std::string& mathml, M5Canvas* canvas, 
-                           int x, int y, int maxWidth, int& outWidth, int& outHeight)
+bool GUI::renderMathInline(const std::string &mathml, M5Canvas *canvas,
+                           int x, int y, int maxWidth, int &outWidth, int &outHeight)
 {
-    if (mathml.empty()) {
+    if (mathml.empty())
+    {
         outWidth = 0;
         outHeight = 0;
         return false;
     }
-    
+
     // Parse the MathML
+    ESP_LOGI(TAG, "Before mathRenderer.parse, MathML: %s", mathml.c_str());
     auto tree = mathRenderer.parse(mathml);
-    if (!tree) {
+    if (!tree)
+    {
         ESP_LOGW(TAG, "Failed to parse MathML");
         outWidth = 0;
         outHeight = 0;
         return false;
     }
-    
+
     // Get the graphics device
-    LGFX_Device* gfx = canvas ? (LGFX_Device*)canvas : (LGFX_Device*)&M5.Display;
-    
+    LGFX_Device *gfx = canvas ? (LGFX_Device *)canvas : (LGFX_Device *)&M5.Display;
+
     // Ensure math font is loaded
     ensureMathFontLoaded();
-    if (!fontDataMath.empty()) {
+    if (!fontDataMath.empty())
+    {
         gfx->loadFont(fontDataMath.data());
         mathRenderer.setMathFont(fontDataMath.data());
     }
-    
+
     // Calculate layout
     // IMPORTANT: GUI's fontSize is a SCALE FACTOR (1.0, 1.5, 2.0, 2.5), NOT pixels.
     // The math VLW font is generated at 20px native size.
     // setTextSize(1.0) means use native size (20px), setTextSize(2.0) means 40px.
-    // 
+    //
     // To achieve reasonable math size that scales with user font preference:
     // - Base scale of 1.0 = native 20px font (good for inline math)
     // - Multiply by fontSize to scale proportionally with text
@@ -5968,12 +6184,13 @@ bool GUI::renderMathInline(const std::string& mathml, M5Canvas* canvas,
     // This maps: fontSize 1.0 -> 1.0, fontSize 2.5 -> 1.6
     float mathFontSize = 1.0f + (fontSize - 1.0f) * 0.4f;
     mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
-    
+
     // Check if it fits
     outWidth = tree->box.width;
     outHeight = tree->box.height;
-    
-    if (outWidth > maxWidth) {
+
+    if (outWidth > maxWidth)
+    {
         // Scale down if too wide
         float scale = (float)maxWidth / outWidth;
         mathFontSize *= scale;
@@ -5981,30 +6198,46 @@ bool GUI::renderMathInline(const std::string& mathml, M5Canvas* canvas,
         outWidth = tree->box.width;
         outHeight = tree->box.height;
     }
-    
+
     // Render
-    if (canvas) {
+    if (canvas)
+    {
         MathRenderResult result = mathRenderer.render(tree.get(), canvas, x, y, mathFontSize, TFT_BLACK);
         return result.success;
-    } else {
+    }
+    else
+    {
         // Render directly to display - create temporary canvas
         // Limit canvas size to avoid huge allocations
-        if (outWidth > 2000 || outHeight > 2000) {
+        if (outWidth > 2000 || outHeight > 2000)
+        {
             ESP_LOGE(TAG, "Math render size too large: %dx%d", outWidth, outHeight);
             return false;
         }
-        
+
         M5Canvas tempCanvas(&M5.Display);
-        if (!tempCanvas.createSprite(outWidth, outHeight)) {
+        if (!tempCanvas.createSprite(outWidth, outHeight))
+        {
             ESP_LOGE(TAG, "Failed to create temp canvas for math: %dx%d", outWidth, outHeight);
             return false;
         }
         tempCanvas.fillSprite(TFT_WHITE);
-        
+
+        // Load math font on temp canvas since MathRenderer no longer does it
+        if (!fontDataMath.empty())
+        {
+            tempCanvas.loadFont(fontDataMath.data());
+        }
+
         MathRenderResult result = mathRenderer.render(tree.get(), &tempCanvas, 0, tree->box.baseline, mathFontSize, TFT_BLACK);
-        if (result.success) {
+        if (result.success)
+        {
             tempCanvas.pushSprite(x, y - tree->box.baseline);
         }
+
+        // Explicitly unload font to avoid crash during destruction
+        tempCanvas.setFont(&lgfx::v1::fonts::Font0);
+
         tempCanvas.deleteSprite();
         return result.success;
     }
@@ -6017,76 +6250,58 @@ bool GUI::renderMathInline(const std::string& mathml, M5Canvas* canvas,
  * @param outHeight Output: height
  * @param outBaseline Output: baseline offset from top
  */
-void GUI::measureMath(const std::string& mathml, int& outWidth, int& outHeight, int& outBaseline)
+void GUI::measureMath(const std::string &mathml, int &outWidth, int &outHeight, int &outBaseline)
 {
-    if (mathml.empty()) {
+    if (mathml.empty())
+    {
         outWidth = outHeight = outBaseline = 0;
         return;
     }
-    
+
     auto tree = mathRenderer.parse(mathml);
-    if (!tree) {
+    if (!tree)
+    {
         outWidth = outHeight = outBaseline = 0;
         return;
     }
-    
-    LGFX_Device* gfx = &M5.Display;
+
+    LGFX_Device *gfx = &M5.Display;
     ensureMathFontLoaded();
-    if (!fontDataMath.empty()) {
+    if (!fontDataMath.empty())
+    {
         gfx->loadFont(fontDataMath.data());
         mathRenderer.setMathFont(fontDataMath.data());
     }
-    
+
     // Use same dampened scale as renderMathInline for consistency
     float mathFontSize = 1.0f + (fontSize - 1.0f) * 0.4f;
     mathRenderer.calculateLayout(tree.get(), gfx, mathFontSize);
-    
+
     outWidth = tree->box.width;
     outHeight = tree->box.height;
     outBaseline = tree->box.baseline;
+
+    // Restore book font
+    if (currentFont == "Hebrew" && !fontDataHebrew.empty())
+    {
+        gfx->loadFont(fontDataHebrew.data());
+    }
+    else if (currentFont != "Default" && !fontData.empty())
+    {
+        gfx->loadFont(fontData.data());
+    }
+    else
+    {
+        gfx->unloadFont();
+    }
+    gfx->setTextSize(fontSize);
 }
 
+// Comprehensive HTML entity decoder - single source of truth
 void GUI::processText(std::string &text)
 {
-    // Currently no special processing needed
-    // Placeholder for future text processing if needed
-    // Replace HTML entities
-    size_t pos = 0;
-    while ((pos = text.find("&quot;", pos)) != std::string::npos)
-    {
-        text.replace(pos, 6, "\"");
-        pos += 1;
-    }
-    pos = 0;
-    while ((pos = text.find("&amp;", pos)) != std::string::npos)
-    {
-        text.replace(pos, 5, "&");
-        pos += 1;
-    }
-    pos = 0;
-    while ((pos = text.find("&lt;", pos)) != std::string::npos)
-    {
-        text.replace(pos, 4, "<");
-        pos += 1;
-    }
-    pos = 0;
-    while ((pos = text.find("&gt;", pos)) != std::string::npos)
-    {
-        text.replace(pos, 4, ">");
-        pos += 1;
-    }
-    pos = 0;
-    while ((pos = text.find("&apos;", pos)) != std::string::npos)
-    {
-        text.replace(pos, 6, "'");
-        pos += 1;
-    }
-    pos = 0;
-    while ((pos = text.find("&#160;", pos)) != std::string::npos)
-    {
-        text.replace(pos, 6, " ");
-        pos += 1;
-    }
+    // Replace HTML entities using the comprehensive decoder
+    text = decodeHtmlEntities(text);
 }
 
 void GUI::drawStringMixed(const std::string &text, int x, int y, M5Canvas *target, float size, bool isProcessed, bool respectUserFont)
@@ -6958,7 +7173,6 @@ bool GUI::openImageViewer(const EpubImage &image)
         return false;
     }
 
-
     // Transition to image viewer state
     previousState = currentState;
     currentState = AppState::IMAGE_VIEWER;
@@ -7189,7 +7403,7 @@ void GUI::drawGame()
 {
     // Draw status bar first, then let GameManager draw the game
     drawStatusBar(nullptr);
-    
+
     GameManager &gm = GameManager::getInstance();
     gm.draw(nullptr);
 }
@@ -7248,9 +7462,9 @@ void GUI::drawChapterMenu()
     {
         totalChapters = epubLoader.getTotalChapters();
         currentChapter = epubLoader.getCurrentChapterIndex();
-        
+
         // Get chapter titles from TOC
-        const auto& titles = epubLoader.getChapterTitles();
+        const auto &titles = epubLoader.getChapterTitles();
         for (int i = 0; i < totalChapters; i++)
         {
             std::string name;
@@ -7541,9 +7755,9 @@ void GUI::showWallpaperAndSleep()
 {
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     DeviceHAL &hal = DeviceHAL::getInstance();
-    
+
     bool showedWallpaper = false;
-    
+
     if (hal.isSDCardMounted())
     {
         std::string wallpaperPath = std::string(hal.getSDCardMountPoint()) + "/wallpaper";
@@ -7640,7 +7854,7 @@ void GUI::showWallpaperAndSleep()
             ESP_LOGI(TAG, "No wallpaper/ folder on SD card");
         }
     }
-    
+
     if (!showedWallpaper)
     {
         // Show "Zz" sleep symbol if no wallpaper
@@ -7654,4 +7868,9 @@ void GUI::showWallpaperAndSleep()
     drawSleepSymbol("Zz");
     deviceHAL.enterDeepSleepWithTouchWake();
 #endif
+}
+
+// Static member function implementation
+std::string GUI::decodeHtmlEntities(const std::string& str) {
+    return ::decodeHtmlEntities(str);
 }
