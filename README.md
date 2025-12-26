@@ -1,6 +1,4 @@
-# M5StickMyEBookReader
-
-## eBook Reader for M5Paper / M5PaperS3
+# M5Paper/S3 eBook Reader
 
 <img width="513" height="834" alt="image" src="https://github.com/user-attachments/assets/eb9a982b-c579-43f6-a1a2-e03a690626a6" />
 <img width="400" height="698" alt="image" src="https://github.com/user-attachments/assets/4f3c6d4c-f0c6-4a7d-8506-2f57a0b42538" />
