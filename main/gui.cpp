@@ -4463,6 +4463,8 @@ void GUI::handleGesture(const GestureEvent &event)
                 event.endY >= startY && event.endY < startY + btnH)
             {
                 ESP_LOGI(TAG, "Long press on Last Book button - showing recent books");
+                // Play short beep for feedback
+                deviceHAL.playClickSound();
                 currentState = AppState::RECENT_BOOKS;
                 needsRedraw = true;
                 return;

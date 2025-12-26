@@ -49,7 +49,7 @@ public:
     // Configuration - optimized for responsiveness
     static constexpr int SWIPE_THRESHOLD = 40;       // Reduced from 50 for easier swipes
     static constexpr int TAP_THRESHOLD = 20;         // Slightly increased for better tap detection
-    static constexpr uint32_t LONG_PRESS_MS = 400;   // Reduced from 500 for faster long-press
+    static constexpr uint32_t LONG_PRESS_MS = 2000;  // Increased to 2 seconds as requested
     static constexpr uint32_t DOUBLE_TAP_MS = 200;   // Reduced from 300 for faster double-tap
     static constexpr float MIN_SWIPE_VELOCITY = 0.08f; // Reduced from 0.1 for easier swipes
     
@@ -99,6 +99,7 @@ private:
     // Touch tracking state
     bool m_touchActive = false;
     bool m_touchStarted = false;
+    bool m_longPressTriggered = false;
     int m_startX = 0;
     int m_startY = 0;
     int m_currentX = 0;

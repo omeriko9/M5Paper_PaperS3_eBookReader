@@ -19,6 +19,7 @@ void GestureDetector::init(int screenWidth, int screenHeight) {
 void GestureDetector::reset() {
     m_touchActive = false;
     m_touchStarted = false;
+    m_longPressTriggered = false;
     m_startX = 0;
     m_startY = 0;
     m_currentX = 0;
@@ -108,6 +109,7 @@ GestureEvent GestureDetector::update() {
             // Touch started
             m_touchActive = true;
             m_touchStarted = true;
+            m_longPressTriggered = false;
             m_startX = t.x;
             m_startY = t.y;
             m_currentX = t.x;
@@ -117,12 +119,41 @@ GestureEvent GestureDetector::update() {
             // Touch continuing
             m_currentX = t.x;
             m_currentY = t.y;
+
+            // Check for long press while active
+            uint32_t duration = now - m_startTime;
+            if (!m_longPressTriggered && duration >= LONG_PRESS_MS) {
+                int dx = m_currentX - m_startX;
+                int dy = m_currentY - m_startY;
+                int distance = (int)sqrt(dx * dx + dy * dy);
+
+                if (distance < TAP_THRESHOLD) {
+                    event.type = GestureType::LONG_PRESS;
+                    event.startX = m_startX;
+                    event.startY = m_startY;
+                    event.endX = m_currentX;
+                    event.endY = m_currentY;
+                    event.duration = duration;
+                    event.zone = getZone(m_startX, m_startY);
+                    m_longPressTriggered = true;
+                    
+                    if (m_tapCallback) {
+                        m_tapCallback(event);
+                    }
+                    return event;
+                }
+            }
         }
         
         if (t.wasReleased() && m_touchActive) {
             // Touch ended - analyze the gesture
             m_touchActive = false;
             
+            if (m_longPressTriggered) {
+                m_longPressTriggered = false;
+                return event; // Already triggered
+            }
+
             int dx = m_currentX - m_startX;
             int dy = m_currentY - m_startY;
             uint32_t duration = now - m_startTime;
