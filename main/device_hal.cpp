@@ -337,15 +337,15 @@ void DeviceHAL::playStartupSound()
         return;
 
     const int note = 35;
-    const int gap  = 10;
+    const int gap  = 15;
 
     // Major up arpeggio: root -> 3rd -> 5th -> octave
     playTone(880, note);   vTaskDelay(pdMS_TO_TICKS(gap)); // A
     //playTone(1109, note);  vTaskDelay(pdMS_TO_TICKS(gap)); // C#
-    playTone(1319, note*4);  vTaskDelay(pdMS_TO_TICKS(gap)); // E
+    playTone(1319, note);  vTaskDelay(pdMS_TO_TICKS(gap)); // E
     //playTone(1568, note);  vTaskDelay(pdMS_TO_TICKS(gap)); // G
     //playTone(1865, note);  vTaskDelay(pdMS_TO_TICKS(gap)); // Bb
-    //playTone(1760, note);  vTaskDelay(pdMS_TO_TICKS(gap));  // A6
+    playTone(1760, note);  vTaskDelay(pdMS_TO_TICKS(gap));  // A6
     //playTone(2637, note);  vTaskDelay(pdMS_TO_TICKS(gap));  // E7
     //playTone(3520, note);  vTaskDelay(pdMS_TO_TICKS(gap));  // A7
     
