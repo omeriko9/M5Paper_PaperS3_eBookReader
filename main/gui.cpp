@@ -8135,6 +8135,14 @@ void GUI::drawRecentBooks()
 
 void GUI::onRecentBooksClick(int x, int y)
 {
+    // Status bar click returns to main menu
+    if (y < STATUS_BAR_HEIGHT)
+    {
+        currentState = AppState::MAIN_MENU;
+        needsRedraw = true;
+        return;
+    }
+
     // Back button
     int btnW = 200;
     int btnH = 50;
