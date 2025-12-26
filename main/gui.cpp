@@ -7948,6 +7948,8 @@ void GUI::showWallpaperAndSleep()
                         std::string buf(required, '\0');
                         if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, buf.data(), &required) == ESP_OK)
                         {
+                            buf.resize(required ? required - 1 : 0);  // drop the trailing '\0'
+                            ESP_LOGI(TAG, "Retrieved wallpaper list from NVS: %s", buf.c_str());
                             size_t start = 0;
                             while (start < buf.size())
                             {
@@ -7982,14 +7984,25 @@ void GUI::showWallpaperAndSleep()
                     }
                 }
 
+                // Remember last displayed (back of filtered list) so we avoid immediate repeat
+                std::string lastDisplayed = filtered.empty() ? std::string() : filtered.back();
+
                 // Build fast lookup for filtered
                 std::unordered_set<std::string> filteredSet(filtered.begin(), filtered.end());
 
                 // Try to find first unseen image (in the 'images' vector order)
+                // Prefer unseen images and avoid selecting lastDisplayed immediately if possible
                 for (const auto &img : images)
                 {
                     if (filteredSet.find(img) == filteredSet.end())
                     {
+                        if (!lastDisplayed.empty() && img == lastDisplayed)
+                        {
+                            // skip immediate repeat, try next unseen
+                            ESP_LOGI(TAG, "Skipping immediate-repeat unseen candidate: %s", img.c_str());
+                            continue;
+                        }
+
                         // verify file exists right now
                         FILE *f = fopen(img.c_str(), "rb");
                         if (f)
@@ -8024,39 +8037,53 @@ void GUI::showWallpaperAndSleep()
                     }
                 }
 
-                // If all images have been seen (filtered contains them), pick FIFO front
+                // If all images have been seen (filtered contains them), pick FIFO entry but avoid repeating lastDisplayed when possible
                 if (!filtered.empty())
                 {
-                    // verify front still exists
-                    std::string front = filtered.front();
-                    FILE *f = fopen(front.c_str(), "rb");
-                    if (f)
+                    // Try to pick the element after lastDisplayed in the FIFO list so we rotate
+                    size_t startIdx = 0;
+                    if (!lastDisplayed.empty())
                     {
-                        fclose(f);
-                        if (nvsOpened && nvsModified)
+                        auto it = std::find(filtered.begin(), filtered.end(), lastDisplayed);
+                        if (it != filtered.end())
                         {
-                            std::string out;
-                            for (size_t i = 0; i < filtered.size(); ++i)
-                            {
-                                out += filtered[i];
-                                if (i + 1 < filtered.size())
-                                    out += ";";
-                            }
-                            if (out.empty())
-                                nvs_erase_key(my_handle, NVS_KEY_WALLPAPERC);
+                            if ((it + 1) != filtered.end())
+                                startIdx = (it - filtered.begin()) + 1;
                             else
-                                nvs_set_str(my_handle, NVS_KEY_WALLPAPERC, out.c_str());
-                            nvs_commit(my_handle);
+                                startIdx = 0; // wrap
                         }
-                        if (nvsOpened)
-                            nvs_close(my_handle);
-                        return front;
                     }
-                    else
+
+                    // Walk filtered entries starting from startIdx to find a file that still exists
+                    for (size_t i = 0; i < filtered.size(); ++i)
                     {
-                        ESP_LOGI(TAG, "Front wallpaper missing: %s", front.c_str());
-                        // will fall through and return empty
+                        size_t idx = (startIdx + i) % filtered.size();
+                        std::string candidate = filtered[idx];
+                        FILE *f = fopen(candidate.c_str(), "rb");
+                        if (f)
+                        {
+                            fclose(f);
+                            if (nvsOpened && nvsModified)
+                            {
+                                std::string out;
+                                for (size_t j = 0; j < filtered.size(); ++j)
+                                {
+                                    out += filtered[j];
+                                    if (j + 1 < filtered.size()) out += ";";
+                                }
+                                if (out.empty())
+                                    nvs_erase_key(my_handle, NVS_KEY_WALLPAPERC);
+                                else
+                                    nvs_set_str(my_handle, NVS_KEY_WALLPAPERC, out.c_str());
+                                nvs_commit(my_handle);
+                            }
+                            if (nvsOpened)
+                                nvs_close(my_handle);
+                            return candidate;
+                        }
                     }
+
+                    ESP_LOGI(TAG, "No valid FIFO candidate found in NVS list after rotation");
                 }
 
                 if (nvsOpened)
@@ -8122,6 +8149,7 @@ void GUI::showWallpaperAndSleep()
                                     std::string buf(required, '\0');
                                     if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, buf.data(), &required) == ESP_OK)
                                     {
+                                        buf.resize(required ? required - 1 : 0);
                                         size_t start = 0;
                                         while (start < buf.size())
                                         {
