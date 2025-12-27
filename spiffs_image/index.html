@@ -434,47 +434,134 @@
                 showToast('Popup blocked');
                 return;
             }
+
             const epubUrl = `/api/epub?id=${id}`;
-            const safeTitle = title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${safeTitle}</title>
-<script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
-<style>
-    html, body { margin: 0; padding: 0; height: 100%; background: #f8fafc; color: #0f172a; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
-    .toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #ffffff; border-bottom: 1px solid #e2e8f0; }
-    .title { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .btn { background: #2563eb; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-    .btn.secondary { background: #475569; }
-    #viewer { height: calc(100% - 48px); }
-</style>
-</head>
-<body>
-    <div class="toolbar">
-        <div class="title">${safeTitle}</div>
-        <button class="btn secondary" id="prev">Prev</button>
-        <button class="btn" id="next">Next</button>
-    </div>
-    <div id="viewer"></div>
-<script>
-    const book = ePub("${epubUrl}");
-    const rendition = book.renderTo("viewer", { width: "100%", height: "100%" });
-    rendition.display();
-    document.getElementById("prev").addEventListener("click", () => rendition.prev());
-    document.getElementById("next").addEventListener("click", () => rendition.next());
-    window.addEventListener("keyup", (e) => {
-        if (e.key === "ArrowRight") rendition.next();
-        if (e.key === "ArrowLeft") rendition.prev();
+
+            // Create a minimal document in the new window, then build DOM nodes to avoid template parsing issues
+            const doc = win.document;
+            doc.open();
+            doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body></body></html>');
+            doc.close();
+            doc.title = title;
+
+            // Add styles
+            const style = doc.createElement('style');
+            style.textContent = `html, body { margin: 0; padding: 0; height: 100%; background: #f8fafc; color: #0f172a; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #ffffff; border-bottom: 1px solid #e2e8f0; }
+.title { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.btn { background: #2563eb; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.btn.secondary { background: #475569; }
+#viewer { height: calc(100% - 48px); }`;
+            doc.head.appendChild(style);
+
+            // Build toolbar
+            const toolbar = doc.createElement('div');
+            toolbar.className = 'toolbar';
+            const titleEl = doc.createElement('div');
+            titleEl.className = 'title';
+            titleEl.innerText = title;
+            const prevBtn = doc.createElement('button');
+            prevBtn.className = 'btn secondary';
+            prevBtn.id = 'prev';
+            prevBtn.innerText = 'Prev';
+            const nextBtn = doc.createElement('button');
+            nextBtn.className = 'btn';
+            nextBtn.id = 'next';
+            nextBtn.innerText = 'Next';
+
+            toolbar.appendChild(titleEl);
+            toolbar.appendChild(prevBtn);
+            toolbar.appendChild(nextBtn);
+            doc.body.appendChild(toolbar);
+
+            // Viewer container
+            const viewer = doc.createElement('div');
+            viewer.id = 'viewer';
+            doc.body.appendChild(viewer);
+
+            const initScript = doc.createElement('script');
+            initScript.textContent = `(() => {
+  const epubUrl = ${JSON.stringify(epubUrl)};
+  const jszipCdn = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+  const epubCdn = "https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js";
+  const viewer = document.getElementById("viewer");
+  const prevBtn = document.getElementById("prev");
+  const nextBtn = document.getElementById("next");
+  let rendition = null;
+  let navReady = false;
+
+  function setStatus(msg) {
+    viewer.textContent = msg;
+  }
+
+  function enableNav(enabled) {
+    navReady = enabled;
+    prevBtn.disabled = !enabled;
+    nextBtn.disabled = !enabled;
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = src;
+      sc.onload = () => resolve();
+      sc.onerror = () => reject(new Error("Failed to load " + src));
+      document.head.appendChild(sc);
     });
-</script>
-</body>
-</html>`;
-            win.document.open();
-            win.document.write(html);
-            win.document.close();
+  }
+
+  function safePrev() {
+    if (!navReady || !rendition) return;
+    try {
+      const res = rendition.prev();
+      if (res && res.catch) res.catch(() => {});
+    } catch (err) {}
+  }
+
+  function safeNext() {
+    if (!navReady || !rendition) return;
+    try {
+      const res = rendition.next();
+      if (res && res.catch) res.catch(() => {});
+    } catch (err) {}
+  }
+
+  prevBtn.addEventListener("click", safePrev);
+  nextBtn.addEventListener("click", safeNext);
+  window.addEventListener("keyup", (e) => {
+    if (e.key === "ArrowRight") safeNext();
+    if (e.key === "ArrowLeft") safePrev();
+  });
+
+  enableNav(false);
+  setStatus("Loading book...");
+
+  Promise.resolve()
+    .then(() => (window.JSZip ? null : loadScript(jszipCdn)))
+    .then(() => loadScript(epubCdn))
+    .then(() => {
+      setStatus("Downloading book...");
+      return fetch(epubUrl);
+    })
+    .then((resp) => {
+      if (!resp || !resp.ok) throw new Error("HTTP " + (resp ? resp.status : "ERR"));
+      return resp.arrayBuffer();
+    })
+    .then((buf) => {
+      const book = window.ePub();
+      const openPromise = book.open(buf, "binary");
+      rendition = book.renderTo("viewer", { width: "100%", height: "100%" });
+      setStatus("Rendering...");
+      return Promise.resolve(openPromise).then(() => rendition.display());
+    })
+    .then(() => {
+      enableNav(true);
+    })
+    .catch((err) => {
+      setStatus("Failed to load EPUB: " + (err && err.message ? err.message : err));
+    });
+})();`;
+            doc.body.appendChild(initScript);
         }
 
         function jump() {
