@@ -5161,7 +5161,8 @@ void GUI::jumpToChapter(int chapter)
 void GUI::drawLoadingScreen()
 {
     M5.Display.fillScreen(TFT_WHITE);
-    M5.Display.setFont(&fonts::FreeSansBold18pt7b);
+    M5.Display.setFont(&lgfx::v1::fonts::Font2);
+    M5.Display.setTextSize(2.0f);
     M5.Display.setTextColor(TFT_BLACK);
     M5.Display.setTextDatum(middle_center);
     M5.Display.drawString("Loading Book...", M5.Display.width() / 2, M5.Display.height() / 2);
