@@ -1493,10 +1493,6 @@ void GUI::update()
         needsRedraw = false;
     }
 
-    if (!needsRedraw)
-    {
-        updateStatusBarWorkingIndicator();
-    }
 }
 
 void GUI::drawStatusBar(LovyanGFX *target)
@@ -1574,10 +1570,7 @@ void GUI::drawStatusBar(LovyanGFX *target)
     int wifiTextWidth = gfx->textWidth(buf);
     gfx->drawString(buf, wifiX, centerY);
 
-    if (currentState == AppState::MAIN_MENU)
-    {
-        drawStatusBarWorkingIndicator(gfx, false);
-    }
+    drawStatusBarBusyIndicator(gfx);
 
     // Book title (center, if in reader mode)
     if (currentState == AppState::READER && !currentBook.title.empty())
@@ -3085,13 +3078,8 @@ void GUI::computeBookMetrics()
     }
 }
 
-void GUI::drawStatusBarWorkingIndicator(LovyanGFX *target, bool doPartialRefresh)
+void GUI::drawStatusBarBusyIndicator(LovyanGFX *target)
 {
-    if (currentState != AppState::MAIN_MENU)
-    {
-        return;
-    }
-
     LovyanGFX *gfx = target ? target : (LovyanGFX *)&M5.Display;
 
     gfx->setFont(&lgfx::v1::fonts::Font2);
@@ -3099,6 +3087,12 @@ void GUI::drawStatusBarWorkingIndicator(LovyanGFX *target, bool doPartialRefresh
     gfx->setTextColor(TFT_BLACK, TFT_WHITE);
 
     const int centerY = STATUS_BAR_HEIGHT / 2;
+
+    bool busy = indexingScanActive || indexingProcessingActive;
+    if (!busy)
+    {
+        return;
+    }
 
     char wifiBuf[16];
     if (wifiConnected)
@@ -3120,18 +3114,17 @@ void GUI::drawStatusBarWorkingIndicator(LovyanGFX *target, bool doPartialRefresh
     int wifiTextWidth = gfx->textWidth(wifiBuf);
     int wifiLeft = wifiX - wifiTextWidth;
 
-    static const char spinnerFrames[] = "|/-\\";
-    char spinBuf[2] = {spinnerFrames[workingIndicatorFrame], '\0'};
-    int spinnerW = gfx->textWidth(spinBuf);
-    int spinnerGap = 6;
-    int spinnerRight = wifiLeft - spinnerGap;
-    if (spinnerRight <= 0)
+    char indicatorBuf[2] = {'B', '\0'};
+    int indicatorW = gfx->textWidth(indicatorBuf);
+    int indicatorGap = 6;
+    int indicatorRight = wifiLeft - indicatorGap;
+    if (indicatorRight <= 0)
     {
         return;
     }
-    int spinnerLeft = spinnerRight - spinnerW;
-    int clearX = spinnerLeft - 2;
-    int clearW = spinnerW + 4;
+    int indicatorLeft = indicatorRight - indicatorW;
+    int clearX = indicatorLeft - 2;
+    int clearW = indicatorW + 4;
 
     if (clearX < 0)
     {
@@ -3150,34 +3143,7 @@ void GUI::drawStatusBarWorkingIndicator(LovyanGFX *target, bool doPartialRefresh
 
     gfx->fillRect(clearX, 0, clearW, STATUS_BAR_HEIGHT, TFT_WHITE);
     gfx->setTextDatum(textdatum_t::middle_right);
-    gfx->drawString(spinBuf, spinnerRight, centerY);
-
-    if (doPartialRefresh && target == nullptr)
-    {
-        M5.Display.display(clearX, 0, clearW, STATUS_BAR_HEIGHT);
-    }
-}
-
-void GUI::updateStatusBarWorkingIndicator()
-{
-    if (currentState != AppState::MAIN_MENU)
-    {
-        return;
-    }
-
-    uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000);
-    if (nowMs - lastWorkingIndicatorUpdateMs < 250)
-    {
-        return;
-    }
-    if (M5.Display.displayBusy())
-    {
-        return;
-    }
-
-    lastWorkingIndicatorUpdateMs = nowMs;
-    workingIndicatorFrame = (workingIndicatorFrame + 1) % 4;
-    drawStatusBarWorkingIndicator(nullptr, true);
+    gfx->drawString(indicatorBuf, indicatorRight, centerY);
 }
 
 void GUI::computeBookMetricsLocked()

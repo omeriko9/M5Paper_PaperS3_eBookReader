@@ -11,7 +11,18 @@
 #include "device_hal.h"
 
 static const char *TAG = "INDEX";
-static const char *INDEX_FILE = "/spiffs/index.txt";
+
+static std::string getIndexPath()
+{
+    DeviceHAL &hal = DeviceHAL::getInstance();
+    if (hal.isSDCardMounted() && hal.getSDCardMountPoint())
+    {
+        std::string path = hal.getSDCardMountPoint();
+        path += "/index.txt";
+        return path;
+    }
+    return "/spiffs/index.txt";
+}
 
 BookIndex::BookIndex() {
     mutex = xSemaphoreCreateRecursiveMutex();
@@ -408,10 +419,11 @@ void BookIndex::load(ProgressCallback callback)
     books.clear();
     xSemaphoreGiveRecursive(mutex);
 
-    FILE *f = fopen(INDEX_FILE, "r");
+    std::string indexPath = getIndexPath();
+    FILE *f = fopen(indexPath.c_str(), "r");
     if (!f)
     {
-        ESP_LOGW(TAG, "Index file not found, creating new");
+        ESP_LOGW(TAG, "Index file not found at %s, creating new", indexPath.c_str());
         return;
     }
 
@@ -547,10 +559,11 @@ static std::string sanitize(const std::string& s) {
 void BookIndex::saveInternal()
 {
     // Private helper, assumes mutex held
-    FILE *f = fopen(INDEX_FILE, "w");
+    std::string indexPath = getIndexPath();
+    FILE *f = fopen(indexPath.c_str(), "w");
     if (!f)
     {
-        ESP_LOGE(TAG, "Failed to open index for writing");
+        ESP_LOGE(TAG, "Failed to open index for writing at %s", indexPath.c_str());
         return;
     }
 
