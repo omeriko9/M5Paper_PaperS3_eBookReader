@@ -17,6 +17,12 @@ static const char *TAG = "EPUB";
 static const int PAGE_SIZE = 800; // Characters per page (approx)
 static const size_t INVALID_CHAPTER_LENGTH = std::numeric_limits<size_t>::max();
 
+static inline void wdtResetIfRegistered() {
+    if (esp_task_wdt_status(NULL) == ESP_OK) {
+        esp_task_wdt_reset();
+    }
+}
+
 // Forward declarations
 // static std::string decodeHtmlEntities(const std::string& str); // Now in html_utils.h
 
@@ -91,7 +97,7 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstC
         if (spine.size() > 1) {
             int maxSkip = std::min((int)spine.size() - 1, 5); 
             for (int i = 0; i < maxSkip; ++i) {
-                esp_task_wdt_reset();
+                wdtResetIfRegistered();
                 if (isChapterSkippable(i)) {
                     ESP_LOGI(TAG, "Skipping chapter %d (heuristic)", i);
                     currentChapterIndex++;
@@ -105,7 +111,7 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstC
     if (loadFirstChapter) {
         currentTextOffset = 0;
         loadChapter(currentChapterIndex);
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
 
         // If the loaded chapter is very small (likely empty or just an image wrapper), try next
         // Limit this to a few chapters to avoid infinite loop
@@ -113,14 +119,14 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstC
         if (restoreChapterIndex == -1) {
             int retries = 0;
             while (currentChapterSize < 50 && currentChapterIndex < spine.size() - 1 && retries < 5) {
-                esp_task_wdt_reset();
+                wdtResetIfRegistered();
                 ESP_LOGI(TAG, "Chapter %d is too small (%u bytes), skipping...", currentChapterIndex, (unsigned)currentChapterSize);
                 currentChapterIndex++;
                 loadChapter(currentChapterIndex);
                 retries++;
             }
         }
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
     }
     
     return true;
@@ -136,7 +142,7 @@ bool EpubLoader::loadMetadataOnly(const char* path) {
         return false;
     }
     isOpen = true;
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
     if (!parseContainer()) {
         ESP_LOGE(TAG, "Failed to parse container.xml (metadata)");
@@ -267,8 +273,12 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     manifest.reserve(itemCount);
 
     pos = 0;
+    int manifestYield = 0;
     while (true) {
-        esp_task_wdt_reset();
+        if ((manifestYield++ & 0x1F) == 0) {
+            wdtResetIfRegistered();
+            vTaskDelay(1);
+        }
         pos = xml.find("<item ", pos);
         if (pos == std::string::npos) break;
         
@@ -340,8 +350,12 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     pos = xml.find("<spine");
     if (pos == std::string::npos) return false;
     
+    int spineYield = 0;
     while (true) {
-        esp_task_wdt_reset();
+        if ((spineYield++ & 0x1F) == 0) {
+            wdtResetIfRegistered();
+            vTaskDelay(1);
+        }
         pos = xml.find("<itemref ", pos);
         if (pos == std::string::npos) break;
         
@@ -437,8 +451,12 @@ void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
         // </navPoint>
         
         size_t pos = 0;
+        int navYield = 0;
         while ((pos = xml.find("<navPoint", pos)) != std::string::npos) {
-            esp_task_wdt_reset();
+            if ((navYield++ & 0x1F) == 0) {
+                wdtResetIfRegistered();
+                vTaskDelay(1);
+            }
             
             // Find the closing </navPoint> or next <navPoint>
             size_t endNavPoint = xml.find("</navPoint>", pos);
@@ -521,8 +539,12 @@ void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
         
         if (navStart != std::string::npos) {
             size_t pos = navStart;
+            int linkYield = 0;
             while ((pos = xml.find("<a ", pos)) != std::string::npos) {
-                esp_task_wdt_reset();
+                if ((linkYield++ & 0x1F) == 0) {
+                    wdtResetIfRegistered();
+                    vTaskDelay(1);
+                }
                 
                 size_t tagEnd = xml.find("</a>", pos);
                 if (tagEnd == std::string::npos) break;

@@ -1064,10 +1064,8 @@ void GUI::backgroundIndexerTaskLoop()
     indexingCurrent = 0;
     indexingTotal = 0;
     bool newBooksFound = false;
-    {
-        ScopedTaskWdtPause pauseWdt;
-        newBooksFound = bookIndex.scanForNewBooks([this](int current, int total, const char *msg)
-                                                  {
+    newBooksFound = bookIndex.scanForNewBooks([this](int current, int total, const char *msg)
+                                              {
         // Optional: update a status bar or log
         // ESP_LOGI(TAG, "Scan progress: %d/%d - %s", current, total, msg);
         indexingCurrent = current;
@@ -1082,13 +1080,12 @@ void GUI::backgroundIndexerTaskLoop()
             lastRedraw = now;
         }
         wdtResetIfRegistered(); },
-                                                   [this]()
-                                                   {
+                                              [this]()
+                                              {
                                                        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
                                                        bool readerActive = (currentState == AppState::READER) && (now - lastActivityTime < 8 * 1000);
                                                        return bookOpenInProgress || renderingInProgress || readerRenderInProgress || readerActive;
-                                                   });
-    }
+                                              });
     indexingScanActive = false;
 
     if (newBooksFound)
