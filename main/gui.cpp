@@ -34,6 +34,7 @@
 #include <random>
 #include <unordered_set>
 #include <sys/stat.h>
+#include <limits>
 
 // Image placeholder character (U+E000 in UTF-8)
 static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
@@ -100,7 +101,7 @@ static bool takeEpubMutexWithWdt(SemaphoreHandle_t mutex, volatile bool *abort =
         {
             return true;
         }
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         if (abort && *abort)
         {
             return false;
@@ -119,6 +120,7 @@ bool wifiConnected = false;
 int wifiRssi = 0;
 extern WifiManager wifiManager;
 extern WebServer webServer;
+volatile bool g_metricsPauseRequested = false;
 
 static constexpr int STATUS_BAR_HEIGHT = 44;
 static constexpr int SEARCH_BAR_HEIGHT = 50;
@@ -623,45 +625,6 @@ static std::string processTextForDisplay(const std::string &text)
     return result;
 }
 
-static bool detectRTLDocument(EpubLoader &loader, size_t sampleOffset)
-{
-    std::string lang = loader.getLanguage();
-    if (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos ||
-        lang.find("ar") != std::string::npos || lang.find("AR") != std::string::npos)
-    {
-        return true;
-    }
-
-    // Check first 5 chapters to decide if the book is Hebrew or Arabic
-    int originalChapter = loader.getCurrentChapterIndex();
-    int chaptersToCheck = std::min(5, loader.getTotalChapters());
-    bool foundRTL = false;
-
-    for (int i = 0; i < chaptersToCheck; i++)
-    {
-        if (loader.jumpToChapter(i))
-        {
-            // Check first 1000 chars of the chapter
-            std::string sample = loader.getText(0, 1000);
-            if (isHebrew(sample) || isArabic(sample))
-            {
-                foundRTL = true;
-                break;
-            }
-        }
-        if (foundRTL)
-            break;
-    }
-
-    // Restore original chapter
-    if (loader.getCurrentChapterIndex() != originalChapter)
-    {
-        loader.jumpToChapter(originalChapter);
-    }
-
-    return foundRTL;
-}
-
 static void enterDeepSleepWithTouchWake()
 {
     // Use HAL for device-agnostic deep sleep
@@ -834,7 +797,7 @@ void GUI::renderTaskLoop()
         {
             renderingInProgress = true;
             esp_task_wdt_add(NULL);
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
             ESP_LOGI(TAG, "RenderTask: Processing request offset=%zu isNext=%d", req.offset, req.isNext);
 
             // Clear abort flag before starting
@@ -884,48 +847,46 @@ void GUI::renderTaskLoop()
 
 void GUI::metricsTaskLoop()
 {
-    esp_task_wdt_add(NULL);
     ESP_LOGI(TAG, "MetricsTask started for book %d", metricsTaskTargetBookId);
     int targetId = metricsTaskTargetBookId;
     auto isUiBusy = [this]() -> bool
     {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 2000);
-        return bookOpenInProgress || renderingInProgress || readerRenderInProgress || readerActive;
+        bool recentActivity = (now - lastUserActivityTime < 3000);
+        bool notReading = (currentState != AppState::READER);
+        return bookOpenInProgress || renderingInProgress || readerRenderInProgress || recentActivity || notReading;
     };
+
+    std::string targetPath;
+    if (currentBook.id == targetId)
+    {
+        targetPath = currentBook.path;
+    }
 
     // Initial check and setup
     int chapters = 0;
-    while (true)
+    if (currentBook.id != targetId || targetPath.empty())
     {
-        if (currentBook.id != targetId)
-        {
-            ESP_LOGW(TAG, "MetricsTask: Book changed at start, aborting");
-            metricsTaskHandle = nullptr;
-            esp_task_wdt_delete(NULL);
-            vTaskDelete(NULL);
-            return;
-        }
-        if (isUiBusy())
-        {
-            wdtResetIfRegistered();
-            vTaskDelay(pdMS_TO_TICKS(50));
-            continue;
-        }
-        if (xSemaphoreTake(epubMutex, pdMS_TO_TICKS(50)) == pdTRUE)
-        {
-            chapters = epubLoader.getTotalChapters();
-            xSemaphoreGive(epubMutex);
-            break;
-        }
-        wdtResetIfRegistered();
+        ESP_LOGW(TAG, "MetricsTask: Book changed at start, aborting");
+        metricsTaskHandle = nullptr;
+        vTaskDelete(NULL);
+        return;
     }
+
+    EpubLoader localLoader;
+    if (!localLoader.load(targetPath.c_str(), -1, false))
+    {
+        ESP_LOGW(TAG, "MetricsTask: Failed to open book for metrics: %s", targetPath.c_str());
+        metricsTaskHandle = nullptr;
+        vTaskDelete(NULL);
+        return;
+    }
+    chapters = localLoader.getTotalChapters();
 
     if (chapters <= 0)
     {
         ESP_LOGI(TAG, "MetricsTask: No chapters or empty book");
         metricsTaskHandle = nullptr;
-        esp_task_wdt_delete(NULL);
         vTaskDelete(NULL);
         return;
     }
@@ -937,46 +898,38 @@ void GUI::metricsTaskLoop()
     for (int i = 0; i < chapters; ++i)
     {
         wdtResetIfRegistered();
+        while (isUiBusy())
+        {
+            wdtResetIfRegistered();
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
         // Check if book changed
         if (currentBook.id != targetId)
         {
             ESP_LOGW(TAG, "MetricsTask: Book changed during scan, aborting");
             metricsTaskHandle = nullptr;
-            esp_task_wdt_delete(NULL);
             vTaskDelete(NULL);
             return;
         }
 
         size_t len = 0;
-        while (true)
+        while (isUiBusy())
         {
-            if (currentBook.id != targetId)
-            {
-                ESP_LOGW(TAG, "MetricsTask: Book changed during scan, aborting");
-                metricsTaskHandle = nullptr;
-                esp_task_wdt_delete(NULL);
-                vTaskDelete(NULL);
-                return;
-            }
-            if (isUiBusy())
-            {
-                wdtResetIfRegistered();
-                vTaskDelay(pdMS_TO_TICKS(50));
-                continue;
-            }
-            if (xSemaphoreTake(epubMutex, pdMS_TO_TICKS(50)) == pdTRUE)
-            {
-                uint64_t t_start = esp_timer_get_time();
-                len = epubLoader.getChapterTextLength(i);
-                uint64_t t_ms = (esp_timer_get_time() - t_start) / 1000ULL;
-                xSemaphoreGive(epubMutex);
-                if (t_ms > 500)
-                {
-                    ESP_LOGW(TAG, "MetricsTask: chapter %d length took %llu ms", i, (unsigned long long)t_ms);
-                }
-                break;
-            }
             wdtResetIfRegistered();
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        uint64_t t_start = esp_timer_get_time();
+        len = localLoader.getChapterTextLength(i);
+        uint64_t t_ms = (esp_timer_get_time() - t_start) / 1000ULL;
+        if (t_ms > 500)
+        {
+            ESP_LOGW(TAG, "MetricsTask: chapter %d length took %llu ms", i, (unsigned long long)t_ms);
+        }
+        if (len == std::numeric_limits<size_t>::max())
+        {
+            --i;
+            continue;
         }
 
         cumulative += len;
@@ -1010,7 +963,6 @@ void GUI::metricsTaskLoop()
     needsRedraw = true;
 
     metricsTaskHandle = nullptr;
-    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
@@ -1200,6 +1152,7 @@ void GUI::backgroundIndexerTaskLoop()
                 // Save periodically to avoid losing progress on crash/reboot
                 if (updatesCount >= 20)
                 {
+                    if (bookOpenInProgress) waitForBookOpen();
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1315,6 +1268,7 @@ void GUI::backgroundIndexerTaskLoop()
                     sums[i + 1] = cumulative;
                 }
 
+                if (bookOpenInProgress) waitForBookOpen();
                 // Save metrics but NOT the index file yet (pass false)
                 bookIndex.saveBookMetrics(book.id, cumulative, sums, false);
                 indexNeedsSave = true;
@@ -1323,6 +1277,7 @@ void GUI::backgroundIndexerTaskLoop()
                 // Save periodically
                 if (updatesCount >= 5)
                 { // Save more frequently for expensive operations
+                    if (bookOpenInProgress) waitForBookOpen();
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1346,6 +1301,7 @@ void GUI::backgroundIndexerTaskLoop()
 
     if (indexNeedsSave)
     {
+        if (bookOpenInProgress) waitForBookOpen();
         ESP_LOGI(TAG, "BgIndexer: Saving updated index with found metrics...");
         bookIndex.save();
     }
@@ -1402,6 +1358,16 @@ void GUI::setShowImages(bool enabled)
 
 void GUI::update()
 {
+    {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        bool recentActivity = (now - lastUserActivityTime < 3000);
+        g_metricsPauseRequested = (currentState != AppState::READER) ||
+                                  recentActivity ||
+                                  bookOpenInProgress ||
+                                  renderingInProgress ||
+                                  readerRenderInProgress;
+    }
+
     if (currentState == AppState::MUSIC_COMPOSER)
     {
         ComposerUI::getInstance().update();
@@ -2086,6 +2052,7 @@ void GUI::drawLibrary(bool favoritesOnly)
 
     target->fillScreen(TFT_WHITE);
     drawStatusBar(target);
+    wdtResetIfRegistered();
 
     // Draw search bar
     drawSearchBar(target);
@@ -2133,9 +2100,17 @@ void GUI::drawLibrary(bool favoritesOnly)
 
     // Use startWrite to batch operations if supported
     target->startWrite();
+    TickType_t lastYieldTick = xTaskGetTickCount();
 
     for (int i = startIdx; i < endIdx; ++i)
     {
+        TickType_t nowTick = xTaskGetTickCount();
+        if (nowTick - lastYieldTick >= pdMS_TO_TICKS(30))
+        {
+            wdtResetIfRegistered();
+            vTaskDelay(1);
+            lastYieldTick = nowTick;
+        }
         // Ensure font is reset to system font for each item to prevent drift
         target->setFont(&lgfx::v1::fonts ::Font2); // Font2
         target->setTextSize(itemSize);
@@ -2166,6 +2141,7 @@ void GUI::drawLibrary(bool favoritesOnly)
     }
 
     target->endWrite();
+    wdtResetIfRegistered();
 
     // Draw Paging Controls
     if (totalPages > 1)
@@ -2236,6 +2212,7 @@ void GUI::drawLibrary(bool favoritesOnly)
     }
 
     M5.Display.waitDisplay();
+    wdtResetIfRegistered();
     M5.Display.display();
 }
 
@@ -2555,7 +2532,7 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         ESP_LOGV(TAG, "Checked abort flag");
 
         // Reset watchdog on every iteration to prevent WDT timeouts during heavy logging/processing
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
 
         // Check for image placeholder character (U+E000 = \xEE\x80\x80)
         if (i + IMAGE_PLACEHOLDER_LEN <= text.length() &&
@@ -3598,7 +3575,7 @@ void GUI::drawMainMenu()
 
     for (int i = 0; i < 6; i++)
     {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         int row = i / cols;
         int col = i % cols;
 
@@ -3776,7 +3753,7 @@ void GUI::goToSleep()
     saveLastBook();
 
     // Flush any pending display operations before sleeping
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     M5.Display.waitDisplay();
 
     bool shouldReconnect = false;
@@ -3791,11 +3768,11 @@ void GUI::goToSleep()
         }
         esp_wifi_stop();
     }
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
     // Light sleep with touch wakeup handled by M5.Power. Also arm a timer so we can fall through to deep sleep.
     drawSleepSymbol("z");
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
     // M5PaperS3 specific: 5 minutes light sleep with GPIO 48 wake-up
@@ -5202,7 +5179,12 @@ bool GUI::openBookById(int id)
         return false;
     }
 
-    if (!epubLoader.load(book.path.c_str()))
+    bool loaded = false;
+    {
+        ScopedTaskWdtPause pauseWdt;
+        loaded = epubLoader.load(book.path.c_str(), book.currentChapter, true);
+    }
+    if (!loaded)
     {
         xSemaphoreGive(epubMutex);
         bookOpenInProgress = false;
@@ -5214,20 +5196,24 @@ bool GUI::openBookById(int id)
 
     // Auto-detect language for font
     std::string lang = epubLoader.getLanguage();
-    bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
+    bool isHebrewb = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
 
     // Restore progress
     currentTextOffset = currentBook.currentOffset;
     resetPageInfoCache();
-    if (currentBook.currentChapter > 0)
+
+    // Fast RTL detection: rely on language, then current chapter sample (no extra loads)
+    bool rtlLang = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos ||
+                    lang.find("ar") != std::string::npos || lang.find("AR") != std::string::npos);
+    isRTLDocument = rtlLang;
+    if (!isRTLDocument)
     {
-        while (epubLoader.getCurrentChapterIndex() < currentBook.currentChapter)
+        std::string sample = epubLoader.getText(0, 1000);
+        if (isHebrew(sample) || isArabic(sample))
         {
-            if (!epubLoader.nextChapter())
-                break;
+            isRTLDocument = true;
         }
     }
-    isRTLDocument = detectRTLDocument(epubLoader, currentTextOffset);
 
     if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
     {
@@ -5244,13 +5230,27 @@ bool GUI::openBookById(int id)
         }
         // Spawn new task
         metricsTaskTargetBookId = currentBook.id;
+#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
+        int metricsCore = deviceHAL.getRenderTaskCore();
+        if (metricsCore != deviceHAL.getMainTaskCore())
+        {
+            xTaskCreatePinnedToCore([](void *arg)
+                                    { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle, metricsCore);
+        }
+        else
+        {
+            xTaskCreate([](void *arg)
+                        { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+        }
+#else
         xTaskCreate([](void *arg)
                     { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+#endif
     }
 
     // Release mutex
     xSemaphoreGive(epubMutex);
-    bookOpenInProgress = false;
+    // bookOpenInProgress = false; // Moved to end to prevent BgIndexer from resuming too early
 
     // Restore book-specific font settings if available
     std::string bookFont;
@@ -5266,7 +5266,7 @@ bool GUI::openBookById(int id)
     else
     {
         // No saved font for this book - set default based on language
-        if (isHebrew)
+        if (isHebrewb)
         {
             setFont("Hebrew");
             // Use Hebrew font's saved size or default 2.5
@@ -5304,6 +5304,7 @@ bool GUI::openBookById(int id)
 
     addToRecentBooks(id);
 
+    bookOpenInProgress = false;
     return true;
 }
 
@@ -5902,7 +5903,10 @@ bool GUI::loadLastBook()
     {
         ESP_LOGI(TAG, "Loading last book: ID=%d, path=%s, chapter=%d, offset=%zu",
                  currentBook.id, currentBook.path.c_str(), currentBook.currentChapter, currentBook.currentOffset);
-        loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
+        {
+            ScopedTaskWdtPause pauseWdt;
+            loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
+        }
         if (loaded)
         {
             currentState = AppState::READER;
@@ -5957,8 +5961,22 @@ bool GUI::loadLastBook()
                 if (metricsTaskHandle != nullptr)
                     vTaskDelete(metricsTaskHandle);
                 metricsTaskTargetBookId = currentBook.id;
+#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
+                int metricsCore = deviceHAL.getRenderTaskCore();
+                if (metricsCore != deviceHAL.getMainTaskCore())
+                {
+                    xTaskCreatePinnedToCore([](void *arg)
+                                            { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle, metricsCore);
+                }
+                else
+                {
+                    xTaskCreate([](void *arg)
+                                { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+                }
+#else
                 xTaskCreate([](void *arg)
                             { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
+#endif
             }
         }
         xSemaphoreGive(epubMutex);

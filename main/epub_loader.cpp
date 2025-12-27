@@ -16,6 +16,7 @@
 static const char *TAG = "EPUB";
 static const int PAGE_SIZE = 800; // Characters per page (approx)
 static const size_t INVALID_CHAPTER_LENGTH = std::numeric_limits<size_t>::max();
+extern volatile bool g_metricsPauseRequested;
 
 static inline void wdtResetIfRegistered() {
     if (esp_task_wdt_status(NULL) == ESP_OK) {
@@ -646,6 +647,7 @@ struct ChapterLengthContext {
     TickType_t lastYieldTick = 0;
     bool inStyle = false;
     bool inScript = false;
+    bool aborted = false;
 };
 
 static void appendSeparatorIfNeeded(ChapterLengthContext* ctx) {
@@ -660,7 +662,19 @@ static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
     ChapterLengthContext* context = static_cast<ChapterLengthContext*>(ctx);
     if (!context) return false;
 
+    if (g_metricsPauseRequested) {
+        context->aborted = true;
+        return false;
+    }
+
+    constexpr size_t kYieldChunk = 512;
+    const TickType_t kYieldTicks = pdMS_TO_TICKS(10);
+
     for (size_t i = 0; i < len; ++i) {
+        if ((context->processedSinceYield & 0x7F) == 0 && g_metricsPauseRequested) {
+            context->aborted = true;
+            return false;
+        }
         char c = data[i];
         if (c == '<') {
             context->inTag = true;
@@ -722,11 +736,15 @@ static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
         // Give FreeRTOS a chance to run idle/other tasks during long scans
         context->processedSinceYield++;
         TickType_t now = xTaskGetTickCount();
-        if (context->processedSinceYield >= 2048 || (now - context->lastYieldTick) >= pdMS_TO_TICKS(20)) {
+        if (context->processedSinceYield >= kYieldChunk || (now - context->lastYieldTick) >= kYieldTicks) {
             wdtResetIfRegistered();
             vTaskDelay(1);
             context->processedSinceYield = 0;
             context->lastYieldTick = xTaskGetTickCount();
+            if (g_metricsPauseRequested) {
+                context->aborted = true;
+                return false;
+            }
         }
     }
     return true;
@@ -1164,6 +1182,9 @@ size_t EpubLoader::getChapterTextLength(int index) {
     ChapterLengthContext ctx;
     ctx.lastYieldTick = xTaskGetTickCount();
     zip.extractFile(spine[index], chapterLengthCallback, &ctx);
+    if (ctx.aborted) {
+        return INVALID_CHAPTER_LENGTH;
+    }
     chapterTextLengths[index] = ctx.length;
     return ctx.length;
 }

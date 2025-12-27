@@ -12,6 +12,14 @@
 
 static const char *TAG = "INDEX";
 
+static inline void wdtResetIfRegistered()
+{
+    if (esp_task_wdt_status(NULL) == ESP_OK)
+    {
+        esp_task_wdt_reset();
+    }
+}
+
 static std::string getIndexPath()
 {
     DeviceHAL &hal = DeviceHAL::getInstance();
@@ -39,7 +47,7 @@ bool BookIndex::init(bool fastMode, ProgressCallback callback)
     return false; // No new books found during init
 }
 
-bool BookIndex::validateBooks()
+bool BookIndex::validateBooks(std::function<bool()> shouldPause)
 {
     // Get a copy of books to check without holding the lock for too long
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
@@ -48,7 +56,7 @@ bool BookIndex::validateBooks()
 
     std::vector<int> idsToRemove;
     for (const auto& book : booksCopy) {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         struct stat st;
         if (stat(book.path.c_str(), &st) != 0) {
             ESP_LOGW(TAG, "Book file missing: %s", book.path.c_str());
@@ -69,6 +77,12 @@ bool BookIndex::validateBooks()
             }
         }
         if (changed) {
+            if (shouldPause) {
+                while (shouldPause()) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    wdtResetIfRegistered();
+                }
+            }
             saveInternal();
             xSemaphoreGiveRecursive(mutex);
             return true;
@@ -80,7 +94,7 @@ bool BookIndex::validateBooks()
 
 bool BookIndex::scanForNewBooks(ProgressCallback callback, std::function<bool()> shouldPause)
 {
-    bool foundNewBooks = validateBooks();
+    bool foundNewBooks = validateBooks(shouldPause);
     foundNewBooks |= scanDirectory("/spiffs", callback, shouldPause);
     
     DeviceHAL& hal = DeviceHAL::getInstance();
@@ -94,6 +108,12 @@ bool BookIndex::scanForNewBooks(ProgressCallback callback, std::function<bool()>
     }
     
     if (foundNewBooks) {
+        if (shouldPause) {
+            while (shouldPause()) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                wdtResetIfRegistered();
+            }
+        }
         xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
         saveInternal();
         xSemaphoreGiveRecursive(mutex);
@@ -295,14 +315,14 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback, s
     
     while ((entry = readdir(dir)) != NULL)
     {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         
         // Check if we should pause (e.g. user is opening a book)
         if (shouldPause && shouldPause()) {
             ESP_LOGI(TAG, "Scan paused by request");
             while (shouldPause && shouldPause()) {
                 vTaskDelay(pdMS_TO_TICKS(100));
-                esp_task_wdt_reset();
+                wdtResetIfRegistered();
             }
             ESP_LOGI(TAG, "Scan resumed");
         }
@@ -433,7 +453,7 @@ void BookIndex::load(ProgressCallback callback)
 
     while (fgets(line, sizeof(line), f))
     {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         // Strip newline and carriage return
         size_t len = strlen(line);
         while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
@@ -569,7 +589,7 @@ void BookIndex::saveInternal()
 
     for (const auto &book : books)
     {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f|%d\n", 
             book.id, 
             sanitize(book.title).c_str(), 
@@ -745,34 +765,51 @@ static std::string toLowerStr(const std::string& s) {
 
 std::vector<BookEntry> BookIndex::getFilteredBooks(const std::string& searchQuery, bool favoritesOnly)
 {
+    std::vector<BookEntry> snapshot;
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+    snapshot = books;
+    xSemaphoreGiveRecursive(mutex);
+
+    if (searchQuery.empty() && !favoritesOnly)
+    {
+        return snapshot;
+    }
+
     std::vector<BookEntry> result;
-    
+    result.reserve(snapshot.size());
+
     std::string queryLower = toLowerStr(searchQuery);
-    
-    for (const auto& book : books) {
+    TickType_t lastYieldTick = xTaskGetTickCount();
+
+    for (const auto& book : snapshot) {
+        TickType_t now = xTaskGetTickCount();
+        if (now - lastYieldTick >= pdMS_TO_TICKS(20)) {
+            wdtResetIfRegistered();
+            vTaskDelay(1);
+            lastYieldTick = now;
+        }
+
         // Filter by favorites if enabled
         if (favoritesOnly && !book.isFavorite) {
             continue;
         }
-        
+
         // If no search query, include all (that passed favorites filter)
         if (searchQuery.empty()) {
             result.push_back(book);
             continue;
         }
-        
+
         // Search in title and author (case-insensitive)
         std::string titleLower = toLowerStr(book.title);
         std::string authorLower = toLowerStr(book.author);
-        
+
         if (titleLower.find(queryLower) != std::string::npos ||
             authorLower.find(queryLower) != std::string::npos) {
             result.push_back(book);
         }
     }
-    
-    xSemaphoreGiveRecursive(mutex);
+
     return result;
 }
 

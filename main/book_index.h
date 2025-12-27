@@ -30,7 +30,7 @@ public:
     
     // Background scanning
     bool scanForNewBooks(ProgressCallback callback = nullptr, std::function<bool()> shouldPause = nullptr);
-    bool validateBooks(); // Check if books still exist
+    bool validateBooks(std::function<bool()> shouldPause = nullptr); // Check if books still exist
 
     // Returns the new file path to save to (e.g. "/spiffs/5.epub")
     std::string addBook(const std::string& title);

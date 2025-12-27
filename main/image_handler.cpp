@@ -20,6 +20,14 @@
 
 static const char *TAG = "ImageHandler";
 
+static inline void wdtResetIfRegistered()
+{
+    if (esp_task_wdt_status(NULL) == ESP_OK)
+    {
+        esp_task_wdt_reset();
+    }
+}
+
 // JPEG decoder workspace size - balance between memory and compatibility
 // Larger workspace allows decoding larger/higher quality JPEGs
 #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
@@ -472,9 +480,9 @@ ImageDecodeResult ImageHandler::decodeJpeg(
     // Use M5GFX's built-in drawJpg with scaling
     // This is much more efficient than manual pixel-by-pixel decoding
     // M5GFX automatically handles grayscale conversion for grayscale displays/canvases
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     gfx->drawJpg(data, size, drawX, drawY, result.scaledWidth, result.scaledHeight, 0, 0, scale, scale);
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
     result.success = true;
     return result;
@@ -544,9 +552,9 @@ ImageDecodeResult ImageHandler::decodeJpegToDisplay(
 
     // Use M5GFX's drawJpg
     M5.Display.startWrite();
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     M5.Display.drawJpg(data, size, drawX, drawY, result.scaledWidth, result.scaledHeight, 0, 0, scale, scale);
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     M5.Display.endWrite();
 
     result.success = true;
@@ -646,9 +654,9 @@ ImageDecodeResult ImageHandler::decodePng(
 
     // Use M5GFX drawPng with scaling
     // Note: M5GFX automatically converts to grayscale when drawing to grayscale canvas
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     gfx->drawPng(data, size, drawX, drawY, result.scaledWidth, result.scaledHeight, 0, 0, scale, scale);
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
     result.success = true;
     return result;
@@ -718,9 +726,9 @@ ImageDecodeResult ImageHandler::decodePngToDisplay(
 
     // Draw directly to display
     M5.Display.startWrite();
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     M5.Display.drawPng(data, size, drawX, drawY, result.scaledWidth, result.scaledHeight, 0, 0, scale, scale);
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     M5.Display.endWrite();
 
     result.success = true;

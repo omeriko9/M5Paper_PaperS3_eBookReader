@@ -14,6 +14,14 @@
 
 static const char *TAG = "ZIP";
 
+static inline void wdtResetIfRegistered()
+{
+    if (esp_task_wdt_status(NULL) == ESP_OK)
+    {
+        esp_task_wdt_reset();
+    }
+}
+
 // Signatures
 static const uint32_t EOCD_SIGNATURE = 0x06054b50;
 static const uint32_t CD_SIGNATURE = 0x02014b50;
@@ -91,7 +99,7 @@ bool ZipReader::parseCentralDirectory() {
 
     long currentPos = fileSize;
     while (currentPos > searchLimit) {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         long readSize = BUF_SIZE;
         if (currentPos - readSize < searchLimit) {
             readSize = currentPos - searchLimit;
@@ -206,7 +214,7 @@ bool ZipReader::parseCentralDirectory() {
 
         // Yield occasionally so the idle task can reset the watchdog when reading large EPUBs
         if ((i & 0x0F) == 0) {
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
             vTaskDelay(1);
         }
     }
@@ -301,7 +309,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
         // Stored (no compression) - stream append to avoid large allocs
         size_t remaining = compressedSize;
         while (remaining > 0) {
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
             size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
             size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
             if (bytesRead == 0) break;
@@ -327,7 +335,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
         int ret = Z_OK;
 
         while (ret != Z_STREAM_END) {
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
             if (strm.avail_in == 0 && remaining > 0) {
                 size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
                 size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
@@ -388,7 +396,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
 
 bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const char*, size_t, void*), void* context) {
     ESP_LOGV(TAG, "extractFile with callback: %s", filename.c_str());
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     const ZipFileInfo* infoPtr = findFile(filename);
     if (!infoPtr) {
         ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
@@ -400,7 +408,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
     ESP_LOGV(TAG, "extractFile After fopen");
     if (!f) return false;
 
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
     // Go to Local File Header
     fseek(f, info.localHeaderOffset, SEEK_SET);
     ESP_LOGV(TAG, "extractFile After fseek to LFH");
@@ -462,7 +470,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
 
             remaining -= bytesRead;
             if ((remaining & 0xFFF) == 0) { // Yield every 4KB
-                esp_task_wdt_reset();
+                wdtResetIfRegistered();
                 vTaskDelay(1); // yield occasionally
             }
         }
@@ -497,7 +505,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
             strm.avail_out = OUT_CHUNK;
             ret = inflate(&strm, remaining ? Z_NO_FLUSH : Z_FINISH);
             ESP_LOGV(TAG, "extractFile: inflate returned %d", ret);
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
             vTaskDelay(1);
 
             size_t have = OUT_CHUNK - strm.avail_out;
@@ -517,7 +525,7 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
 
             // Yield occasionally
             if ((strm.total_out & 0xFFF) == 0) { // Yield every 4KB
-                esp_task_wdt_reset();
+                wdtResetIfRegistered();
                 vTaskDelay(1);
             }
         }
