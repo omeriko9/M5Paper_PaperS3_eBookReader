@@ -315,7 +315,7 @@ private:
     uint32_t getTextColor(int brightness = 0) const; // Returns color based on brightness (0=black)
     uint8_t getGrayShade(int level) const;           // Get grayscale value (0=white, 15=black)
 
-    uint32_t lastActivityTime = 0;
+    uint32_t lastUserActivityTime = 0;
     bool webServerEnabled = true;
     bool settingsNeedsUnderlayRefresh = false;
     bool justWokeUp = false;

@@ -796,7 +796,7 @@ void GUI::init(bool isWakeFromSleep)
     nextCanvasValid = false;
     prevCanvasValid = false;
 
-    lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+    lastUserActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 
     // Disable WiFi power save to prevent packet loss during uploads
     esp_wifi_set_ps(WIFI_PS_NONE);
@@ -998,7 +998,7 @@ void GUI::backgroundIndexerTaskLoop()
         while (true)
         {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-            bool readerActive = (currentState == AppState::READER) && (now - lastActivityTime < 8 * 1000);
+            bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 8 * 1000);
             if (!bookOpenInProgress && !renderingInProgress && !readerRenderInProgress && !readerActive)
             {
                 break;
@@ -1083,7 +1083,7 @@ void GUI::backgroundIndexerTaskLoop()
                                               [this]()
                                               {
                                                        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-                                                       bool readerActive = (currentState == AppState::READER) && (now - lastActivityTime < 8 * 1000);
+                                                       bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 8 * 1000);
                                                        return bookOpenInProgress || renderingInProgress || readerRenderInProgress || readerActive;
                                               });
     indexingScanActive = false;
@@ -1382,7 +1382,7 @@ void GUI::update()
         buttonSleepRequested = false;
         ESP_LOGI(TAG, "Button sleep requested - entering sleep mode");
         goToSleep();
-        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+        lastUserActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
         return;
     }
 
@@ -1404,24 +1404,25 @@ void GUI::update()
     uint32_t lastHttpActivity = webServer.getLastActivityTime();
     bool recentHttpActivity = (lastHttpActivity > 0) && (now - lastHttpActivity < 30 * 1000); // 30 second grace period
 
-    if (recentHttpActivity || indexingActive)
-    {
-        lastActivityTime = now; // Reset idle timer if web is active
-    }
-
     // Unified Sleep and WebServer Logic
     uint32_t idleTimeout = lightSleepMinutes * 60 * 1000; // Use user setting
 
-    if (!indexingActive && now - lastActivityTime > idleTimeout && !recentHttpActivity)
+    if (!indexingActive && !recentHttpActivity && now - lastUserActivityTime > idleTimeout)
     {
+        ESP_LOGI(TAG, "Idle timeout reached: state=%d idleMs=%u timeoutMs=%u indexing=%d http=%d",
+                 (int)currentState,
+                 (unsigned)(now - lastUserActivityTime),
+                 (unsigned)idleTimeout,
+                 indexingActive ? 1 : 0,
+                 recentHttpActivity ? 1 : 0);
         if (currentState == AppState::LIBRARY && webServerEnabled)
         {
             ESP_LOGI(TAG, "Library idle timeout: Stopping WebServer");
             setWebServerEnabled(false);
         }
         goToSleep();
-        // After waking up, update lastActivityTime so we don't loop immediately
-        lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+        // After waking up, update lastUserActivityTime so we don't loop immediately
+        lastUserActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
     }
     else if (currentState == AppState::LIBRARY && !webServerEnabled)
     {
@@ -3806,7 +3807,7 @@ void GUI::goToSleep()
 
     // Force redraw to clear the "z" symbol and show content immediately
     needsRedraw = true;
-    lastActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
+    lastUserActivityTime = (uint32_t)(esp_timer_get_time() / 1000);
 
     // If the timer woke us, show wallpaper and enter deep sleep
     auto wakeReason = esp_sleep_get_wakeup_cause();
@@ -5006,7 +5007,7 @@ void GUI::handleTouch()
 
     if (M5.Touch.getCount() > 0)
     {
-        lastActivityTime = now;
+        lastUserActivityTime = now;
         auto t = M5.Touch.getDetail(0);
 
         if (currentState == AppState::MUSIC_COMPOSER)

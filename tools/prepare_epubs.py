@@ -10,6 +10,10 @@ from PIL import Image
 from io import BytesIO
 import argparse
 import struct
+import itertools
+from concurrent.futures import ProcessPoolExecutor
+
+SDCARD_BOOKS_ROOT = "/sdcard/books"
 
 def count_chapter_length(data: bytes) -> int:
     """
@@ -524,11 +528,35 @@ def sanitize(s: str) -> str:
     """Sanitize string for index file, replacing problematic characters."""
     return s.replace('|', '-').replace('\n', ' ').replace('\r', ' ')
 
+def process_single_epub(epub_path_str: str, mode: str):
+    epub_path = Path(epub_path_str)
+    if not epub_path.is_file():
+        return None
+
+    process_epub(str(epub_path), mode)
+    final_path = rename_epub_by_metadata(str(epub_path))
+    if final_path is None:
+        final_path = epub_path
+
+    has_metrics = 1 if generate_metrics(final_path) else 0
+
+    title, author, size = get_metadata(final_path)
+    if title is None:
+        title = final_path.stem
+
+    return {
+        "name": final_path.name,
+        "title": title,
+        "author": author,
+        "size": size,
+        "has_metrics": has_metrics,
+    }
 
 def main():
     parser = argparse.ArgumentParser(description="Process EPUB files: downscale images or remove them.")
     parser.add_argument('target_dir', nargs='?', default=os.getcwd(), help="Directory containing EPUB files (default: current directory)")
     parser.add_argument('--mode', choices=['downscale', 'remove'], default='downscale', help="Mode: 'downscale' to resize large images, 'remove' to remove images (default: downscale)")
+    parser.add_argument('--workers', type=int, default=0, help="Number of worker processes (0 = auto)")
     
     args = parser.parse_args()
     target_dir = args.target_dir
@@ -537,53 +565,49 @@ def main():
     print(f"Scanning directory: {target_dir}")
     print(f"Mode: {mode}")
     
-    count = 0
+    epub_paths = [
+        os.path.join(target_dir, filename)
+        for filename in sorted(os.listdir(target_dir))
+        if filename.lower().endswith('.epub')
+    ]
+
+    if not epub_paths:
+        print("No .epub files found in this directory.")
+        return
+
+    max_workers = args.workers if args.workers and args.workers > 0 else (os.cpu_count() or 1)
+    max_workers = max(1, min(max_workers, len(epub_paths)))
+
+    results = []
+    if max_workers > 1:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for result in executor.map(process_single_epub, epub_paths, itertools.repeat(mode)):
+                if result:
+                    results.append(result)
+    else:
+        for path in epub_paths:
+            result = process_single_epub(path, mode)
+            if result:
+                results.append(result)
+
     index_entries = []
     book_id = 1
-    
-    for filename in os.listdir(target_dir):
-        if filename.lower().endswith('.epub'):
-            full_path = os.path.join(target_dir, filename)
-            if os.path.isfile(full_path):
-                process_epub(full_path, mode)
-                final_path = rename_epub_by_metadata(full_path)
-                if final_path is None:
-                    final_path = Path(full_path)
+    for result in results:
+        title = sanitize(result["title"])
+        author = sanitize(result["author"]) if result["author"] else ""
+        index_path = f"{SDCARD_BOOKS_ROOT}/{result['name']}"
+        entry = f"{book_id}|{title}|0|0|{index_path}|{result['size']}|{result['has_metrics']}|{author}|0||1.0"
+        index_entries.append(entry)
+        book_id += 1
                 
-                # Generate metrics
-                has_metrics = 0
-                if generate_metrics(final_path):
-                    has_metrics = 1
-
-                title, author, size = get_metadata(final_path)
-                if title is None:
-                    title = final_path.stem  # fallback to filename without extension
-                
-                # Sanitize title and author for the index (similar to ESP code)
-                title = sanitize(title)
-                author = sanitize(author) if author else ""
-                
-                # Path as /sdcard/books/filename.epub (assuming SD card usage as requested)
-                # If using SPIFFS, the device will re-scan and update the path, but the metrics file will still be found
-                # if it is next to the epub.
-                index_path = f"/sdcard/books/{final_path.name}"
-                
-                # Format: id|title|chapter|offset|path|size|hasMetrics|author|isFavorite|lastFont|lastFontSize
-                entry = f"{book_id}|{title}|0|0|{index_path}|{size}|{has_metrics}|{author}|0||1.0"
-                index_entries.append(entry)
-                
-                book_id += 1
-                count += 1
-                
-    if count == 0:
-        print("No .epub files found in this directory.")
-    else:
-        # Write index.txt
-        index_file = os.path.join(target_dir, "index.txt")
-        with open(index_file, 'w', encoding='utf-8') as f:
-            for entry in index_entries:
-                f.write(entry + '\n')
-        print(f"Generated index.txt with {count} entries.")
+    # Write index.txt
+    index_file = os.path.join(target_dir, "index.txt")
+    with open(index_file, 'w', encoding='utf-8') as f:
+        for entry in index_entries:
+            f.write(entry + '\n')
+    print(f"Generated index.txt with {len(index_entries)} entries.")
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()
