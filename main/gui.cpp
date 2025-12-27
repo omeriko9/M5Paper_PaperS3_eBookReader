@@ -1492,6 +1492,11 @@ void GUI::update()
         }
         needsRedraw = false;
     }
+
+    if (!needsRedraw)
+    {
+        updateStatusBarWorkingIndicator();
+    }
 }
 
 void GUI::drawStatusBar(LovyanGFX *target)
@@ -1559,7 +1564,7 @@ void GUI::drawStatusBar(LovyanGFX *target)
     // Wifi (Left of Battery)
     if (wifiConnected)
     {
-        snprintf(buf, sizeof(buf), "WiFi %d dBm", wifiRssi);
+        snprintf(buf, sizeof(buf), "WiFi");
     }
     else
     {
@@ -1568,6 +1573,11 @@ void GUI::drawStatusBar(LovyanGFX *target)
     int wifiX = batteryX - batteryTextWidth - 12;
     int wifiTextWidth = gfx->textWidth(buf);
     gfx->drawString(buf, wifiX, centerY);
+
+    if (currentState == AppState::MAIN_MENU)
+    {
+        drawStatusBarWorkingIndicator(gfx, false);
+    }
 
     // Book title (center, if in reader mode)
     if (currentState == AppState::READER && !currentBook.title.empty())
@@ -3075,6 +3085,101 @@ void GUI::computeBookMetrics()
     }
 }
 
+void GUI::drawStatusBarWorkingIndicator(LovyanGFX *target, bool doPartialRefresh)
+{
+    if (currentState != AppState::MAIN_MENU)
+    {
+        return;
+    }
+
+    LovyanGFX *gfx = target ? target : (LovyanGFX *)&M5.Display;
+
+    gfx->setFont(&lgfx::v1::fonts::Font2);
+    gfx->setTextSize(1.6f);
+    gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+
+    const int centerY = STATUS_BAR_HEIGHT / 2;
+
+    char wifiBuf[16];
+    if (wifiConnected)
+    {
+        snprintf(wifiBuf, sizeof(wifiBuf), "WiFi");
+    }
+    else
+    {
+        snprintf(wifiBuf, sizeof(wifiBuf), "No WiFi");
+    }
+
+    char batteryBuf[16];
+    int bat = M5.Power.getBatteryLevel();
+    snprintf(batteryBuf, sizeof(batteryBuf), "%d%%", bat);
+
+    int batteryX = gfx->width() - 10;
+    int batteryTextWidth = gfx->textWidth(batteryBuf);
+    int wifiX = batteryX - batteryTextWidth - 12;
+    int wifiTextWidth = gfx->textWidth(wifiBuf);
+    int wifiLeft = wifiX - wifiTextWidth;
+
+    static const char spinnerFrames[] = "|/-\\";
+    char spinBuf[2] = {spinnerFrames[workingIndicatorFrame], '\0'};
+    int spinnerW = gfx->textWidth(spinBuf);
+    int spinnerGap = 6;
+    int spinnerRight = wifiLeft - spinnerGap;
+    if (spinnerRight <= 0)
+    {
+        return;
+    }
+    int spinnerLeft = spinnerRight - spinnerW;
+    int clearX = spinnerLeft - 2;
+    int clearW = spinnerW + 4;
+
+    if (clearX < 0)
+    {
+        clearW += clearX;
+        clearX = 0;
+    }
+    if (clearW <= 0)
+    {
+        return;
+    }
+    int maxW = gfx->width() - clearX;
+    if (clearW > maxW)
+    {
+        clearW = maxW;
+    }
+
+    gfx->fillRect(clearX, 0, clearW, STATUS_BAR_HEIGHT, TFT_WHITE);
+    gfx->setTextDatum(textdatum_t::middle_right);
+    gfx->drawString(spinBuf, spinnerRight, centerY);
+
+    if (doPartialRefresh && target == nullptr)
+    {
+        M5.Display.display(clearX, 0, clearW, STATUS_BAR_HEIGHT);
+    }
+}
+
+void GUI::updateStatusBarWorkingIndicator()
+{
+    if (currentState != AppState::MAIN_MENU)
+    {
+        return;
+    }
+
+    uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000);
+    if (nowMs - lastWorkingIndicatorUpdateMs < 250)
+    {
+        return;
+    }
+    if (M5.Display.displayBusy())
+    {
+        return;
+    }
+
+    lastWorkingIndicatorUpdateMs = nowMs;
+    workingIndicatorFrame = (workingIndicatorFrame + 1) % 4;
+    drawStatusBarWorkingIndicator(nullptr, true);
+}
+
 void GUI::computeBookMetricsLocked()
 {
     bookMetricsComputed = false;
@@ -3529,9 +3634,13 @@ void GUI::drawMainMenu()
             int iconTop = labelBottom + 2;
             int iconBottom = sublabelTop - 2;
             int progressBarH = 6;
-            if (i == 1 && indexingScanActive)
+            bool showIndexingBar = (i == 1) && (indexingScanActive || indexingProcessingActive);
+            int indexingLabelH = 0;
+            if (showIndexingBar)
             {
-                iconBottom -= (progressBarH + 6);
+                target->setTextSize(1.0f);
+                indexingLabelH = target->fontHeight();
+                iconBottom -= (progressBarH + indexingLabelH + 6);
             }
             int iconH = iconBottom - iconTop;
             int iconW = btnW - 12;
@@ -3555,17 +3664,33 @@ void GUI::drawMainMenu()
                 drawMenuIconWithBackground(i, target, iconPath, iconX, iconY, iconSize, bgColor);
             }
 
-            if (i == 1 && indexingScanActive)
+            if (showIndexingBar)
             {
                 int barW = btnW - 30;
                 int barX = bx + (btnW - barW) / 2;
-                int barY = iconBottom + 4;
-                float pct = 0.2f;
-                if (indexingTotal > 0)
+                int labelY = iconBottom + 2;
+                int barY = labelY + indexingLabelH + 2;
+                float pct = 0.0f;
+                int current = indexingCurrent;
+                int total = indexingTotal;
+                if (total > 0)
                 {
-                    pct = (float)indexingCurrent / (float)indexingTotal;
+                    pct = (float)current / (float)total;
                 }
                 pct = std::max(0.0f, std::min(1.0f, pct));
+                char idxBuf[24];
+                if (total > 0)
+                {
+                    snprintf(idxBuf, sizeof(idxBuf), "%d/%d", current, total);
+                }
+                else
+                {
+                    snprintf(idxBuf, sizeof(idxBuf), "%d/?", current);
+                }
+                target->setTextDatum(textdatum_t::top_center);
+                target->setTextSize(1.0f);
+                target->setTextColor(TFT_DARKGREY, bgColor);
+                target->drawString(idxBuf, bx + btnW / 2, labelY);
                 target->drawRect(barX, barY, barW, progressBarH, TFT_BLACK);
                 int fillW = (int)((barW - 2) * pct);
                 if (fillW > 0)
@@ -6379,7 +6504,7 @@ void GUI::drawWifiScan()
             wifiCanvas.drawString(buf, batteryX, centerY);
             if (wifiConnected)
             {
-                snprintf(buf, sizeof(buf), "WiFi %d dBm", wifiRssi);
+                snprintf(buf, sizeof(buf), "WiFi");
             }
             else
             {
@@ -6463,7 +6588,7 @@ void GUI::drawWifiScan()
     M5.Display.drawString(buf, batteryX, centerY);
     if (wifiConnected)
     {
-        snprintf(buf, sizeof(buf), "WiFi %d dBm", wifiRssi);
+        snprintf(buf, sizeof(buf), "WiFi");
     }
     else
     {

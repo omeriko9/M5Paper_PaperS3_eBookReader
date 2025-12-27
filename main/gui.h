@@ -208,6 +208,8 @@ private:
     volatile int indexingTotal = 0;
     volatile bool indexingScanActive = false;
     volatile bool indexingProcessingActive = false;
+    uint32_t lastWorkingIndicatorUpdateMs = 0;
+    uint8_t workingIndicatorFrame = 0;
 
     // Double click detection
     uint32_t lastClickTime = 0;
@@ -235,6 +237,8 @@ private:
     std::vector<RenderedImageInfo> pageRenderedImages;
 
     void drawStatusBar(LovyanGFX *target = nullptr);
+    void drawStatusBarWorkingIndicator(LovyanGFX *target, bool doPartialRefresh);
+    void updateStatusBarWorkingIndicator();
     void drawFooter(LovyanGFX *target, size_t pageOffset, size_t charsOnPage);
     void drawSleepSymbol(const char *symbol);
     void drawMainMenu();                          // Main menu with 6 buttons
