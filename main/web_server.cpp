@@ -341,6 +341,7 @@ static const char *MANAGER_HTML = R"rawliteral(
         let currentSize = 1.0;
         let currentLineSpacing = 1.4;
         let isM5PaperS3 = false;
+        let bookNameById = {};
 
         // --- UI Logic ---
         function switchTab(tabId) {
@@ -403,12 +404,14 @@ static const char *MANAGER_HTML = R"rawliteral(
                 const list = document.getElementById('book-list');
                 const countEl = document.getElementById('book-count');
                 list.innerHTML = '';
+                bookNameById = {};
                 if (countEl) countEl.innerText = `(${files.length})`;
                 if(files.length === 0) {
                     list.innerHTML = '<li style="text-align: center; padding: 20px; color: var(--text-secondary);">No books found</li>';
                     return;
                 }
                 files.forEach(f => {
+                    bookNameById[f.id] = f.name;
                     const li = document.createElement('li');
                     li.className = 'book-item';
                     const favClass = f.favorite ? 'warning' : 'outline';
@@ -422,6 +425,7 @@ static const char *MANAGER_HTML = R"rawliteral(
                         <div class="book-actions">
                             <button class="btn sm ${favClass}" onclick="toggleFav(${f.id}, this)" title="Favorite">${favText}</button>
                             <button class="btn sm success" onclick="readBook(${f.id})">Read</button>
+                            <button class="btn sm outline" onclick="readHere(${f.id})">Read Here</button>
                             <button class="btn sm danger" onclick="del(${f.id})">Delete</button>
                         </div>
                     `;
@@ -485,6 +489,56 @@ static const char *MANAGER_HTML = R"rawliteral(
                     showToast('Opening book on device...');
                 })
                 .catch(() => showToast('Failed to open book'));
+        }
+
+        function readHere(id) {
+            const title = bookNameById[id] || 'Book';
+            const win = window.open('', '_blank');
+            if (!win) {
+                showToast('Popup blocked');
+                return;
+            }
+            const epubUrl = `/api/epub?id=${id}`;
+            const safeTitle = title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${safeTitle}</title>
+<script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
+<style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #f8fafc; color: #0f172a; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+    .toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #ffffff; border-bottom: 1px solid #e2e8f0; }
+    .title { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .btn.secondary { background: #475569; }
+    #viewer { height: calc(100% - 48px); }
+</style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="title">${safeTitle}</div>
+        <button class="btn secondary" id="prev">Prev</button>
+        <button class="btn" id="next">Next</button>
+    </div>
+    <div id="viewer"></div>
+<script>
+    const book = ePub("${epubUrl}");
+    const rendition = book.renderTo("viewer", { width: "100%", height: "100%" });
+    rendition.display();
+    document.getElementById("prev").addEventListener("click", () => rendition.prev());
+    document.getElementById("next").addEventListener("click", () => rendition.next());
+    window.addEventListener("keyup", (e) => {
+        if (e.key === "ArrowRight") rendition.next();
+        if (e.key === "ArrowLeft") rendition.prev();
+    });
+</script>
+</body>
+</html>`;
+            win.document.open();
+            win.document.write(html);
+            win.document.close();
         }
 
         function jump() {
@@ -1178,6 +1232,68 @@ static esp_err_t api_favorite_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+/* API to stream an EPUB by id for in-browser reader */
+static esp_err_t api_epub_handler(httpd_req_t *req)
+{
+    WebServer::updateActivityTime();
+    char buf[100];
+    size_t buf_len = sizeof(buf);
+
+    if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK)
+    {
+        char param[32];
+        if (httpd_query_key_value(buf, "id", param, sizeof(param)) == ESP_OK)
+        {
+            int id = atoi(param);
+            BookEntry book = bookIndex.getBook(id);
+            if (book.id != 0)
+            {
+                FILE *f = fopen(book.path.c_str(), "rb");
+                if (!f)
+                {
+                    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Book not found");
+                    return ESP_FAIL;
+                }
+
+                httpd_resp_set_type(req, "application/epub+zip");
+                const char *fname = strrchr(book.path.c_str(), '/');
+                fname = fname ? (fname + 1) : book.path.c_str();
+                char disp[192];
+                snprintf(disp, sizeof(disp), "inline; filename=\"%s\"", fname);
+                httpd_resp_set_hdr(req, "Content-Disposition", disp);
+
+                char *chunk = (char *)malloc(4096);
+                if (!chunk)
+                {
+                    fclose(f);
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+                    return ESP_FAIL;
+                }
+
+                size_t read;
+                while ((read = fread(chunk, 1, 4096, f)) > 0)
+                {
+                    if (httpd_resp_send_chunk(req, chunk, read) != ESP_OK)
+                    {
+                        free(chunk);
+                        fclose(f);
+                        httpd_resp_sendstr_chunk(req, NULL);
+                        return ESP_FAIL;
+                    }
+                }
+
+                free(chunk);
+                fclose(f);
+                httpd_resp_sendstr_chunk(req, NULL);
+                return ESP_OK;
+            }
+        }
+    }
+
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid book id");
+    return ESP_FAIL;
+}
+
 /* API to get/set settings */
 static esp_err_t api_settings_handler(httpd_req_t *req)
 {
@@ -1627,7 +1743,7 @@ void WebServer::init(const char *basePath)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 26;
+    config.max_uri_handlers = 27;
     config.stack_size = 8192;      // Increase stack for file ops
     config.recv_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
     config.send_wait_timeout = 10; // Reduced to 10s to keep activity timer fresh
@@ -1668,6 +1784,13 @@ void WebServer::init(const char *basePath)
             .handler = api_favorite_handler,
             .user_ctx = NULL};
         httpd_register_uri_handler(server, &favorite_api_uri);
+
+        httpd_uri_t epub_api_uri = {
+            .uri = "/api/epub",
+            .method = HTTP_GET,
+            .handler = api_epub_handler,
+            .user_ctx = NULL};
+        httpd_register_uri_handler(server, &epub_api_uri);
 
         httpd_uri_t settings_api_uri = {
             .uri = "/api/settings",
