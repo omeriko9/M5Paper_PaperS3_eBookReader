@@ -110,6 +110,7 @@ void syncRtcFromNtp()
     time_t now = 0;
     struct tm timeinfo = {0};
     const int maxRetries = 20;
+    bool synced = false;
 
     // Wait for time to be set
     for (int i = 0; i < maxRetries; ++i)
@@ -118,23 +119,25 @@ void syncRtcFromNtp()
         // Check if SNTP has synced
         if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED)
         {
+            synced = true;
             break;
         }
 
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        if (timeinfo.tm_year > (2020 - 1900))
-        {
-            break;
-        }
         ESP_LOGI(TAG, "Waiting for NTP sync... (%d/%d)", i + 1, maxRetries);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
+    if (!synced)
+    {
+        ESP_LOGW(TAG, "NTP sync did not complete, RTC not updated");
+        stopSntpClient();
+        return;
     }
 
     time(&now);
     gmtime_r(&now, &timeinfo);
 
-    ESP_LOGI(TAG, "NTP Sync Debug: UTC Time: %ld", now);
+    ESP_LOGI(TAG, "NTP Sync Debug: UTC Time: %lld", static_cast<long long>(now));
     ESP_LOGI(TAG, "NTP Sync Debug: UTC Time (for RTC): %04d-%02d-%02d %02d:%02d:%02d",
              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);

@@ -154,6 +154,7 @@ static const char *MANAGER_HTML = R"rawliteral(
         .book-info { flex: 1; min-width: 0; padding-right: 10px; }
         .book-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .book-author { font-size: 14px; color: var(--text-secondary); }
+        .book-count { font-size: 12px; color: var(--text-secondary); font-weight: 400; margin-left: 6px; }
         .book-actions { display: flex; gap: 5px; }
         
         .drop-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 30px; text-align: center; transition: all 0.2s; cursor: pointer; }
@@ -206,7 +207,7 @@ static const char *MANAGER_HTML = R"rawliteral(
 
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2>My Books</h2>
+                    <h2>My Books <span id="book-count" class="book-count">(0)</span></h2>
                     <button class="btn sm outline" onclick="fetchList()">Refresh</button>
                 </div>
                 <ul id="book-list" class="book-list">
@@ -400,7 +401,9 @@ static const char *MANAGER_HTML = R"rawliteral(
         function fetchList() {
             fetch('/api/list').then(r => r.json()).then(files => {
                 const list = document.getElementById('book-list');
+                const countEl = document.getElementById('book-count');
                 list.innerHTML = '';
+                if (countEl) countEl.innerText = `(${files.length})`;
                 if(files.length === 0) {
                     list.innerHTML = '<li style="text-align: center; padding: 20px; color: var(--text-secondary);">No books found</li>';
                     return;
@@ -425,6 +428,8 @@ static const char *MANAGER_HTML = R"rawliteral(
                     list.appendChild(li);
                 });
             }).catch(e => {
+                const countEl = document.getElementById('book-count');
+                if (countEl) countEl.innerText = '(?)';
                 document.getElementById('book-list').innerHTML = '<li style="color: var(--danger); text-align: center;">Error loading books</li>';
             });
         }
