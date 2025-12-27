@@ -13,24 +13,26 @@
 
 ### Book Management
 - EPUB parsing with support for images and chapters
-- Web-based interface for book uploads and WiFi configuration with captive portal, including upload of multiple books with drag & drop in the background
+- Book uploads and settings
+- WebUI: Upload of multiple books at the same time, select what book to read, manage books
 
 ### Display and Typography
 - Support for Hebrew and Arabic with right-to-left (RTL) text rendering
-- Customizable wallpapers displayed before deep sleep (S3 only)
-- 16-shade grayscale display for improved UI quality on M5PaperS3
+- Customizable wallpapers displayed before deep sleep 
+- Utilization of the M5Paper/S3 16-shade grayscale display
 - Custom font support with VLW bitmap fonts
-- SD card support for additional storage and custom fonts (S3 only)
+- SD card support for additional storage and pre-indexing (see below)
 
 ### Entertainment
 - Built-in games: Minesweeper, Sudoku, Wordle, and MIDI sequencer accessible from the "More" menu
 
 ### Hardware Integration
 - Hardware abstraction for display, SD card, buzzer, and IMU
-- Highly configurable settings via menuconfig
+- Configurable settings via menuconfig, WebbUI, device and NVM settings
 
 ### Advanced Features
 - Support for HTML <math> tags (Work in Progress)
+- Background book indexer that won't slow down book browsing
 
 ## Usage
 
@@ -61,9 +63,9 @@ The device uses VLW (VLW Font) bitmap fonts for rendering text. To create custom
 3. This will generate VLW files in the `spiffs_image/fonts/` directory
 4. Rebuild the SPIFFS image and flash the device
 
-### SD Card Support (M5PaperS3 only)
+### SD Card Support 
 
-The M5PaperS3 supports SD card for additional storage and customization. The following folders and files are expected on the SD card:
+The M5Paper/S3 supports SD card for additional storage and customization. The following folders and files are expected on the SD card:
 
 #### Expected Folders:
 - **`fonts/`**: Place OTF font files here for additional font options in the font selection menu
@@ -136,9 +138,7 @@ The `tools/` directory contains various utilities for preparing content and buil
 
 ### prepare_epubs.py
 
-This is a comprehensive EPUB preprocessing tool that optimizes books for the e-book reader's limited resources and provides significant performance improvements.
-
-**What it does in detail:**
+This is a comprehensive EPUB preprocessing tool that optimizes books for the e-book reader's limited resources and provides significant performance improvements:
 
 1. **Image Optimization**:
    - **Downscaling mode** (default): Resizes images larger than 960x540 pixels to fit the device's display resolution while maintaining aspect ratio
@@ -155,13 +155,13 @@ This is a comprehensive EPUB preprocessing tool that optimizes books for the e-b
    - Falls back to original filename if metadata is missing
 
 4. **Performance Metrics Generation**:
-   - Creates `m_filename.bin` files containing pre-calculated chapter navigation data
+   - Creates `m_bookname*.bin` files containing pre-calculated chapter navigation data
    - Calculates text length for each chapter using the same algorithm as the device
    - Stores cumulative character offsets for instant chapter jumping
    - Format: version, total_chars, chapter_count, [chapter_offsets...]
 
 5. **Book Index Creation**:
-   - Generates `index.txt` with book metadata for fast loading
+   - Generates `index.txt` with book metadata for fast loading (instead of the device doing it on first discovery)
    - Format: `id|title|chapter|offset|path|size|hasMetrics|author|isFavorite|lastFont|lastFontSize`
 
 **Why run it before uploading to SD card:**
@@ -197,9 +197,10 @@ python tools/prepare_epubs.py /path/to/books
 ```
 
 **Output files:**
-- `filename.epub` - Optimized EPUB file
-- `m_filename.bin` - Navigation metrics (binary)
-- `index.txt` - Book index for fast loading
+- `*.epub` - Optimized EPUB file
+- `*.bin` - Navigation metrics (binary)
+Copy all of the .epub and .bin files to the SD card's **books** folder
+- `index.txt` - Book index for fast loading, **copy to the root of the SD card**
 
 **Website alternative:**
 Some online EPUB tools can strip images, but they won't generate the device-specific metrics files that enable fast navigation and progress tracking. The local script provides complete optimization for this specific e-reader.
@@ -217,7 +218,7 @@ Some online EPUB tools can strip images, but they won't generate the device-spec
 This repo supports both ESP32 (original M5Paper) and ESP32-S3 (M5PaperS3). If you switch targets (or you see PSRAM init errors), regenerate the config:
 
 - `idf.py set-target esp32` or `idf.py set-target esp32s3`
-- `idf.py menuconfig` (verify PSRAM mode for your board) or `idf.py defconfig` (reset to defaults)
+- Optional: `idf.py menuconfig` (verify PSRAM mode for your board) or `idf.py defconfig` (reset to defaults)
 - `idf.py build flash monitor`
 
 If you get `quad_psram: PSRAM ID read error ... wrong PSRAM line mode` on ESP32-S3, ensure PSRAM is configured for Octal (OPI) mode via `Component config -> ESP PSRAM` (or by using `sdkconfig.defaults.esp32s3` and reconfiguring).
