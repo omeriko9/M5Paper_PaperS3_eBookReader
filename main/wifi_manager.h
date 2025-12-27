@@ -7,7 +7,7 @@
 class WifiManager {
 public:
     bool init(); // Returns false if init failed (e.g., out of memory)
-    bool connect(); // Try to connect with stored creds
+    bool connect(); // Start async connect attempt with stored creds
     void disconnect(); // Stop WiFi
     void startAP(); // Start Access Point for config
     bool isConnected();

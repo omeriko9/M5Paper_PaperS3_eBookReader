@@ -409,6 +409,8 @@ extern "C" void app_main(void)
     gui.init(is_wake_from_sleep);
     esp_task_wdt_reset();
 
+    bool ntpSyncPending = false;
+
     // Initialize WiFi connections - either on cold boot or on wake from deep sleep if WiFi is enabled
     if (!is_wake_from_sleep)
     {
@@ -416,19 +418,9 @@ extern "C" void app_main(void)
 
         if (wifiInitOk && gui.isWifiEnabled())
         {
-            // Try to connect, if fails, start AP
-            bool wifiOk = wifiManager.connect();
+            // Kick off async WiFi connect; AP fallback handled in WifiManager
+            ntpSyncPending = wifiManager.connect();
             esp_task_wdt_reset();
-            if (!wifiOk)
-            {
-                wifiManager.startAP();
-                esp_task_wdt_reset();
-            }
-            else
-            {
-                syncRtcFromNtp();
-                esp_task_wdt_reset();
-            }
             webServer.init("/spiffs");
             esp_task_wdt_reset();
         }
@@ -449,13 +441,7 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "Wake from deep sleep with WiFi enabled - connecting");
             wifiManager.init();
             esp_task_wdt_reset();
-            bool wifiOk = wifiManager.connect();
-            esp_task_wdt_reset();
-            if (!wifiOk)
-            {
-                wifiManager.startAP();
-                esp_task_wdt_reset();
-            }
+            ntpSyncPending = wifiManager.connect();
             webServer.init("/spiffs");
             esp_task_wdt_reset();
         }
@@ -542,6 +528,12 @@ extern "C" void app_main(void)
             }
             buttonPressStart = 0;
             buttonLongPressHandled = false;
+        }
+
+        if (ntpSyncPending && wifiManager.isConnected())
+        {
+            syncRtcFromNtp();
+            ntpSyncPending = false;
         }
 
         gui.setWifiStatus(wifiManager.isConnected(), wifiManager.getRssi());

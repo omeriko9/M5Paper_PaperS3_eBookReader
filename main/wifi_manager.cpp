@@ -13,11 +13,24 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <string>
+#include <new>
 
 static const char *TAG = "WIFI";
 static bool s_connected = false;
 static int s_rssi = 0;
 static DnsServer dnsServer;
+static TaskHandle_t s_connect_task_handle = nullptr;
+static bool s_connect_in_progress = false;
+
+struct ConnectTaskArgs {
+    class WifiManager* manager;
+    bool has_nvs_creds;
+    char nvs_ssid[33];
+    char nvs_pass[65];
+    bool has_sd_creds;
+    char sd_ssid[33];
+    char sd_pass[65];
+};
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -145,6 +158,58 @@ static bool connectToAP(const char* ssid, const char* pass) {
     return s_connected;
 }
 
+static void connectTask(void* arg) {
+    ConnectTaskArgs* args = static_cast<ConnectTaskArgs*>(arg);
+    WifiManager* manager = args ? args->manager : nullptr;
+
+    bool connected = false;
+    if (args && args->has_nvs_creds) {
+        ESP_LOGI(TAG, "Trying NVS credentials...");
+        if (connectToAP(args->nvs_ssid, args->nvs_pass)) {
+            ESP_LOGI(TAG, "Connected using NVS credentials");
+            connected = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to connect using NVS credentials");
+        }
+    }
+
+    if (!connected) {
+        if (args && args->has_sd_creds) {
+            ESP_LOGI(TAG, "Trying SD card credentials...");
+            if (connectToAP(args->sd_ssid, args->sd_pass)) {
+                ESP_LOGI(TAG, "Connected using SD card credentials");
+                connected = true;
+            } else {
+                ESP_LOGW(TAG, "Failed to connect using SD card credentials");
+            }
+        } else {
+            char ssid[33] = {0};
+            char pass[65] = {0};
+            if (readConfigFromSD(ssid, sizeof(ssid), pass, sizeof(pass))) {
+                ESP_LOGI(TAG, "Trying SD card credentials...");
+                if (connectToAP(ssid, pass)) {
+                    ESP_LOGI(TAG, "Connected using SD card credentials");
+                    connected = true;
+                } else {
+                    ESP_LOGW(TAG, "Failed to connect using SD card credentials");
+                }
+            }
+        }
+    }
+
+    if (!connected) {
+        ESP_LOGW(TAG, "WiFi connect failed, starting AP");
+        if (manager) {
+            manager->startAP();
+        }
+    }
+
+    delete args;
+    s_connect_in_progress = false;
+    s_connect_task_handle = nullptr;
+    vTaskDelete(nullptr);
+}
+
 bool WifiManager::init() {
     if (s_initialized) return true;
 
@@ -223,6 +288,12 @@ bool WifiManager::connect() {
         ESP_LOGW(TAG, "Cannot connect - WiFi init previously failed");
         return false;
     }
+    if (s_connected) {
+        return true;
+    }
+    if (s_connect_in_progress) {
+        return true;
+    }
 
     // 1. Try NVS credentials
     nvs_handle_t my_handle;
@@ -244,27 +315,62 @@ bool WifiManager::connect() {
     }
 
     if (hasNvsCreds) {
-        ESP_LOGI(TAG, "Trying NVS credentials...");
-        if (connectToAP(ssid, pass)) {
-            ESP_LOGI(TAG, "Connected using NVS credentials");
-            return true;
-        }
-        ESP_LOGW(TAG, "Failed to connect using NVS credentials");
+        // fall through to async task creation
     }
 
-    // 2. Try SD Card credentials (fallback)
-    memset(ssid, 0, sizeof(ssid));
-    memset(pass, 0, sizeof(pass));
-    if (readConfigFromSD(ssid, sizeof(ssid), pass, sizeof(pass))) {
-        ESP_LOGI(TAG, "Trying SD card credentials...");
-        if (connectToAP(ssid, pass)) {
-            ESP_LOGI(TAG, "Connected using SD card credentials");
-            return true;
+    bool hasSdCreds = false;
+    char sd_ssid[33] = {0};
+    char sd_pass[65] = {0};
+    if (!hasNvsCreds) {
+        if (readConfigFromSD(sd_ssid, sizeof(sd_ssid), sd_pass, sizeof(sd_pass))) {
+            hasSdCreds = true;
         }
-        ESP_LOGW(TAG, "Failed to connect using SD card credentials");
     }
 
-    return false;
+    if (!hasNvsCreds && !hasSdCreds) {
+        ESP_LOGW(TAG, "No WiFi credentials found, starting AP");
+        startAP();
+        return false;
+    }
+
+    ConnectTaskArgs* args = new (std::nothrow) ConnectTaskArgs{};
+    if (!args) {
+        ESP_LOGE(TAG, "Failed to allocate WiFi connect task args");
+        return false;
+    }
+    args->manager = this;
+    args->has_nvs_creds = hasNvsCreds;
+    args->has_sd_creds = hasSdCreds;
+    if (hasNvsCreds) {
+        strncpy(args->nvs_ssid, ssid, sizeof(args->nvs_ssid));
+        args->nvs_ssid[sizeof(args->nvs_ssid) - 1] = '\0';
+        strncpy(args->nvs_pass, pass, sizeof(args->nvs_pass));
+        args->nvs_pass[sizeof(args->nvs_pass) - 1] = '\0';
+    } else {
+        args->nvs_ssid[0] = '\0';
+        args->nvs_pass[0] = '\0';
+    }
+    if (hasSdCreds) {
+        strncpy(args->sd_ssid, sd_ssid, sizeof(args->sd_ssid));
+        args->sd_ssid[sizeof(args->sd_ssid) - 1] = '\0';
+        strncpy(args->sd_pass, sd_pass, sizeof(args->sd_pass));
+        args->sd_pass[sizeof(args->sd_pass) - 1] = '\0';
+    } else {
+        args->sd_ssid[0] = '\0';
+        args->sd_pass[0] = '\0';
+    }
+
+    s_connect_in_progress = true;
+    BaseType_t task_ok = xTaskCreate(connectTask, "WifiConnect", 4096, args, 5, &s_connect_task_handle);
+    if (task_ok != pdPASS) {
+        s_connect_in_progress = false;
+        s_connect_task_handle = nullptr;
+        delete args;
+        ESP_LOGE(TAG, "Failed to start WiFi connect task");
+        return false;
+    }
+
+    return true;
 }
 void WifiManager::disconnect() {
     if (!s_initialized) return;
