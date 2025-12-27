@@ -8091,6 +8091,10 @@ void GUI::addToRecentBooks(int id)
 
 void GUI::drawRecentBooks()
 {
+
+    // Ensure font is loaded (fix for missing glyphs)
+    loadFonts();
+
     M5.Display.fillScreen(TFT_WHITE);
     drawStatusBar(nullptr);
 

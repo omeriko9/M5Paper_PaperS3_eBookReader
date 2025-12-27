@@ -4,21 +4,33 @@
 |----------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
 
 ## Features
+
+### Reading Experience
 - Remembers the last book and page position, automatically restoring on wake
-- Web-based interface for book uploads and WiFi configuration with captive portal
-- Highly configurable settings via menuconfig
 - Quick access to favorite books
-- Customizable wallpapers displayed before deep sleep (S3 only)
-- Support for Hebrew and Arabic with right-to-left (RTL) text rendering
-- Built-in games: Minesweeper, Sudoku, and Wordle accessible from the "More" menu
 - Gesture-based navigation: swipe left→right to open chapter menu, swipe up from bottom for settings
 - Per-book font and size preferences stored in NVS
+
+### Book Management
 - EPUB parsing with support for images and chapters
-- Hardware abstraction for display, SD card, buzzer, and IMU
-- SD card support for additional storage and custom fonts (S3 only)
+- Web-based interface for book uploads and WiFi configuration with captive portal, including upload of multiple books with drag & drop in the background
+
+### Display and Typography
+- Support for Hebrew and Arabic with right-to-left (RTL) text rendering
+- Customizable wallpapers displayed before deep sleep (S3 only)
 - 16-shade grayscale display for improved UI quality on M5PaperS3
-- Support for HTML <math> tags (Work in Progress)
 - Custom font support with VLW bitmap fonts
+- SD card support for additional storage and custom fonts (S3 only)
+
+### Entertainment
+- Built-in games: Minesweeper, Sudoku, Wordle, and MIDI sequencer accessible from the "More" menu
+
+### Hardware Integration
+- Hardware abstraction for display, SD card, buzzer, and IMU
+- Highly configurable settings via menuconfig
+
+### Advanced Features
+- Support for HTML <math> tags (Work in Progress)
 
 ## Usage
 
