@@ -9,6 +9,7 @@
 #include <string.h>
 #include <M5Unified.hpp>
 #include "device_hal.h"
+#include "task_coordinator.h"
 
 static const char *TAG = "INDEX";
 
@@ -85,7 +86,7 @@ bool BookIndex::validateBooks(std::function<bool()> shouldPause)
                     wdtResetIfRegistered();
                 }
             }
-            save();  // Uses snapshot pattern, doesn't block other threads
+            requestSave();  // Defer save to background task
             return true;
         }
     }
@@ -114,7 +115,7 @@ bool BookIndex::scanForNewBooks(ProgressCallback callback, std::function<bool()>
                 wdtResetIfRegistered();
             }
         }
-        save();  // Uses snapshot pattern, doesn't block other threads
+        requestSave();  // Defer save to background task
     }
     
     return foundNewBooks;
@@ -220,7 +221,7 @@ bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<siz
     
     // Persist the flag to index if requested
     if (saveToDisk) {
-        save();  // save() now has its own non-blocking logic
+        requestSave();  // Defer save to background task
     }
     
     ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters at %s", id, totalChars, count, metricsFilePath.c_str());
@@ -625,13 +626,11 @@ void BookIndex::markAsFailed(int id)
         if (book.id == id)
         {
             book.isFailed = true;
-            // Don't call saveInternal here - set dirty flag or defer
             break;
         }
     }
     xSemaphoreGiveRecursive(mutex);
-    // Save outside mutex
-    save();
+    requestSave();
 }
 
 void BookIndex::save()
@@ -663,6 +662,11 @@ void BookIndex::save()
     for (const auto &book : snapshot)
     {
         wdtResetIfRegistered();
+        // Yield to higher priority tasks during the long write
+        if (TaskCoordinator::getInstance().shouldYield(TaskPriority::LOW)) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
         fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f|%d\n", 
             book.id, 
             sanitize(book.title).c_str(), 
@@ -682,6 +686,40 @@ void BookIndex::save()
     ESP_LOGI(TAG, "Index saved successfully");
 }
 
+void BookIndex::requestSave()
+{
+    _needsSave = true;
+    if (_saveTaskHandle == nullptr)
+    {
+        // Create a low-priority task for background saving
+        xTaskCreate(saveTask, "IdxSave", 4096, this, 1, &_saveTaskHandle);
+    }
+}
+
+void BookIndex::saveTask(void *arg)
+{
+    BookIndex *self = static_cast<BookIndex *>(arg);
+    ESP_LOGI("INDEX", "Background save task started");
+    
+    while (self->_needsSave)
+    {
+        self->_needsSave = false;
+        // Wait a bit to batch multiple requests (e.g. multiple font/favorite changes)
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        
+        // If a critical operation is pending, wait longer
+        while (TaskCoordinator::getInstance().isCriticalPending()) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        self->save();
+    }
+    
+    self->_saveTaskHandle = nullptr;
+    ESP_LOGI("INDEX", "Background save task finished");
+    vTaskDelete(NULL);
+}
+
 void BookIndex::updateProgress(int id, int chapter, size_t offset)
 {
     xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
@@ -691,8 +729,8 @@ void BookIndex::updateProgress(int id, int chapter, size_t offset)
         {
             book.currentChapter = chapter;
             book.currentOffset = offset;
-            // saveInternal(); // Don't save on every progress update to avoid lag
             xSemaphoreGiveRecursive(mutex);
+            requestSave(); // Defer save to background task
             return;
         }
     }
@@ -757,7 +795,7 @@ std::string BookIndex::addBook(const std::string &title)
     books.push_back({id, title, "", std::string(path), 0, 0, 0, false, false, "", 1.0f});
     xSemaphoreGiveRecursive(mutex);
     
-    save();  // Uses snapshot pattern
+    requestSave();  // Defer save to background task
     return std::string(path);
 }
 
@@ -795,7 +833,7 @@ void BookIndex::removeBook(int id)
         unlink(legacyPath);
     }
     
-    save();  // Uses snapshot pattern
+    requestSave();  // Defer save to background task
 }
 
 std::vector<BookEntry> BookIndex::getBooks()
@@ -882,7 +920,7 @@ void BookIndex::setFavorite(int id, bool favorite)
         }
         xSemaphoreGiveRecursive(mutex);
     }
-    save();  // Uses snapshot pattern
+    requestSave();  // Defer save to background task
 }
 
 bool BookIndex::isFavorite(int id)
@@ -912,7 +950,7 @@ void BookIndex::setBookFont(int id, const std::string& fontName, float fontSize)
         }
         xSemaphoreGiveRecursive(mutex);
     }
-    save();  // Uses snapshot pattern
+    requestSave();  // Defer save to background task
 }
 
 bool BookIndex::getBookFont(int id, std::string& fontName, float& fontSize)

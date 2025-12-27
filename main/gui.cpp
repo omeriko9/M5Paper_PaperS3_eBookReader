@@ -1496,6 +1496,9 @@ void GUI::update()
         case AppState::RECENT_BOOKS:
             drawRecentBooks();
             break;
+        case AppState::LOADING:
+            drawLoadingScreen();
+            break;
         }
         needsRedraw = false;
     }
@@ -5155,10 +5158,23 @@ void GUI::jumpToChapter(int chapter)
     }
 }
 
-bool GUI::openBookById(int id)
+void GUI::drawLoadingScreen()
 {
-    if (!bookIndexReady)
-        return false;
+    M5.Display.fillScreen(TFT_WHITE);
+    M5.Display.setFont(&fonts::FreeSansBold18pt7b);
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString("Loading Book...", M5.Display.width() / 2, M5.Display.height() / 2);
+    M5.Display.display();
+}
+
+void GUI::loadingTaskLoop()
+{
+    int id = loadingTargetBookId;
+    int targetChapter = loadingTargetChapter;
+    size_t targetOffset = loadingTargetOffset;
+    
+    ESP_LOGI(TAG, "Loading task started for book %d (ch=%d, off=%zu)", id, targetChapter, targetOffset);
 
     // Signal CRITICAL priority - all background tasks should pause immediately
     TaskCoordinator::getInstance().requestHighPriority(TaskPriority::CRITICAL);
@@ -5166,8 +5182,19 @@ bool GUI::openBookById(int id)
     BookEntry book = bookIndex.getBook(id);
     if (book.id == 0)
     {
+        ESP_LOGE(TAG, "Loading task: Book %d not found", id);
+        currentState = AppState::LIBRARY;
+        needsRedraw = true;
         TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
-        return false;
+        loadingTaskHandle = nullptr;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // If we have a specific chapter/offset (from restore), use them
+    if (targetChapter != -1) {
+        book.currentChapter = targetChapter;
+        book.currentOffset = targetOffset;
     }
 
     bookMetricsComputed = false;
@@ -5180,8 +5207,12 @@ bool GUI::openBookById(int id)
     // Lock mutex for the EPUB loading only
     if (!xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
+        currentState = AppState::LIBRARY;
+        needsRedraw = true;
         TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
-        return false;
+        loadingTaskHandle = nullptr;
+        vTaskDelete(NULL);
+        return;
     }
 
     bool loaded = false;
@@ -5192,8 +5223,12 @@ bool GUI::openBookById(int id)
     if (!loaded)
     {
         xSemaphoreGive(epubMutex);
+        currentState = AppState::LIBRARY;
+        needsRedraw = true;
         TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
-        return false;
+        loadingTaskHandle = nullptr;
+        vTaskDelete(NULL);
+        return;
     }
 
     currentBook = book;
@@ -5312,6 +5347,31 @@ bool GUI::openBookById(int id)
     // Release critical priority - background tasks can resume
     TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
     
+    loadingTaskHandle = nullptr;
+    ESP_LOGI(TAG, "Loading task finished for book %d", id);
+    vTaskDelete(NULL);
+}
+
+bool GUI::openBookById(int id, int chapter, size_t offset)
+{
+    if (!bookIndexReady)
+        return false;
+
+    if (loadingTaskHandle != nullptr)
+    {
+        ESP_LOGW(TAG, "Already loading a book, ignoring request for %d", id);
+        return false;
+    }
+
+    loadingTargetBookId = id;
+    loadingTargetChapter = chapter;
+    loadingTargetOffset = offset;
+    currentState = AppState::LOADING;
+    needsRedraw = true;
+
+    xTaskCreate([](void *arg)
+                { static_cast<GUI *>(arg)->loadingTaskLoop(); }, "LoadTask", 8192, this, 1, &loadingTaskHandle);
+
     return true;
 }
 
@@ -5737,8 +5797,6 @@ bool GUI::loadLastBook()
     uint32_t lastOffset = 0;
     std::string lastPath;
     std::string lastTitle;
-    std::string lastFont;
-    float lastFontSize = 0.0f;
     if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
     {
         esp_err_t err;
@@ -5768,10 +5826,6 @@ bool GUI::loadLastBook()
             {
                 lastPath = pathBuf;
             }
-            else
-            {
-                ESP_LOGW(TAG, "nvs_get_str(%s) failed while reading: %s", NVS_KEY_LAST_BOOK_PATH, esp_err_to_name(err));
-            }
             delete[] pathBuf;
         }
 
@@ -5784,114 +5838,9 @@ bool GUI::loadLastBook()
             {
                 lastTitle = titleBuf;
             }
-            else
-            {
-                ESP_LOGW(TAG, "nvs_get_str(%s) failed while reading: %s", NVS_KEY_LAST_BOOK_TITLE, esp_err_to_name(err));
-            }
             delete[] titleBuf;
         }
-
-        size_t fontLen = 0;
-        err = nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_FONT, NULL, &fontLen);
-        if (err == ESP_OK && fontLen > 1)
-        {
-            char *fontBuf = new char[fontLen];
-            if (nvs_get_str(my_handle, NVS_KEY_LAST_BOOK_FONT, fontBuf, &fontLen) == ESP_OK)
-            {
-                lastFont = fontBuf;
-            }
-            else
-            {
-                ESP_LOGW(TAG, "nvs_get_str(%s) failed while reading: %s", NVS_KEY_LAST_BOOK_FONT, esp_err_to_name(err));
-            }
-            delete[] fontBuf;
-        }
-
-        int32_t fontSizeInt = 0;
-        err = nvs_get_i32(my_handle, NVS_KEY_LAST_BOOK_FONT_SIZE, &fontSizeInt);
-        if (err == ESP_OK)
-        {
-            lastFontSize = fontSizeInt / 10.0f;
-        }
         nvs_close(my_handle);
-    }
-
-    // If NVS didn't have a useful chapter value, try BookIndex progress as a fallback
-    if (lastChapter == 0 && bookIndexReady && lastId > 0)
-    {
-        BookEntry entry = bookIndex.getBook(lastId);
-        if (entry.id > 0 && entry.currentChapter != 0)
-        {
-            ESP_LOGI(TAG, "Using chapter=%d from bookIndex for book %d (NVS had %d)", entry.currentChapter, lastId, lastChapter);
-            lastChapter = entry.currentChapter;
-        }
-    }
-
-    if (lastId > 0)
-    {
-        lastBookId = lastId;
-        if (!lastTitle.empty())
-        {
-            lastBookTitle = lastTitle;
-            if (lastBookTitle.length() > 25)
-            {
-                size_t pos = 22;
-                while (pos > 0 && (lastBookTitle[pos] & 0xC0) == 0x80)
-                    pos--;
-                lastBookTitle = lastBookTitle.substr(0, pos) + "...";
-            }
-        }
-    }
-
-    if (lastPath.empty() && lastId > 0)
-    {
-        char fallback[32];
-        snprintf(fallback, sizeof(fallback), "/spiffs/%ld.epub", lastId);
-        lastPath = fallback;
-    }
-
-    // Check if file exists
-    struct stat st;
-    if (!lastPath.empty() && stat(lastPath.c_str(), &st) != 0)
-    {
-        ESP_LOGW(TAG, "Last book file not found: %s", lastPath.c_str());
-        // Try to recover path from ID if index is ready
-        if (bookIndexReady && lastId > 0)
-        {
-            BookEntry entry = bookIndex.getBook(lastId);
-            if (entry.id > 0 && !entry.path.empty())
-            {
-                std::string newPath = entry.path;
-                if (stat(newPath.c_str(), &st) == 0)
-                {
-                    ESP_LOGI(TAG, "Recovered path from index: %s", newPath.c_str());
-                    lastPath = newPath;
-                }
-                else
-                {
-                    lastPath = ""; // Invalid
-                }
-            }
-        }
-        else
-        {
-            // If index not ready, we can't recover yet.
-            // But we shouldn't try to load a non-existent file.
-            // We'll leave it empty so we don't crash/fail in loader.
-            lastPath = "";
-        }
-    }
-
-    // Try to sync ID with bookIndex if available
-    if (bookIndexReady && !lastPath.empty())
-    {
-        int realId = bookIndex.getBookIdByPath(lastPath);
-        if (realId > 0 && realId != lastId)
-        {
-            ESP_LOGI(TAG, "Updating last book ID from %ld to %d based on path", lastId, realId);
-            lastId = realId;
-            lastBookId = realId;
-        }
     }
 
     if (lastId <= 0 || lastPath.empty())
@@ -5899,109 +5848,8 @@ bool GUI::loadLastBook()
         return false;
     }
 
-    // Signal CRITICAL priority - background tasks should pause
-    TaskCoordinator::getInstance().requestHighPriority(TaskPriority::CRITICAL);
-
-    currentBook = {lastId, lastTitle, "", lastPath, lastChapter, lastOffset, 0, false, false, "", 1.0f};
-    totalBookChars = 0;
-    chapterPrefixSums.clear();
-    bookMetricsComputed = false;
-
-    bool loaded = false;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
-    {
-        ESP_LOGI(TAG, "Loading last book: ID=%d, path=%s, chapter=%d, offset=%zu",
-                 currentBook.id, currentBook.path.c_str(), currentBook.currentChapter, currentBook.currentOffset);
-        {
-            ScopedTaskWdtPause pauseWdt;
-            loaded = epubLoader.load(currentBook.path.c_str(), currentBook.currentChapter);
-        }
-        if (loaded)
-        {
-            currentState = AppState::READER;
-
-            // Auto-detect language
-            std::string lang = epubLoader.getLanguage();
-            bool isHebrew = (lang.find("he") != std::string::npos || lang.find("HE") != std::string::npos);
-            if (!lastFont.empty() && lastFontSize > 0.0f)
-            {
-                // Restore saved font and size
-                fontSizes[lastFont] = lastFontSize;
-                setFont(lastFont);
-                fontSize = lastFontSize;
-            }
-            else if (isHebrew)
-            {
-                // Hebrew book without saved font - use Hebrew with size 2.5
-                setFont("Hebrew");
-                if (fontSizes.count("Hebrew") == 0)
-                {
-                    fontSizes["Hebrew"] = 2.5f;
-                }
-                fontSize = fontSizes["Hebrew"];
-            }
-            else
-            {
-                // Default to Roboto with size 2.5
-                setFont("Roboto");
-                if (fontSizes.count("Roboto") == 0)
-                {
-                    fontSizes["Roboto"] = 2.5f;
-                }
-                fontSize = fontSizes["Roboto"];
-            }
-
-            // Restore progress - currentTextOffset is the exact page position
-            currentTextOffset = currentBook.currentOffset;
-            ESP_LOGI(TAG, "Restored book position: chapter=%d, offset=%zu",
-                     currentBook.currentChapter, currentTextOffset);
-            resetPageInfoCache();
-
-            // Quick RTL detection based on language only (skip expensive chapter scanning on restore)
-            isRTLDocument = isHebrew;
-
-            if (bookIndexReady && bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
-            {
-                bookMetricsComputed = true;
-                ESP_LOGI(TAG, "Loaded cached metrics for book %d", currentBook.id);
-            }
-            else
-            {
-                if (metricsTaskHandle != nullptr)
-                    vTaskDelete(metricsTaskHandle);
-                metricsTaskTargetBookId = currentBook.id;
-#ifdef CONFIG_EBOOK_S3_DUAL_CORE_OPTIMIZATION
-                int metricsCore = deviceHAL.getRenderTaskCore();
-                if (metricsCore != deviceHAL.getMainTaskCore())
-                {
-                    xTaskCreatePinnedToCore([](void *arg)
-                                            { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle, metricsCore);
-                }
-                else
-                {
-                    xTaskCreate([](void *arg)
-                                { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
-                }
-#else
-                xTaskCreate([](void *arg)
-                            { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
-#endif
-            }
-        }
-        xSemaphoreGive(epubMutex);
-    }
-
-    // Release critical priority
-    TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
-
-    if (!loaded)
-    {
-        return false;
-    }
-
-    pageHistory.clear();
-    needsRedraw = true;
-    return true;
+    ESP_LOGI(TAG, "Restoring last book %d via async loader", lastId);
+    return openBookById(lastId, lastChapter, lastOffset);
 }
 
 uint8_t GUI::getGrayShade(int level) const
@@ -7843,7 +7691,9 @@ void GUI::onFontSelectionClick(int x, int y)
 
 void GUI::showWallpaperAndSleep()
 {
-#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
+//#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3 
+#define USE_WALLPAPER_ON_SLEEP 1
+#ifdef USE_WALLPAPER_ON_SLEEP
     DeviceHAL &hal = DeviceHAL::getInstance();
 
     bool showedWallpaper = false;

@@ -37,7 +37,8 @@ public:
     void removeBook(int id);
     void updateProgress(int id, int chapter, size_t offset);
     void markAsFailed(int id); // Mark book as failed to index
-    void save(); // Force save index to disk
+    void save(); // Force save index to disk (synchronous)
+    void requestSave(); // Request a background save (asynchronous)
     std::vector<BookEntry> getBooks();
     std::vector<BookEntry> getFilteredBooks(const std::string& searchQuery, bool favoritesOnly);
     BookEntry getBook(int id);
@@ -60,8 +61,12 @@ public:
 private:
     std::vector<BookEntry> books;
     SemaphoreHandle_t mutex = NULL;
+    volatile bool _needsSave = false;
+    TaskHandle_t _saveTaskHandle = nullptr;
+    
     void load(ProgressCallback callback = nullptr);
     void saveInternal();
     int getNextId();
     void checkMetricsExistence();
+    static void saveTask(void* arg);
 };

@@ -29,7 +29,8 @@ enum class AppState
     CHAPTER_MENU,   // In-book chapter jump menu
     FONT_SELECTION, // Font selection screen (S3 only)
     MUSIC_COMPOSER, // Music sequencer screen
-    RECENT_BOOKS    // Recent books list
+    RECENT_BOOKS,   // Recent books list
+    LOADING         // Loading a book screen
 };
 
 struct RenderRequest
@@ -77,7 +78,7 @@ public:
 
     void jumpTo(float percent);
     void jumpToChapter(int chapter);
-    bool openBookById(int id);
+    bool openBookById(int id, int chapter = -1, size_t offset = 0);
     // Introspection helpers for external callers (eg. web server)
     bool canJump() const; // true when in READER state
     size_t getCurrentChapterSize() const;
@@ -111,6 +112,7 @@ public:
     void renderTaskLoop();
     void metricsTaskLoop();
     void backgroundIndexerTaskLoop();
+    void loadingTaskLoop();
 
     void showWallpaperAndSleep(); // Show random wallpaper before sleep (S3 only)
 
@@ -160,7 +162,11 @@ private:
     TaskHandle_t renderTaskHandle = nullptr;
     TaskHandle_t metricsTaskHandle = nullptr;
     TaskHandle_t backgroundIndexerTaskHandle = nullptr;
+    TaskHandle_t loadingTaskHandle = nullptr;
     int metricsTaskTargetBookId = 0;
+    int loadingTargetBookId = 0;
+    int loadingTargetChapter = -1;
+    size_t loadingTargetOffset = 0;
     QueueHandle_t renderQueue = nullptr;
     SemaphoreHandle_t epubMutex = nullptr;
     volatile bool abortRender = false;
@@ -256,6 +262,7 @@ private:
     void drawFontSelection(); // Font selection screen (S3 only)
     void drawWifiPassword();
     void drawImageViewer(); // Full-screen image display
+    void drawLoadingScreen();
 
     void handleTouch();
     void handleTap(int x, int y);
