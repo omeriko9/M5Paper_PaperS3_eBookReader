@@ -161,6 +161,7 @@ static bool connectToAP(const char* ssid, const char* pass) {
 static void connectTask(void* arg) {
     ConnectTaskArgs* args = static_cast<ConnectTaskArgs*>(arg);
     WifiManager* manager = args ? args->manager : nullptr;
+    esp_task_wdt_add(NULL);
 
     bool connected = false;
     if (args && args->has_nvs_creds) {
@@ -207,6 +208,7 @@ static void connectTask(void* arg) {
     delete args;
     s_connect_in_progress = false;
     s_connect_task_handle = nullptr;
+    esp_task_wdt_delete(NULL);
     vTaskDelete(nullptr);
 }
 

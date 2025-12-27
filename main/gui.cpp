@@ -41,6 +41,40 @@ static const size_t IMAGE_PLACEHOLDER_LEN = 3;
 
 static const char *TAG = "GUI";
 
+namespace
+{
+    class ScopedTaskWdtPause
+    {
+    public:
+        ScopedTaskWdtPause()
+        {
+            if (esp_task_wdt_status(NULL) == ESP_OK)
+            {
+                esp_task_wdt_delete(NULL);
+                active = true;
+            }
+        }
+        ~ScopedTaskWdtPause()
+        {
+            if (active)
+            {
+                esp_task_wdt_add(NULL);
+            }
+        }
+
+    private:
+        bool active = false;
+    };
+
+    inline void wdtResetIfRegistered()
+    {
+        if (esp_task_wdt_status(NULL) == ESP_OK)
+        {
+            esp_task_wdt_reset();
+        }
+    }
+}
+
 // NVS keys for last-book state (short to fit NVS limits)
 static constexpr const char *NVS_KEY_LAST_BOOK_ID = "lb_id";
 static constexpr const char *NVS_KEY_LAST_STATE = "lb_st";
@@ -945,16 +979,31 @@ void GUI::backgroundIndexerTaskLoop()
     esp_task_wdt_add(NULL);
     while (needsRedraw || bookOpenInProgress)
     {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     ESP_LOGI(TAG, "BgIndexer started");
 
     auto waitForBookOpen = [this]()
     {
-        while (bookOpenInProgress || renderingInProgress)
+        while (bookOpenInProgress || renderingInProgress || readerRenderInProgress)
         {
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    };
+
+    auto waitForUiIdle = [this]()
+    {
+        while (true)
+        {
+            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+            bool readerActive = (currentState == AppState::READER) && (now - lastActivityTime < 8 * 1000);
+            if (!bookOpenInProgress && !renderingInProgress && !readerRenderInProgress && !readerActive)
+            {
+                break;
+            }
+            wdtResetIfRegistered();
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     };
@@ -968,7 +1017,7 @@ void GUI::backgroundIndexerTaskLoop()
             if (currentState == AppState::LIBRARY || currentState == AppState::MAIN_MENU) {
                 needsRedraw = true;
             }
-            esp_task_wdt_reset(); });
+            wdtResetIfRegistered(); });
         bookIndexReady = true;
 
         if (pendingBookIndexSync && pendingBookId > 0)
@@ -1005,16 +1054,20 @@ void GUI::backgroundIndexerTaskLoop()
 
     // Wait a bit for system to settle and user to potentially start reading
     vTaskDelay(pdMS_TO_TICKS(3000));
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
     // Step 1: Scan for new books in background
     waitForBookOpen();
+    waitForUiIdle();
     ESP_LOGI(TAG, "BgIndexer: Scanning for new books...");
     indexingScanActive = true;
     indexingCurrent = 0;
     indexingTotal = 0;
-    bool newBooksFound = bookIndex.scanForNewBooks([this](int current, int total, const char *msg)
-                                                   {
+    bool newBooksFound = false;
+    {
+        ScopedTaskWdtPause pauseWdt;
+        newBooksFound = bookIndex.scanForNewBooks([this](int current, int total, const char *msg)
+                                                  {
         // Optional: update a status bar or log
         // ESP_LOGI(TAG, "Scan progress: %d/%d - %s", current, total, msg);
         indexingCurrent = current;
@@ -1028,11 +1081,14 @@ void GUI::backgroundIndexerTaskLoop()
             needsRedraw = true;
             lastRedraw = now;
         }
-        esp_task_wdt_reset(); },
+        wdtResetIfRegistered(); },
                                                    [this]()
                                                    {
-                                                       return bookOpenInProgress || renderingInProgress;
+                                                       uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+                                                       bool readerActive = (currentState == AppState::READER) && (now - lastActivityTime < 8 * 1000);
+                                                       return bookOpenInProgress || renderingInProgress || readerRenderInProgress || readerActive;
                                                    });
+    }
     indexingScanActive = false;
 
     if (newBooksFound)
@@ -1040,7 +1096,7 @@ void GUI::backgroundIndexerTaskLoop()
         ESP_LOGI(TAG, "BgIndexer: New books found, refreshing list if needed");
         // If we are in library view, we might want to refresh, but for now just let the user see them next time
     }
-    esp_task_wdt_reset();
+    wdtResetIfRegistered();
 
     // Step 2: Calculate metrics for books that need it
     auto books = bookIndex.getBooks();
@@ -1057,6 +1113,8 @@ void GUI::backgroundIndexerTaskLoop()
     {
         processedCount++;
         indexingCurrent = processedCount;
+        wdtResetIfRegistered();
+        waitForUiIdle();
 
         // Throttle redraws
         uint32_t now = xTaskGetTickCount();
@@ -1133,7 +1191,7 @@ void GUI::backgroundIndexerTaskLoop()
             ESP_LOGI(TAG, "BgIndexer: localLoader.load(book=%d \"%s\") took %llu ms -> %s",
                      book.id, book.title.c_str(),
                      (unsigned long long)load_ms, loaded ? "OK" : "FAIL");
-            esp_task_wdt_reset();
+            wdtResetIfRegistered();
 
             if (loaded)
             {
@@ -1145,7 +1203,7 @@ void GUI::backgroundIndexerTaskLoop()
                 for (int i = 0; i < chapters; ++i)
                 {
                     uint64_t t_ch_start = esp_timer_get_time();
-                    esp_task_wdt_reset();
+                    wdtResetIfRegistered();
                     // Yield frequently to keep UI responsive
                     vTaskDelay(pdMS_TO_TICKS(5));
 
@@ -1170,7 +1228,7 @@ void GUI::backgroundIndexerTaskLoop()
                         ESP_LOGI(TAG, "BgIndexer: Pausing for web activity...");
                         while (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000))
                         {
-                            esp_task_wdt_reset();
+                            wdtResetIfRegistered();
                             vTaskDelay(pdMS_TO_TICKS(1000));
                             lastHttp = WebServer::getLastActivityTime();
                             now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1214,7 +1272,7 @@ void GUI::backgroundIndexerTaskLoop()
                         ESP_LOGW(TAG, "BgIndexer: Slow chapter read: book=%d chapter=%d took %llu ms len=%zu",
                                  book.id, i, (unsigned long long)ch_ms, len);
                     }
-                    esp_task_wdt_reset();
+                    wdtResetIfRegistered();
 
                     cumulative += len;
                     sums[i + 1] = cumulative;
@@ -1235,7 +1293,7 @@ void GUI::backgroundIndexerTaskLoop()
                 }
 
                 localLoader.close();
-                esp_task_wdt_reset();
+                wdtResetIfRegistered();
             }
             else
             {
@@ -2316,8 +2374,16 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         if (spaceW == 0)
             spaceW = 5; // Fallback if font has no space width
 
+        TickType_t lastYieldTick = xTaskGetTickCount();
         for (const auto &p : line)
         {
+            TickType_t nowTick = xTaskGetTickCount();
+            if (nowTick - lastYieldTick >= pdMS_TO_TICKS(30))
+            {
+                wdtResetIfRegistered();
+                vTaskDelay(1);
+                lastYieldTick = xTaskGetTickCount();
+            }
             bool isMath = std::get<2>(p);
             size_t wordOffset = std::get<0>(p);
             size_t wordLen = std::get<1>(p);
@@ -3129,6 +3195,7 @@ void GUI::updateNextPrevCanvases()
 void GUI::drawReader(bool flush)
 {
     ESP_LOGI(TAG, "drawReader called, currentTextOffset: %zu", currentTextOffset);
+    readerRenderInProgress = true;
 
     // Ensure font is loaded (fix for missing glyphs)
     loadFonts();
@@ -3199,13 +3266,17 @@ void GUI::drawReader(bool flush)
         ESP_LOGI(TAG, "Calling M5.Display.display()");
         M5.Display.waitDisplay();
         M5.Display.setEpdMode(fastRefresh ? epd_mode_t::epd_fast : epd_mode_t::epd_quality);
-        M5.Display.display();
+        {
+            ScopedTaskWdtPause pauseWdt;
+            M5.Display.display();
+        }
         saveLastBook();
     }
     ESP_LOGI(TAG, "drawReader completed");
 
     // Update buffers for next interaction
     updateNextPrevCanvases();
+    readerRenderInProgress = false;
 }
 
 void GUI::drawSleepSymbol(const char *symbol)

@@ -37,6 +37,7 @@ bool BookIndex::validateBooks()
 
     std::vector<int> idsToRemove;
     for (const auto& book : booksCopy) {
+        esp_task_wdt_reset();
         struct stat st;
         if (stat(book.path.c_str(), &st) != 0) {
             ESP_LOGW(TAG, "Book file missing: %s", book.path.c_str());

@@ -119,6 +119,7 @@ private:
     volatile bool needsRedraw = true;
     volatile bool bookOpenInProgress = false;
     volatile bool renderingInProgress = false;
+    volatile bool readerRenderInProgress = false;
     BookEntry currentBook;
     struct PageInfo
     {
