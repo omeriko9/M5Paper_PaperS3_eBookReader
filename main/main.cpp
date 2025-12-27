@@ -68,6 +68,36 @@ static inline void stopSntpClient()
 #endif
 }
 
+void syncRtcFromNtp();
+
+static TaskHandle_t s_ntp_task_handle = nullptr;
+
+static void ntpSyncTask(void *arg)
+{
+    (void)arg;
+    esp_task_wdt_add(NULL);
+    syncRtcFromNtp();
+    esp_task_wdt_delete(NULL);
+    s_ntp_task_handle = nullptr;
+    vTaskDelete(nullptr);
+}
+
+static bool startNtpSyncTask()
+{
+    if (s_ntp_task_handle != nullptr)
+    {
+        return false;
+    }
+    BaseType_t ok = xTaskCreate(ntpSyncTask, "NtpSync", 4096, nullptr, 1, &s_ntp_task_handle);
+    if (ok != pdPASS)
+    {
+        s_ntp_task_handle = nullptr;
+        ESP_LOGW(TAG, "Failed to start NTP sync task");
+        return false;
+    }
+    return true;
+}
+
 void syncRtcFromNtp()
 {
     // Load TZ from NVS
@@ -535,8 +565,10 @@ extern "C" void app_main(void)
 
         if (ntpSyncPending && wifiManager.isConnected())
         {
-            syncRtcFromNtp();
-            ntpSyncPending = false;
+            if (startNtpSyncTask())
+            {
+                ntpSyncPending = false;
+            }
         }
 
         gui.setWifiStatus(wifiManager.isConnected(), wifiManager.getRssi());

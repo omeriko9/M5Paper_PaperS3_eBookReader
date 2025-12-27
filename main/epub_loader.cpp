@@ -633,6 +633,8 @@ struct LoadChapterContext {
     bool inScript = false;
     bool inEntity = false;
     std::string currentEntity;
+    size_t processedSinceYield = 0;
+    TickType_t lastYieldTick = 0;
 };
 
 struct ChapterLengthContext {
@@ -721,6 +723,7 @@ static bool chapterLengthCallback(const char* data, size_t len, void* ctx) {
         context->processedSinceYield++;
         TickType_t now = xTaskGetTickCount();
         if (context->processedSinceYield >= 2048 || (now - context->lastYieldTick) >= pdMS_TO_TICKS(20)) {
+            wdtResetIfRegistered();
             vTaskDelay(1);
             context->processedSinceYield = 0;
             context->lastYieldTick = xTaskGetTickCount();
@@ -782,6 +785,14 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
     LoadChapterContext* context = (LoadChapterContext*)ctx;
     for (size_t i = 0; i < len; ++i) {
         char c = data[i];
+        if ((++context->processedSinceYield & 0x3FF) == 0) {
+            wdtResetIfRegistered();
+            TickType_t now = xTaskGetTickCount();
+            if (now != context->lastYieldTick) {
+                vTaskDelay(1);
+                context->lastYieldTick = now;
+            }
+        }
         if (c == '<') {
             if (context->inEntity) {
                 context->content->append("&");
@@ -1096,6 +1107,8 @@ void EpubLoader::loadChapter(int index) {
     ctx->mathStartOffset = 0;
     ctx->inStyle = false;
     ctx->inScript = false;
+    ctx->processedSinceYield = 0;
+    ctx->lastYieldTick = xTaskGetTickCount();
 
     // Stream process the HTML file directly from ZIP to text
     // This avoids loading the full HTML into memory

@@ -887,23 +887,38 @@ void GUI::metricsTaskLoop()
     esp_task_wdt_add(NULL);
     ESP_LOGI(TAG, "MetricsTask started for book %d", metricsTaskTargetBookId);
     int targetId = metricsTaskTargetBookId;
+    auto isUiBusy = [this]() -> bool
+    {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 2000);
+        return bookOpenInProgress || renderingInProgress || readerRenderInProgress || readerActive;
+    };
 
     // Initial check and setup
     int chapters = 0;
-    if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+    while (true)
     {
-        // Verify we are still on the same book
         if (currentBook.id != targetId)
         {
-            xSemaphoreGive(epubMutex);
             ESP_LOGW(TAG, "MetricsTask: Book changed at start, aborting");
             metricsTaskHandle = nullptr;
             esp_task_wdt_delete(NULL);
             vTaskDelete(NULL);
             return;
         }
-        chapters = epubLoader.getTotalChapters();
-        xSemaphoreGive(epubMutex);
+        if (isUiBusy())
+        {
+            wdtResetIfRegistered();
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        if (xSemaphoreTake(epubMutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            chapters = epubLoader.getTotalChapters();
+            xSemaphoreGive(epubMutex);
+            break;
+        }
+        wdtResetIfRegistered();
     }
 
     if (chapters <= 0)
@@ -921,7 +936,7 @@ void GUI::metricsTaskLoop()
 
     for (int i = 0; i < chapters; ++i)
     {
-        esp_task_wdt_reset();
+        wdtResetIfRegistered();
         // Check if book changed
         if (currentBook.id != targetId)
         {
@@ -933,10 +948,35 @@ void GUI::metricsTaskLoop()
         }
 
         size_t len = 0;
-        if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+        while (true)
         {
-            len = epubLoader.getChapterTextLength(i);
-            xSemaphoreGive(epubMutex);
+            if (currentBook.id != targetId)
+            {
+                ESP_LOGW(TAG, "MetricsTask: Book changed during scan, aborting");
+                metricsTaskHandle = nullptr;
+                esp_task_wdt_delete(NULL);
+                vTaskDelete(NULL);
+                return;
+            }
+            if (isUiBusy())
+            {
+                wdtResetIfRegistered();
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+            if (xSemaphoreTake(epubMutex, pdMS_TO_TICKS(50)) == pdTRUE)
+            {
+                uint64_t t_start = esp_timer_get_time();
+                len = epubLoader.getChapterTextLength(i);
+                uint64_t t_ms = (esp_timer_get_time() - t_start) / 1000ULL;
+                xSemaphoreGive(epubMutex);
+                if (t_ms > 500)
+                {
+                    ESP_LOGW(TAG, "MetricsTask: chapter %d length took %llu ms", i, (unsigned long long)t_ms);
+                }
+                break;
+            }
+            wdtResetIfRegistered();
         }
 
         cumulative += len;
