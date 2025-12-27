@@ -12,6 +12,7 @@
 #include "gesture_detector.h"
 #include "game_manager.h"
 #include "composer_ui.h"
+#include "task_coordinator.h"
 #include <vector>
 #include <cctype>
 #include <nvs_flash.h>
@@ -849,12 +850,14 @@ void GUI::metricsTaskLoop()
 {
     ESP_LOGI(TAG, "MetricsTask started for book %d", metricsTaskTargetBookId);
     int targetId = metricsTaskTargetBookId;
-    auto isUiBusy = [this]() -> bool
+    auto &coordinator = TaskCoordinator::getInstance();
+    auto isUiBusy = [this, &coordinator]() -> bool
     {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         bool recentActivity = (now - lastUserActivityTime < 3000);
         bool notReading = (currentState != AppState::READER);
-        return bookOpenInProgress || renderingInProgress || readerRenderInProgress || recentActivity || notReading;
+        return coordinator.isCriticalPending() || coordinator.isHighPriorityPending() || 
+               renderingInProgress || readerRenderInProgress || recentActivity || notReading;
     };
 
     std::string targetPath;
@@ -969,29 +972,46 @@ void GUI::metricsTaskLoop()
 void GUI::backgroundIndexerTaskLoop()
 {
     esp_task_wdt_add(NULL);
-    while (needsRedraw || bookOpenInProgress)
+    
+    auto& coordinator = TaskCoordinator::getInstance();
+    
+    // Wait for initial redraw to complete
+    while (needsRedraw || coordinator.isCriticalPending())
     {
         wdtResetIfRegistered();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     ESP_LOGI(TAG, "BgIndexer started");
 
-    auto waitForBookOpen = [this]()
+    // Lambda to check if we should pause for high-priority operations
+    auto shouldPause = [this, &coordinator]() -> bool
     {
-        while (bookOpenInProgress || renderingInProgress || readerRenderInProgress)
+        return renderingInProgress || 
+               readerRenderInProgress ||
+               coordinator.isCriticalPending() ||
+               coordinator.isHighPriorityPending();
+    };
+
+    auto waitForHighPriority = [this, &coordinator]()
+    {
+        while (coordinator.isCriticalPending() || coordinator.isHighPriorityPending())
         {
             wdtResetIfRegistered();
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     };
 
-    auto waitForUiIdle = [this]()
+    auto waitForUiIdle = [this, &coordinator]()
     {
         while (true)
         {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
             bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 8 * 1000);
-            if (!bookOpenInProgress && !renderingInProgress && !readerRenderInProgress && !readerActive)
+            if (!renderingInProgress && 
+                !readerRenderInProgress && 
+                !readerActive &&
+                !coordinator.isCriticalPending() &&
+                !coordinator.isHighPriorityPending())
             {
                 break;
             }
@@ -1002,7 +1022,7 @@ void GUI::backgroundIndexerTaskLoop()
 
     if (!bookIndexReady)
     {
-        waitForBookOpen();
+        waitForHighPriority();
         ESP_LOGI(TAG, "BgIndexer: Loading book index...");
         bookIndex.init(false, [this](int current, int total, const char *msg)
                        {
@@ -1049,7 +1069,7 @@ void GUI::backgroundIndexerTaskLoop()
     wdtResetIfRegistered();
 
     // Step 1: Scan for new books in background
-    waitForBookOpen();
+    waitForHighPriority();
     waitForUiIdle();
     ESP_LOGI(TAG, "BgIndexer: Scanning for new books...");
     indexingScanActive = true;
@@ -1058,8 +1078,6 @@ void GUI::backgroundIndexerTaskLoop()
     bool newBooksFound = false;
     newBooksFound = bookIndex.scanForNewBooks([this](int current, int total, const char *msg)
                                               {
-        // Optional: update a status bar or log
-        // ESP_LOGI(TAG, "Scan progress: %d/%d - %s", current, total, msg);
         indexingCurrent = current;
         indexingTotal = total;
         
@@ -1072,18 +1090,12 @@ void GUI::backgroundIndexerTaskLoop()
             lastRedraw = now;
         }
         wdtResetIfRegistered(); },
-                                              [this]()
-                                              {
-                                                       uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-                                                       bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 8 * 1000);
-                                                       return bookOpenInProgress || renderingInProgress || readerRenderInProgress || readerActive;
-                                              });
+                                              shouldPause);
     indexingScanActive = false;
 
     if (newBooksFound)
     {
         ESP_LOGI(TAG, "BgIndexer: New books found, refreshing list if needed");
-        // If we are in library view, we might want to refresh, but for now just let the user see them next time
     }
     wdtResetIfRegistered();
 
@@ -1103,6 +1115,11 @@ void GUI::backgroundIndexerTaskLoop()
         processedCount++;
         indexingCurrent = processedCount;
         wdtResetIfRegistered();
+        
+        // Check for high-priority operations
+        if (shouldPause()) {
+            waitForHighPriority();
+        }
         waitForUiIdle();
 
         // Throttle redraws
@@ -1113,9 +1130,9 @@ void GUI::backgroundIndexerTaskLoop()
             lastRedrawTime = now;
         }
 
-        if (bookOpenInProgress)
+        if (shouldPause())
         {
-            waitForBookOpen();
+            waitForHighPriority();
         }
 
         // Yield to UI task
@@ -1136,15 +1153,12 @@ void GUI::backgroundIndexerTaskLoop()
                 continue;
             }
 
-            // Optimization: Check if metrics file already exists on disk (e.g. from previous firmware version or crash)
-            // This avoids re-calculating if we just lost the index flag but file is there.
-            // We do this check here in the background task, not on main thread.
+            // Optimization: Check if metrics file already exists on disk
             size_t dummyTotal;
             std::vector<size_t> dummyOffsets;
             if (bookIndex.loadBookMetrics(book.id, dummyTotal, dummyOffsets))
             {
                 ESP_LOGI(TAG, "BgIndexer: Found existing metrics for book %d (%s), updating index flag only", book.id, book.title.c_str());
-                // Update in-memory flag ONLY. Do NOT save index yet.
                 bookIndex.updateBookMetricsFlag(book.id, true);
                 indexNeedsSave = true;
                 updatesCount++;
@@ -1152,7 +1166,7 @@ void GUI::backgroundIndexerTaskLoop()
                 // Save periodically to avoid losing progress on crash/reboot
                 if (updatesCount >= 20)
                 {
-                    if (bookOpenInProgress) waitForBookOpen();
+                    if (shouldPause()) waitForHighPriority();
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1163,17 +1177,14 @@ void GUI::backgroundIndexerTaskLoop()
 
             ESP_LOGI(TAG, "BgIndexer: Processing new book %d (%s)", book.id, book.title.c_str());
 
-            if (bookOpenInProgress)
+            if (shouldPause())
             {
-                waitForBookOpen();
+                waitForHighPriority();
             }
 
             uint32_t bookStartTime = (uint32_t)(esp_timer_get_time() / 1000);
             EpubLoader localLoader;
-            // Note: We don't take epubMutex here because we are using a separate loader instance
-            // and separate file handle. SPIFFS is thread-safe.
 
-            // Diagnostic timings for load/chapter processing to find any long blocking operations
             uint64_t t_load_start = esp_timer_get_time();
             bool loaded = localLoader.load(book.path.c_str(), -1, false);
             uint64_t t_load_end = esp_timer_get_time();
@@ -1194,7 +1205,6 @@ void GUI::backgroundIndexerTaskLoop()
                 {
                     uint64_t t_ch_start = esp_timer_get_time();
                     wdtResetIfRegistered();
-                    // Yield frequently to keep UI responsive
                     vTaskDelay(pdMS_TO_TICKS(5));
 
                     if (i % 10 == 0)
@@ -1210,7 +1220,16 @@ void GUI::backgroundIndexerTaskLoop()
                         goto next_book;
                     }
 
-                    // Check for web activity and pause if needed to avoid starving the upload handler
+                    // Check for high-priority operations (book open, etc.)
+                    if (shouldPause())
+                    {
+                        ESP_LOGI(TAG, "BgIndexer: Pausing for high-priority operation...");
+                        localLoader.close();
+                        waitForHighPriority();
+                        goto next_book;
+                    }
+
+                    // Check for web activity
                     uint32_t lastHttp = WebServer::getLastActivityTime();
                     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
                     if (lastHttp > 0 && (now > lastHttp) && (now - lastHttp < 5000))
@@ -1223,7 +1242,6 @@ void GUI::backgroundIndexerTaskLoop()
                             lastHttp = WebServer::getLastActivityTime();
                             now = (uint32_t)(esp_timer_get_time() / 1000);
                         }
-                        ESP_LOGI(TAG, "BgIndexer: Resuming...");
                     }
 
                     // If user started reading this specific book, abort
@@ -1232,26 +1250,6 @@ void GUI::backgroundIndexerTaskLoop()
                         ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it", book.id);
                         localLoader.close();
                         goto next_book;
-                    }
-
-                    if (bookOpenInProgress)
-                    {
-                        ESP_LOGI(TAG, "BgIndexer: Pausing for book open...");
-                        localLoader.close();
-                        waitForBookOpen();
-                        goto next_book;
-                    }
-
-                    if (renderingInProgress)
-                    {
-                        waitForBookOpen();
-                        // Re-check if we should abort in case state changed while waiting
-                        if (currentState == AppState::READER && currentBook.id == book.id)
-                        {
-                            ESP_LOGI(TAG, "BgIndexer: Aborting book %d because user opened it (after render wait)", book.id);
-                            localLoader.close();
-                            goto next_book;
-                        }
                     }
 
                     size_t len = localLoader.getChapterTextLength(i);
@@ -1268,7 +1266,7 @@ void GUI::backgroundIndexerTaskLoop()
                     sums[i + 1] = cumulative;
                 }
 
-                if (bookOpenInProgress) waitForBookOpen();
+                if (shouldPause()) waitForHighPriority();
                 // Save metrics but NOT the index file yet (pass false)
                 bookIndex.saveBookMetrics(book.id, cumulative, sums, false);
                 indexNeedsSave = true;
@@ -1276,8 +1274,8 @@ void GUI::backgroundIndexerTaskLoop()
 
                 // Save periodically
                 if (updatesCount >= 5)
-                { // Save more frequently for expensive operations
-                    if (bookOpenInProgress) waitForBookOpen();
+                {
+                    if (shouldPause()) waitForHighPriority();
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1301,7 +1299,7 @@ void GUI::backgroundIndexerTaskLoop()
 
     if (indexNeedsSave)
     {
-        if (bookOpenInProgress) waitForBookOpen();
+        if (shouldPause()) waitForHighPriority();
         ESP_LOGI(TAG, "BgIndexer: Saving updated index with found metrics...");
         bookIndex.save();
     }
@@ -1361,9 +1359,11 @@ void GUI::update()
     {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         bool recentActivity = (now - lastUserActivityTime < 3000);
+        auto &coordinator = TaskCoordinator::getInstance();
         g_metricsPauseRequested = (currentState != AppState::READER) ||
                                   recentActivity ||
-                                  bookOpenInProgress ||
+                                  coordinator.isCriticalPending() ||
+                                  coordinator.isHighPriorityPending() ||
                                   renderingInProgress ||
                                   readerRenderInProgress;
     }
@@ -5160,9 +5160,15 @@ bool GUI::openBookById(int id)
     if (!bookIndexReady)
         return false;
 
+    // Signal CRITICAL priority - all background tasks should pause immediately
+    TaskCoordinator::getInstance().requestHighPriority(TaskPriority::CRITICAL);
+
     BookEntry book = bookIndex.getBook(id);
     if (book.id == 0)
+    {
+        TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
         return false;
+    }
 
     bookMetricsComputed = false;
     totalBookChars = 0;
@@ -5170,12 +5176,11 @@ bool GUI::openBookById(int id)
 
     // Stop any background rendering
     abortRender = true;
-    bookOpenInProgress = true;
 
-    // Lock mutex for the entire loading process
+    // Lock mutex for the EPUB loading only
     if (!xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
-        bookOpenInProgress = false;
+        TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
         return false;
     }
 
@@ -5187,7 +5192,7 @@ bool GUI::openBookById(int id)
     if (!loaded)
     {
         xSemaphoreGive(epubMutex);
-        bookOpenInProgress = false;
+        TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
         return false;
     }
 
@@ -5215,6 +5220,10 @@ bool GUI::openBookById(int id)
         }
     }
 
+    // Release EPUB mutex - we're done with the loader for now
+    xSemaphoreGive(epubMutex);
+
+    // Load metrics (this no longer blocks on bookIndex mutex during file I/O)
     if (bookIndex.loadBookMetrics(currentBook.id, totalBookChars, chapterPrefixSums))
     {
         bookMetricsComputed = true;
@@ -5247,10 +5256,6 @@ bool GUI::openBookById(int id)
                     { static_cast<GUI *>(arg)->metricsTaskLoop(); }, "MetricsTask", 4096, this, 0, &metricsTaskHandle);
 #endif
     }
-
-    // Release mutex
-    xSemaphoreGive(epubMutex);
-    // bookOpenInProgress = false; // Moved to end to prevent BgIndexer from resuming too early
 
     // Restore book-specific font settings if available
     std::string bookFont;
@@ -5303,8 +5308,10 @@ bool GUI::openBookById(int id)
     saveLastBook();
 
     addToRecentBooks(id);
-
-    bookOpenInProgress = false;
+    
+    // Release critical priority - background tasks can resume
+    TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
+    
     return true;
 }
 
@@ -5892,13 +5899,15 @@ bool GUI::loadLastBook()
         return false;
     }
 
+    // Signal CRITICAL priority - background tasks should pause
+    TaskCoordinator::getInstance().requestHighPriority(TaskPriority::CRITICAL);
+
     currentBook = {lastId, lastTitle, "", lastPath, lastChapter, lastOffset, 0, false, false, "", 1.0f};
     totalBookChars = 0;
     chapterPrefixSums.clear();
     bookMetricsComputed = false;
 
     bool loaded = false;
-    bookOpenInProgress = true;
     if (xSemaphoreTake(epubMutex, portMAX_DELAY))
     {
         ESP_LOGI(TAG, "Loading last book: ID=%d, path=%s, chapter=%d, offset=%zu",
@@ -5982,7 +5991,8 @@ bool GUI::loadLastBook()
         xSemaphoreGive(epubMutex);
     }
 
-    bookOpenInProgress = false;
+    // Release critical priority
+    TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
 
     if (!loaded)
     {

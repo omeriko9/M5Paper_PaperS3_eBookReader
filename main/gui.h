@@ -7,6 +7,7 @@
 #include "sdkconfig.h"
 #include "epub_loader.h"
 #include "gesture_detector.h"
+#include "task_coordinator.h"
 #include <map>
 #include <vector>
 #include <algorithm>
@@ -117,7 +118,7 @@ private:
     AppState currentState = AppState::MAIN_MENU;
     AppState previousState = AppState::MAIN_MENU; // For returning from settings
     volatile bool needsRedraw = true;
-    volatile bool bookOpenInProgress = false;
+    // Note: bookOpenInProgress replaced by TaskCoordinator priority system
     volatile bool renderingInProgress = false;
     volatile bool readerRenderInProgress = false;
     BookEntry currentBook;

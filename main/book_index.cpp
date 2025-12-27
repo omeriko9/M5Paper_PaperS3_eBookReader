@@ -76,6 +76,8 @@ bool BookIndex::validateBooks(std::function<bool()> shouldPause)
                 changed = true;
             }
         }
+        xSemaphoreGiveRecursive(mutex);
+        
         if (changed) {
             if (shouldPause) {
                 while (shouldPause()) {
@@ -83,11 +85,9 @@ bool BookIndex::validateBooks(std::function<bool()> shouldPause)
                     wdtResetIfRegistered();
                 }
             }
-            saveInternal();
-            xSemaphoreGiveRecursive(mutex);
+            save();  // Uses snapshot pattern, doesn't block other threads
             return true;
         }
-        xSemaphoreGiveRecursive(mutex);
     }
     return false;
 }
@@ -114,9 +114,7 @@ bool BookIndex::scanForNewBooks(ProgressCallback callback, std::function<bool()>
                 wdtResetIfRegistered();
             }
         }
-        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-        saveInternal();
-        xSemaphoreGiveRecursive(mutex);
+        save();  // Uses snapshot pattern, doesn't block other threads
     }
     
     return foundNewBooks;
@@ -164,27 +162,34 @@ void BookIndex::updateBookMetricsFlag(int id, bool hasMetrics) {
 }
 
 bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<size_t>& chapterOffsets, bool saveToDisk) {
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    
+    // Get the path and copy offsets while holding the mutex briefly
     std::string bookPath;
-    for (const auto& book : books) {
-        if (book.id == id) {
-            bookPath = book.path;
-            break;
+    std::string metricsFilePath;
+    std::vector<size_t> offsetsCopy = chapterOffsets;  // Copy before releasing mutex
+    
+    {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        
+        for (const auto& book : books) {
+            if (book.id == id) {
+                bookPath = book.path;
+                break;
+            }
         }
-    }
-    
-    if (bookPath.empty()) {
+        
+        if (bookPath.empty()) {
+            xSemaphoreGiveRecursive(mutex);
+            return false;
+        }
+        
+        metricsFilePath = getMetricsPath(bookPath);
         xSemaphoreGiveRecursive(mutex);
-        return false;
     }
     
-    std::string path = getMetricsPath(bookPath);
-    
-    FILE* f = fopen(path.c_str(), "wb");
+    // Now do file I/O WITHOUT holding the mutex
+    FILE* f = fopen(metricsFilePath.c_str(), "wb");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open metrics file for writing: %s", path.c_str());
-        xSemaphoreGiveRecursive(mutex);
+        ESP_LOGE(TAG, "Failed to open metrics file for writing: %s", metricsFilePath.c_str());
         return false;
     }
     
@@ -192,59 +197,67 @@ bool BookIndex::saveBookMetrics(int id, size_t totalChars, const std::vector<siz
     uint8_t version = 1;
     fwrite(&version, 1, 1, f);
     fwrite(&totalChars, sizeof(size_t), 1, f);
-    uint32_t count = chapterOffsets.size();
+    uint32_t count = offsetsCopy.size();
     fwrite(&count, sizeof(uint32_t), 1, f);
     
     if (count > 0) {
-        fwrite(chapterOffsets.data(), sizeof(size_t), count, f);
+        fwrite(offsetsCopy.data(), sizeof(size_t), count, f);
     }
     
     fclose(f);
     
-    // Update in-memory flag
-    for (auto& book : books) {
-        if (book.id == id) {
-            book.hasMetrics = true;
-            break;
+    // Update in-memory flag (brief mutex hold)
+    {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        for (auto& book : books) {
+            if (book.id == id) {
+                book.hasMetrics = true;
+                break;
+            }
         }
+        xSemaphoreGiveRecursive(mutex);
     }
     
     // Persist the flag to index if requested
     if (saveToDisk) {
-        saveInternal();
+        save();  // save() now has its own non-blocking logic
     }
     
-    ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters at %s", id, totalChars, count, path.c_str());
-    xSemaphoreGiveRecursive(mutex);
+    ESP_LOGI(TAG, "Saved metrics for book %d: %zu chars, %u chapters at %s", id, totalChars, count, metricsFilePath.c_str());
     return true;
 }
 
 bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>& chapterOffsets) {
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    
+    // Get the path while holding the mutex briefly
     std::string bookPath;
-    for (const auto& book : books) {
-        if (book.id == id) {
-            bookPath = book.path;
-            break;
+    std::string metricsFilePath;
+    {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        
+        for (const auto& book : books) {
+            if (book.id == id) {
+                bookPath = book.path;
+                break;
+            }
         }
-    }
-    
-    if (bookPath.empty()) {
+        
+        if (bookPath.empty()) {
+            xSemaphoreGiveRecursive(mutex);
+            return false;
+        }
+        
+        metricsFilePath = getMetricsPath(bookPath);
         xSemaphoreGiveRecursive(mutex);
-        return false;
     }
     
-    std::string path = getMetricsPath(bookPath);
-    
-    FILE* f = fopen(path.c_str(), "rb");
+    // Now do file I/O WITHOUT holding the mutex
+    FILE* f = fopen(metricsFilePath.c_str(), "rb");
     if (!f) {
         // Fallback to legacy path if not found
         char legacyPath[64];
         snprintf(legacyPath, sizeof(legacyPath), "/spiffs/m_%d.bin", id);
         f = fopen(legacyPath, "rb");
         if (!f) {
-            xSemaphoreGiveRecursive(mutex);
             return false;
         }
         ESP_LOGI(TAG, "Loaded metrics from legacy path for book %d", id);
@@ -253,20 +266,17 @@ bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>&
     uint8_t version = 0;
     if (fread(&version, 1, 1, f) != 1 || version != 1) {
         fclose(f);
-        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
     if (fread(&totalChars, sizeof(size_t), 1, f) != 1) {
         fclose(f);
-        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
     uint32_t count = 0;
     if (fread(&count, sizeof(uint32_t), 1, f) != 1) {
         fclose(f);
-        xSemaphoreGiveRecursive(mutex);
         return false;
     }
     
@@ -274,13 +284,11 @@ bool BookIndex::loadBookMetrics(int id, size_t& totalChars, std::vector<size_t>&
     if (count > 0) {
         if (fread(chapterOffsets.data(), sizeof(size_t), count, f) != count) {
             fclose(f);
-            xSemaphoreGiveRecursive(mutex);
             return false;
         }
     }
     
     fclose(f);
-    xSemaphoreGiveRecursive(mutex);
     return true;
 }
 
@@ -579,6 +587,8 @@ static std::string sanitize(const std::string& s) {
 void BookIndex::saveInternal()
 {
     // Private helper, assumes mutex held
+    // IMPORTANT: This should only be called when snapshot method isn't appropriate
+    // (e.g., from init before other threads exist)
     std::string indexPath = getIndexPath();
     FILE *f = fopen(indexPath.c_str(), "w");
     if (!f)
@@ -615,18 +625,61 @@ void BookIndex::markAsFailed(int id)
         if (book.id == id)
         {
             book.isFailed = true;
-            saveInternal();
+            // Don't call saveInternal here - set dirty flag or defer
             break;
         }
     }
     xSemaphoreGiveRecursive(mutex);
+    // Save outside mutex
+    save();
 }
 
 void BookIndex::save()
 {
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    saveInternal();
-    xSemaphoreGiveRecursive(mutex);
+    // Snapshot-then-release pattern: Copy the books vector while holding mutex,
+    // then release mutex and do file I/O. This avoids blocking other threads
+    // during the slow file write operation.
+    
+    std::vector<BookEntry> snapshot;
+    std::string indexPath;
+    
+    {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        snapshot = books;  // Copy all books
+        indexPath = getIndexPath();
+        xSemaphoreGiveRecursive(mutex);
+    }
+    
+    // Now write to file WITHOUT holding the mutex
+    FILE *f = fopen(indexPath.c_str(), "w");
+    if (!f)
+    {
+        ESP_LOGE(TAG, "Failed to open index for writing at %s", indexPath.c_str());
+        return;
+    }
+
+    ESP_LOGI(TAG, "Saving index with %zu books to %s", snapshot.size(), indexPath.c_str());
+    
+    for (const auto &book : snapshot)
+    {
+        wdtResetIfRegistered();
+        fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f|%d\n", 
+            book.id, 
+            sanitize(book.title).c_str(), 
+            book.currentChapter, 
+            (unsigned int)book.currentOffset, 
+            book.path.c_str(), 
+            (unsigned int)book.fileSize, 
+            book.hasMetrics ? 1 : 0, 
+            sanitize(book.author).c_str(), 
+            book.isFavorite ? 1 : 0,
+            sanitize(book.lastFont).c_str(),
+            book.lastFontSize,
+            book.isFailed ? 1 : 0);
+    }
+    fclose(f);
+    
+    ESP_LOGI(TAG, "Index saved successfully");
 }
 
 void BookIndex::updateProgress(int id, int chapter, size_t offset)
@@ -702,43 +755,47 @@ std::string BookIndex::addBook(const std::string &title)
     }
 
     books.push_back({id, title, "", std::string(path), 0, 0, 0, false, false, "", 1.0f});
-    saveInternal();
-
     xSemaphoreGiveRecursive(mutex);
+    
+    save();  // Uses snapshot pattern
     return std::string(path);
 }
 
 void BookIndex::removeBook(int id)
 {
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    
     std::string bookPath;
-    for (const auto& book : books) {
-        if (book.id == id) {
-            bookPath = book.path;
-            break;
-        }
-    }
-
-    auto it = std::remove_if(books.begin(), books.end(), [id](const BookEntry &b)
-                             { return b.id == id; });
-
-    if (it != books.end())
+    
     {
-        // Delete metrics file if it exists
-        if (!bookPath.empty()) {
-            std::string mPath = getMetricsPath(bookPath);
-            unlink(mPath.c_str());
-            // Also try legacy path
-            char legacyPath[64];
-            snprintf(legacyPath, sizeof(legacyPath), "/spiffs/m_%d.bin", id);
-            unlink(legacyPath);
-        }
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
         
-        books.erase(it, books.end());
-        saveInternal();
+        for (const auto& book : books) {
+            if (book.id == id) {
+                bookPath = book.path;
+                break;
+            }
+        }
+
+        auto it = std::remove_if(books.begin(), books.end(), [id](const BookEntry &b)
+                                 { return b.id == id; });
+
+        if (it != books.end())
+        {
+            books.erase(it, books.end());
+        }
+        xSemaphoreGiveRecursive(mutex);
     }
-    xSemaphoreGiveRecursive(mutex);
+    
+    // Delete metrics file if it exists (outside mutex)
+    if (!bookPath.empty()) {
+        std::string mPath = getMetricsPath(bookPath);
+        unlink(mPath.c_str());
+        // Also try legacy path
+        char legacyPath[64];
+        snprintf(legacyPath, sizeof(legacyPath), "/spiffs/m_%d.bin", id);
+        unlink(legacyPath);
+    }
+    
+    save();  // Uses snapshot pattern
 }
 
 std::vector<BookEntry> BookIndex::getBooks()
@@ -815,15 +872,17 @@ std::vector<BookEntry> BookIndex::getFilteredBooks(const std::string& searchQuer
 
 void BookIndex::setFavorite(int id, bool favorite)
 {
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    for (auto& book : books) {
-        if (book.id == id) {
-            book.isFavorite = favorite;
-            saveInternal();
-            break;
+    {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        for (auto& book : books) {
+            if (book.id == id) {
+                book.isFavorite = favorite;
+                break;
+            }
         }
+        xSemaphoreGiveRecursive(mutex);
     }
-    xSemaphoreGiveRecursive(mutex);
+    save();  // Uses snapshot pattern
 }
 
 bool BookIndex::isFavorite(int id)
@@ -842,16 +901,18 @@ bool BookIndex::isFavorite(int id)
 
 void BookIndex::setBookFont(int id, const std::string& fontName, float fontSize)
 {
-    xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
-    for (auto& book : books) {
-        if (book.id == id) {
-            book.lastFont = fontName;
-            book.lastFontSize = fontSize;
-            saveInternal();
-            break;
+    {
+        xSemaphoreTakeRecursive(mutex, portMAX_DELAY);
+        for (auto& book : books) {
+            if (book.id == id) {
+                book.lastFont = fontName;
+                book.lastFontSize = fontSize;
+                break;
+            }
         }
+        xSemaphoreGiveRecursive(mutex);
     }
-    xSemaphoreGiveRecursive(mutex);
+    save();  // Uses snapshot pattern
 }
 
 bool BookIndex::getBookFont(int id, std::string& fontName, float& fontSize)
