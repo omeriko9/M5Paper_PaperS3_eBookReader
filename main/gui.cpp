@@ -126,6 +126,7 @@ int wifiRssi = 0;
 extern WifiManager wifiManager;
 extern WebServer webServer;
 volatile bool g_metricsPauseRequested = false;
+volatile bool g_lowPriorityIoPause = false;
 
 static constexpr int STATUS_BAR_HEIGHT = 44;
 static constexpr int SEARCH_BAR_HEIGHT = 50;
@@ -860,7 +861,8 @@ void GUI::metricsTaskLoop()
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         bool recentActivity = (now - lastUserActivityTime < 3000);
         bool notReading = (currentState != AppState::READER);
-        return coordinator.isCriticalPending() || coordinator.isHighPriorityPending() ||
+        return g_lowPriorityIoPause ||
+               coordinator.isCriticalPending() || coordinator.isHighPriorityPending() ||
                renderingInProgress || readerRenderInProgress || recentActivity || notReading;
     };
 
@@ -881,9 +883,20 @@ void GUI::metricsTaskLoop()
     }
 
     EpubLoader localLoader;
-    if (!localLoader.load(targetPath.c_str(), -1, false))
+    while (g_lowPriorityIoPause) {
+        wdtResetIfRegistered();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!localLoader.load(targetPath.c_str(), -1, false, TaskPriority::LOW))
     {
-        ESP_LOGW(TAG, "MetricsTask: Failed to open book for metrics: %s", targetPath.c_str());
+        if (localLoader.wasAborted())
+        {
+            ESP_LOGI(TAG, "MetricsTask: Aborted metrics load for book %d", targetId);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "MetricsTask: Failed to open book for metrics: %s", targetPath.c_str());
+        }
         metricsTaskHandle = nullptr;
         vTaskDelete(NULL);
         return;
@@ -990,7 +1003,8 @@ void GUI::backgroundIndexerTaskLoop()
     // Lambda to check if we should pause for high-priority operations
     auto shouldPause = [this, &coordinator]() -> bool
     {
-        return renderingInProgress ||
+        return g_lowPriorityIoPause ||
+               renderingInProgress ||
                readerRenderInProgress ||
                coordinator.isCriticalPending() ||
                coordinator.isHighPriorityPending();
@@ -998,7 +1012,9 @@ void GUI::backgroundIndexerTaskLoop()
 
     auto waitForHighPriority = [this, &coordinator]()
     {
-        while (coordinator.isCriticalPending() || coordinator.isHighPriorityPending())
+        while (g_lowPriorityIoPause ||
+               coordinator.isCriticalPending() ||
+               coordinator.isHighPriorityPending())
         {
             wdtResetIfRegistered();
             vTaskDelay(pdMS_TO_TICKS(50));
@@ -1009,11 +1025,9 @@ void GUI::backgroundIndexerTaskLoop()
     {
         while (true)
         {
-            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-            bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 8 * 1000);
-            if (!renderingInProgress &&
+            if (!g_lowPriorityIoPause &&
+                !renderingInProgress &&
                 !readerRenderInProgress &&
-                !readerActive &&
                 !coordinator.isCriticalPending() &&
                 !coordinator.isHighPriorityPending())
             {
@@ -1210,7 +1224,7 @@ void GUI::backgroundIndexerTaskLoop()
             EpubLoader localLoader;
 
             uint64_t t_load_start = esp_timer_get_time();
-            bool loaded = localLoader.load(book.path.c_str(), -1, false);
+            bool loaded = localLoader.load(book.path.c_str(), -1, false, TaskPriority::LOW);
             uint64_t t_load_end = esp_timer_get_time();
             uint64_t load_ms = (t_load_end - t_load_start) / 1000;
             ESP_LOGI(TAG, "BgIndexer: localLoader.load(book=%d \"%s\") took %llu ms -> %s",
@@ -1277,6 +1291,13 @@ void GUI::backgroundIndexerTaskLoop()
                     }
 
                     size_t len = localLoader.getChapterTextLength(i);
+                    if (len == std::numeric_limits<size_t>::max())
+                    {
+                        ESP_LOGI(TAG, "BgIndexer: Chapter read paused/aborted for book %d", book.id);
+                        localLoader.close();
+                        waitForHighPriority();
+                        goto next_book;
+                    }
                     uint64_t t_ch_end = esp_timer_get_time();
                     uint64_t ch_ms = (t_ch_end - t_ch_start) / 1000;
                     if (ch_ms > 200)
@@ -1313,6 +1334,13 @@ void GUI::backgroundIndexerTaskLoop()
             }
             else
             {
+                if (localLoader.wasAborted())
+                {
+                    ESP_LOGI(TAG, "BgIndexer: Load aborted for book %d due to high-priority request", book.id);
+                    localLoader.close();
+                    waitForHighPriority();
+                    goto next_book;
+                }
                 ESP_LOGW(TAG, "BgIndexer: Failed to load book %d (%s), load time %llu ms, marking as failed", book.id, book.path.c_str(), (unsigned long long)load_ms);
                 bookIndex.markAsFailed(book.id);
                 indexNeedsSave = true;
@@ -1385,14 +1413,21 @@ void GUI::update()
 {
     {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        bool recentActivity = (now - lastUserActivityTime < 3000);
+        bool recentActivity = (now - lastUserActivityTime < 15000);
         auto &coordinator = TaskCoordinator::getInstance();
-        g_metricsPauseRequested = (currentState != AppState::READER) ||
-                                  recentActivity ||
-                                  coordinator.isCriticalPending() ||
-                                  coordinator.isHighPriorityPending() ||
-                                  renderingInProgress ||
-                                  readerRenderInProgress;
+        bool allowIndexLoadInLibrary = (!bookIndexReady) &&
+                                       (currentState == AppState::LIBRARY ||
+                                        currentState == AppState::FAVORITES);
+        bool allowBackgroundIo = ((currentState == AppState::MAIN_MENU) &&
+                                  !recentActivity) ||
+                                 allowIndexLoadInLibrary;
+        allowBackgroundIo = allowBackgroundIo &&
+                            !coordinator.isCriticalPending() &&
+                            !coordinator.isHighPriorityPending() &&
+                            !renderingInProgress &&
+                            !readerRenderInProgress;
+        g_lowPriorityIoPause = !allowBackgroundIo;
+        g_metricsPauseRequested = !allowBackgroundIo;
     }
 
     if (currentState == AppState::MUSIC_COMPOSER)
@@ -5022,6 +5057,7 @@ void GUI::handleTap(int x, int y)
         // Top tap (status bar) to return to main menu
         if (y < STATUS_BAR_HEIGHT)
         {
+            PRIORITY_SECTION(TaskPriority::HIGH);
             clickPending = false; // Cancel any pending
             // Save progress before exiting
             if (xSemaphoreTake(epubMutex, portMAX_DELAY))
@@ -5030,7 +5066,7 @@ void GUI::handleTap(int x, int y)
             }
             // Save progress before exiting using centralized helper
             saveLastBook();
-            bookIndex.save(); // Save index to disk on exit (Issue 1)
+            bookIndex.requestSave(); // Defer index save to avoid blocking UI
 
             currentState = AppState::MAIN_MENU;
             epubLoader.close();
@@ -5510,7 +5546,7 @@ void GUI::loadingTaskLoop()
     bool loaded = false;
     {
         ScopedTaskWdtPause pauseWdt;
-        loaded = epubLoader.load(book.path.c_str(), book.currentChapter, true);
+        loaded = epubLoader.load(book.path.c_str(), book.currentChapter, true, TaskPriority::CRITICAL);
     }
     if (!loaded)
     {

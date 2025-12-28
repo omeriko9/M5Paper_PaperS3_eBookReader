@@ -2,6 +2,7 @@
 #include "epub_loader.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
+#include "esp_heap_caps.h"
 #include <stdio.h>
 #include <algorithm>
 #include <dirent.h>
@@ -320,6 +321,7 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback, s
 
     bool foundNewBooks = false;
     int processedFiles = 0;
+    bool aborted = false;
     struct dirent *entry;
     
     while ((entry = readdir(dir)) != NULL)
@@ -397,12 +399,18 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback, s
                     std::string author = "Unknown";
                     
                     EpubLoader loader;
-                    if (loader.loadMetadataOnly(fullPath.c_str()))
+                    if (loader.loadMetadataOnly(fullPath.c_str(), TaskPriority::LOW))
                     {
                         std::string metaTitle = loader.getTitle();
                         if (!metaTitle.empty()) title = metaTitle;
                         author = loader.getAuthor();
                         loader.close();
+                    }
+                    else if (loader.wasAborted())
+                    {
+                        ESP_LOGI(TAG, "Scan aborted during metadata load: %s", fullPath.c_str());
+                        aborted = true;
+                        break;
                     }
                     else
                     {
@@ -437,6 +445,9 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback, s
         }
     }
     closedir(dir);
+    if (aborted) {
+        return foundNewBooks;
+    }
     
     return foundNewBooks;
 }
@@ -657,14 +668,29 @@ void BookIndex::save()
         return;
     }
 
+    // Use a large buffer (32KB) to minimize SD card writes
+    char* fileBuf = (char*)heap_caps_malloc(32768, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (fileBuf) {
+        setvbuf(f, fileBuf, _IOFBF, 32768);
+    } else {
+        // Fallback to smaller buffer in internal RAM if SPIRAM fails
+        fileBuf = (char*)malloc(4096);
+        if (fileBuf) setvbuf(f, fileBuf, _IOFBF, 4096);
+    }
+
     ESP_LOGI(TAG, "Saving index with %zu books to %s", snapshot.size(), indexPath.c_str());
     
+    uint32_t lastYieldTime = xTaskGetTickCount();
     for (const auto &book : snapshot)
     {
-        wdtResetIfRegistered();
-        // Yield to higher priority tasks during the long write
-        if (TaskCoordinator::getInstance().shouldYield(TaskPriority::LOW)) {
-            vTaskDelay(pdMS_TO_TICKS(10));
+        // Yield to higher priority tasks during the long write, but not too often
+        uint32_t now = xTaskGetTickCount();
+        if ((now - lastYieldTime) > pdMS_TO_TICKS(100)) {
+            wdtResetIfRegistered();
+            if (TaskCoordinator::getInstance().shouldYield(TaskPriority::LOW)) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            lastYieldTime = xTaskGetTickCount();
         }
 
         fprintf(f, "%d|%s|%d|%u|%s|%u|%d|%s|%d|%s|%.2f|%d\n", 
@@ -682,6 +708,7 @@ void BookIndex::save()
             book.isFailed ? 1 : 0);
     }
     fclose(f);
+    if (fileBuf) free(fileBuf);
     
     ESP_LOGI(TAG, "Index saved successfully");
 }

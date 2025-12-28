@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include "esp_heap_caps.h"
+#include "task_coordinator.h"
 
 struct ZipFileInfo {
     uint32_t nameOffset; // Offset in cdBuffer
@@ -17,6 +18,10 @@ struct ZipFileInfo {
 
 class ZipReader {
 public:
+    void setPriority(TaskPriority priority);
+    TaskPriority getPriority() const;
+    bool wasAborted() const;
+    void clearAbort();
     bool open(const char* path);
     void close();
     std::string extractFile(const std::string& filename);
@@ -51,6 +56,9 @@ private:
     std::string filePath;
     std::vector<ZipFileInfo> files;
     std::unique_ptr<uint8_t, void(*)(void*)> cdBuffer{nullptr, heap_caps_free};
+    TaskPriority ioPriority = TaskPriority::NORMAL;
+    bool aborted = false;
     bool parseCentralDirectory();
     const ZipFileInfo* findFile(const std::string& filename) const;
+    bool shouldAbort();
 };

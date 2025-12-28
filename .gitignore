@@ -11,7 +11,7 @@ regular-fonts/
 test_spiffs_dir/
 math_examples/
 img_con/
-
+test/
 
 # ESP-IDF specific
 sdkconfig

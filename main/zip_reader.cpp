@@ -28,6 +28,8 @@ static const uint32_t CD_SIGNATURE = 0x02014b50;
 static const uint32_t LFH_SIGNATURE = 0x04034b50;
 static const size_t MAX_INFLATE_OUTPUT = 2 * 1024 * 1024; // Safety cap for total output (streamed)
 
+extern volatile bool g_lowPriorityIoPause;
+
 static inline uint16_t readLE16(const uint8_t *p) {
     return uint16_t(p[0]) | (uint16_t(p[1]) << 8);
 }
@@ -44,7 +46,37 @@ static uint8_t* allocZipBuffer(size_t size) {
     return buf;
 }
 
+void ZipReader::setPriority(TaskPriority priority) {
+    ioPriority = priority;
+}
+
+TaskPriority ZipReader::getPriority() const {
+    return ioPriority;
+}
+
+bool ZipReader::wasAborted() const {
+    return aborted;
+}
+
+void ZipReader::clearAbort() {
+    aborted = false;
+}
+
+bool ZipReader::shouldAbort() {
+    if (aborted) {
+        return true;
+    }
+    if (ioPriority <= TaskPriority::LOW &&
+        (g_lowPriorityIoPause ||
+         TaskCoordinator::getInstance().shouldYield(ioPriority))) {
+        aborted = true;
+        return true;
+    }
+    return false;
+}
+
 bool ZipReader::open(const char* path) {
+    clearAbort();
     close();
     filePath = path;
     return parseCentralDirectory();
@@ -64,6 +96,10 @@ bool ZipReader::parseCentralDirectory() {
     FILE* f = fopen(filePath.c_str(), "rb");
     if (!f) {
         ESP_LOGE(TAG, "Failed to open file: %s", filePath.c_str());
+        return false;
+    }
+    if (shouldAbort()) {
+        fclose(f);
         return false;
     }
 
@@ -100,6 +136,11 @@ bool ZipReader::parseCentralDirectory() {
     long currentPos = fileSize;
     while (currentPos > searchLimit) {
         wdtResetIfRegistered();
+        if (shouldAbort()) {
+            free(searchBuf);
+            fclose(f);
+            return false;
+        }
         long readSize = BUF_SIZE;
         if (currentPos - readSize < searchLimit) {
             readSize = currentPos - searchLimit;
@@ -173,14 +214,39 @@ bool ZipReader::parseCentralDirectory() {
     }
 
     fseek(f, cdOffset, SEEK_SET);
-    if (fread(cdBuffer.get(), 1, cdSize, f) != cdSize) {
-        ESP_LOGE(TAG, "Failed to read central directory");
-        cdBuffer.reset();
-        fclose(f);
-        return false;
+    {
+        const size_t kCdChunk = 4096;
+        size_t remaining = cdSize;
+        uint8_t* dst = cdBuffer.get();
+        while (remaining > 0) {
+            if (shouldAbort()) {
+                cdBuffer.reset();
+                fclose(f);
+                return false;
+            }
+            size_t toRead = remaining > kCdChunk ? kCdChunk : remaining;
+            size_t readBytes = fread(dst, 1, toRead, f);
+            if (readBytes != toRead) {
+                ESP_LOGE(TAG, "Failed to read central directory");
+                cdBuffer.reset();
+                fclose(f);
+                return false;
+            }
+            dst += readBytes;
+            remaining -= readBytes;
+            wdtResetIfRegistered();
+            if ((remaining & 0x3FFF) == 0) {
+                vTaskDelay(1);
+            }
+        }
     }
 
     fclose(f);
+    if (shouldAbort()) {
+        cdBuffer.reset();
+        files.clear();
+        return false;
+    }
 
     // Parse CD from memory
     files.clear();
@@ -188,7 +254,15 @@ bool ZipReader::parseCentralDirectory() {
 
     const uint8_t *p = cdBuffer.get();
     const uint8_t *end = cdBuffer.get() + cdSize;
+    
+    uint32_t lastYieldTime = xTaskGetTickCount();
+
     for (int i = 0; i < numEntries && (p + 46) <= end; i++) {
+        if (shouldAbort()) {
+            cdBuffer.reset();
+            files.clear();
+            return false;
+        }
         uint32_t sig = readLE32(p);
         if (sig != CD_SIGNATURE) break;
 
@@ -213,9 +287,12 @@ bool ZipReader::parseCentralDirectory() {
         p += 46 + nameLen + extraLen + commentLen;
 
         // Yield occasionally so the idle task can reset the watchdog when reading large EPUBs
-        if ((i & 0x0F) == 0) {
+        // Use time-based yielding to avoid excessive delays on large files
+        uint32_t now = xTaskGetTickCount();
+        if ((now - lastYieldTime) > pdMS_TO_TICKS(50)) {
             wdtResetIfRegistered();
             vTaskDelay(1);
+            lastYieldTime = now;
         }
     }
 
@@ -244,6 +321,7 @@ const ZipFileInfo* ZipReader::findFile(const std::string& filename) const {
 }
 
 std::string ZipReader::extractFile(const std::string& filename) {
+    clearAbort();
     const ZipFileInfo* infoPtr = findFile(filename);
     if (!infoPtr) {
         ESP_LOGW(TAG, "File not found in zip: %s", filename.c_str());
@@ -310,6 +388,11 @@ std::string ZipReader::extractFile(const std::string& filename) {
         size_t remaining = compressedSize;
         while (remaining > 0) {
             wdtResetIfRegistered();
+            if (shouldAbort()) {
+                result.clear();
+                fclose(f);
+                return "";
+            }
             size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
             size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
             if (bytesRead == 0) break;
@@ -336,6 +419,12 @@ std::string ZipReader::extractFile(const std::string& filename) {
 
         while (ret != Z_STREAM_END) {
             wdtResetIfRegistered();
+            if (shouldAbort()) {
+                result.clear();
+                inflateEnd(&strm);
+                fclose(f);
+                return "";
+            }
             if (strm.avail_in == 0 && remaining > 0) {
                 size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
                 size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
@@ -395,6 +484,7 @@ std::string ZipReader::extractFile(const std::string& filename) {
 }
 
 bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const char*, size_t, void*), void* context) {
+    clearAbort();
     ESP_LOGV(TAG, "extractFile with callback: %s", filename.c_str());
     wdtResetIfRegistered();
     const ZipFileInfo* infoPtr = findFile(filename);
@@ -459,6 +549,10 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
         // Stored (no compression)
         size_t remaining = compressedSize;
         while (remaining > 0) {
+            if (shouldAbort()) {
+                fclose(f);
+                return false;
+            }
             size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
             size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
             ESP_LOGV(TAG, "extractFile: fread %u bytes", (unsigned)bytesRead);
@@ -488,6 +582,11 @@ bool ZipReader::extractFile(const std::string& filename, bool (*callback)(const 
         int ret = Z_OK;
 
         while (ret != Z_STREAM_END) {
+            if (shouldAbort()) {
+                inflateEnd(&strm);
+                fclose(f);
+                return false;
+            }
             if (strm.avail_in == 0 && remaining > 0) {
                 size_t toRead = remaining > IN_CHUNK ? IN_CHUNK : remaining;
                 size_t bytesRead = fread(inBuf.get(), 1, toRead, f);
@@ -547,6 +646,7 @@ uint32_t ZipReader::getUncompressedSize(const std::string& filename) {
 }
 
 bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>& outData) {
+    clearAbort();
     outData.clear();
     
     const ZipFileInfo* infoPtr = findFile(filename);
@@ -594,6 +694,7 @@ bool ZipReader::extractBinary(const std::string& filename, std::vector<uint8_t>&
 }
 
 size_t ZipReader::peekFile(const std::string& filename, uint8_t* outData, size_t size) {
+    clearAbort();
     
     const ZipFileInfo* infoPtr = findFile(filename);
     if (!infoPtr) {

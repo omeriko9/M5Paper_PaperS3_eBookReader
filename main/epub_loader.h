@@ -37,9 +37,11 @@ struct EpubImage {
 
 class EpubLoader {
 public:
-    bool load(const char* path, int restoreChapterIndex = -1, bool loadFirstChapter = true);
+    bool load(const char* path, int restoreChapterIndex = -1, bool loadFirstChapter = true,
+              TaskPriority priority = TaskPriority::NORMAL);
     // Lightweight metadata-only load (title/lang), no chapter parsing or heuristics.
-    bool loadMetadataOnly(const char* path);
+    bool loadMetadataOnly(const char* path, TaskPriority priority = TaskPriority::NORMAL);
+    bool wasAborted() const { return aborted || zip.wasAborted(); }
     std::string getTitle();
     std::string getAuthor();
     
@@ -115,6 +117,8 @@ private:
     std::string author;
     ZipReader zip;
     bool isOpen = false;
+    TaskPriority ioPriority = TaskPriority::NORMAL;
+    bool aborted = false;
     
     std::vector<std::string> spine; // List of HTML files in order
     std::vector<std::string> chapterTitles; // Chapter titles from NCX/NAV

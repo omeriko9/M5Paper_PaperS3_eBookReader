@@ -61,12 +61,19 @@ bool EpubLoader::isChapterSkippable(int index) {
     return false;
 }
 
-bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstChapter) {
+bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstChapter, TaskPriority priority) {
     close();
     currentPath = path;
     ESP_LOGI(TAG, "Loading %s", path);
+    aborted = false;
+    ioPriority = priority;
+    zip.setPriority(priority);
+    zip.clearAbort();
     
     if (!zip.open(path)) {
+        if (zip.wasAborted()) {
+            aborted = true;
+        }
         ESP_LOGE(TAG, "Failed to open ZIP");
         return false;
     }
@@ -133,12 +140,19 @@ bool EpubLoader::load(const char* path, int restoreChapterIndex, bool loadFirstC
     return true;
 }
 
-bool EpubLoader::loadMetadataOnly(const char* path) {
+bool EpubLoader::loadMetadataOnly(const char* path, TaskPriority priority) {
     close();
     currentPath = path;
     ESP_LOGI(TAG, "Loading metadata only for %s", path);
+    aborted = false;
+    ioPriority = priority;
+    zip.setPriority(priority);
+    zip.clearAbort();
 
     if (!zip.open(path)) {
+        if (zip.wasAborted()) {
+            aborted = true;
+        }
         ESP_LOGE(TAG, "Failed to open ZIP (metadata)");
         return false;
     }
@@ -181,10 +195,19 @@ std::string EpubLoader::getAuthor() {
 }
 
 std::string EpubLoader::readFileFromZip(const std::string& path) {
-    return zip.extractFile(path);
+    if (aborted) {
+        return "";
+    }
+    std::string out = zip.extractFile(path);
+    if (zip.wasAborted()) {
+        aborted = true;
+        return "";
+    }
+    return out;
 }
 
 bool EpubLoader::parseContainer() {
+    if (aborted) return false;
     std::string xml = readFileFromZip("META-INF/container.xml");
     if (xml.empty()) return false;
     
@@ -211,6 +234,7 @@ bool EpubLoader::parseContainer() {
 }
 
 bool EpubLoader::parseOPF(const std::string& opfPath) {
+    if (aborted) return false;
     std::string xml = readFileFromZip(opfPath);
     if (xml.empty()) return false;
     
@@ -274,11 +298,13 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     manifest.reserve(itemCount);
 
     pos = 0;
-    int manifestYield = 0;
+    uint32_t lastYieldTime = xTaskGetTickCount();
     while (true) {
-        if ((manifestYield++ & 0x1F) == 0) {
+        uint32_t now = xTaskGetTickCount();
+        if ((now - lastYieldTime) > pdMS_TO_TICKS(50)) {
             wdtResetIfRegistered();
             vTaskDelay(1);
+            lastYieldTime = now;
         }
         pos = xml.find("<item ", pos);
         if (pos == std::string::npos) break;
@@ -351,11 +377,13 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     pos = xml.find("<spine");
     if (pos == std::string::npos) return false;
     
-    int spineYield = 0;
+    lastYieldTime = xTaskGetTickCount();
     while (true) {
-        if ((spineYield++ & 0x1F) == 0) {
+        uint32_t now = xTaskGetTickCount();
+        if ((now - lastYieldTime) > pdMS_TO_TICKS(50)) {
             wdtResetIfRegistered();
             vTaskDelay(1);
+            lastYieldTime = now;
         }
         pos = xml.find("<itemref ", pos);
         if (pos == std::string::npos) break;
@@ -420,6 +448,10 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
 void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
     std::string xml = readFileFromZip(tocPath);
     if (xml.empty()) {
+        if (aborted || zip.wasAborted()) {
+            aborted = true;
+            return;
+        }
         ESP_LOGW(TAG, "Failed to read TOC file: %s", tocPath.c_str());
         return;
     }
@@ -452,11 +484,13 @@ void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
         // </navPoint>
         
         size_t pos = 0;
-        int navYield = 0;
+        uint32_t lastYieldTime = xTaskGetTickCount();
         while ((pos = xml.find("<navPoint", pos)) != std::string::npos) {
-            if ((navYield++ & 0x1F) == 0) {
+            uint32_t now = xTaskGetTickCount();
+            if ((now - lastYieldTime) > pdMS_TO_TICKS(50)) {
                 wdtResetIfRegistered();
                 vTaskDelay(1);
+                lastYieldTime = now;
             }
             
             // Find the closing </navPoint> or next <navPoint>
@@ -540,11 +574,13 @@ void EpubLoader::parseTOC(const std::string& tocPath, bool isNcx) {
         
         if (navStart != std::string::npos) {
             size_t pos = navStart;
-            int linkYield = 0;
+            uint32_t lastYieldTime = xTaskGetTickCount();
             while ((pos = xml.find("<a ", pos)) != std::string::npos) {
-                if ((linkYield++ & 0x1F) == 0) {
+                uint32_t now = xTaskGetTickCount();
+                if ((now - lastYieldTime) > pdMS_TO_TICKS(50)) {
                     wdtResetIfRegistered();
                     vTaskDelay(1);
+                    lastYieldTime = now;
                 }
                 
                 size_t tagEnd = xml.find("</a>", pos);
@@ -1182,7 +1218,7 @@ size_t EpubLoader::getChapterTextLength(int index) {
     ChapterLengthContext ctx;
     ctx.lastYieldTick = xTaskGetTickCount();
     zip.extractFile(spine[index], chapterLengthCallback, &ctx);
-    if (ctx.aborted) {
+    if (ctx.aborted || zip.wasAborted()) {
         return INVALID_CHAPTER_LENGTH;
     }
     chapterTextLengths[index] = ctx.length;
