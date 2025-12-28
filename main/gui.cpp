@@ -3232,6 +3232,15 @@ void GUI::updateNextPrevCanvases()
     ESP_LOGI(TAG, "updateNextPrevCanvases: lastPageChars=%zu nextValid=%d prevValid=%d nextOffset=%zu prevOffset=%zu",
              lastPageChars, nextCanvasValid, prevCanvasValid, nextCanvasOffset, prevCanvasOffset);
 
+    // Clean refresh renders directly to the display; skip buffer work in that mode.
+    if (!fastRefresh)
+    {
+        nextCanvasValid = false;
+        prevCanvasValid = false;
+        ESP_LOGI(TAG, "updateNextPrevCanvases: fastRefresh disabled, skipping buffer renders");
+        return;
+    }
+
     // Update Next
     size_t charsOnCurrent = lastPageChars;
     size_t newNextOffset = currentTextOffset + charsOnCurrent;
@@ -3321,15 +3330,15 @@ void GUI::drawReader(bool flush)
     bool drawnFromBuffer = false;
     size_t charsDrawn = 0;
 
-    // Only use buffers if they are valid (width > 0)
-    if (nextCanvasValid && nextCanvasOffset == currentTextOffset && canvasNext.width() > 0)
+    // Only use buffers in fast refresh mode and if they are valid (width > 0)
+    if (fastRefresh && nextCanvasValid && nextCanvasOffset == currentTextOffset && canvasNext.width() > 0)
     {
         ESP_LOGI(TAG, "Drawing from next buffer");
         canvasNext.pushSprite(&M5.Display, 0, 0);
         charsDrawn = nextCanvasCharCount;
         drawnFromBuffer = true;
     }
-    else if (prevCanvasValid && prevCanvasOffset == currentTextOffset && canvasPrev.width() > 0)
+    else if (fastRefresh && prevCanvasValid && prevCanvasOffset == currentTextOffset && canvasPrev.width() > 0)
     {
         ESP_LOGI(TAG, "Drawing from prev buffer");
         canvasPrev.pushSprite(&M5.Display, 0, 0);
