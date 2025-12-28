@@ -10,6 +10,8 @@ games/
 regular-fonts/
 test_spiffs_dir/
 math_examples/
+img_con/
+
 
 # ESP-IDF specific
 sdkconfig

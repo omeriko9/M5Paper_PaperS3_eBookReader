@@ -216,6 +216,9 @@ private:
     volatile bool indexingScanActive = false;
     volatile bool indexingProcessingActive = false;
 
+    // Draw a small partial update for the indexing progress (fast partial refresh)
+    void drawIndexingProgressPartial();
+
     // Double click detection
     uint32_t lastClickTime = 0;
     int lastClickX = 0;

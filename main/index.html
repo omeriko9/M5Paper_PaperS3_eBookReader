@@ -230,19 +230,19 @@
                 <div class="form-group">
                     <label>Light Sleep Timeout (minutes)</label>
                     <div class="form-row">
-                        <input type="number" id="lightSleep" min="1" max="60" onchange="updateSettings()">
+                        <input type="number" id="lightSleep" min="1" max="60" onchange="updateSettings()" onkeydown="if(event.key==='Enter') saveSettings()">
                     </div>
                 </div>
                 <div class="form-group">
                     <label>Deep Sleep Timeout (minutes)</label>
                     <div class="form-row">
-                        <input type="number" id="deepSleep" min="1" max="60" onchange="updateSettings()">
+                        <input type="number" id="deepSleep" min="1" max="60" onchange="updateSettings()" onkeydown="if(event.key==='Enter') saveSettings()">
                     </div>
                 </div>
                 <div class="form-group">
                     <label>Wallpaper Interval (minutes)</label>
                     <div class="form-row">
-                        <input type="number" id="wallpaperTimer" min="1" max="60" onchange="updateSettings()">
+                        <input type="number" id="wallpaperTimer" min="1" max="60" onchange="updateSettings()" onkeydown="if(event.key==='Enter') saveSettings()">
                     </div>
                 </div>
                 <div class="form-group">
@@ -250,6 +250,9 @@
                     <div class="form-row"><button class="btn" onclick="putDeviceToSleep()">Sleep</button></div>
                     <label>Restart Device</label>
                     <div class="form-row"><button class="btn danger" onclick="restartDevice()">Restart</button></div>
+                </div>
+                <div class="form-group" style="margin-top:10px;">
+                    <div class="form-row"><button class="btn" id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button></div>
                 </div>
             </div>
 
@@ -597,11 +600,23 @@
             if(deepSleep) payload.deepSleep = deepSleep;
             if(wallpaperTimer) payload.wallpaperTimer = wallpaperTimer;
 
-            fetch('/api/settings', {
+            return fetch('/api/settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
             });
+        }
+
+        function saveSettings() {
+            const btn = document.getElementById('saveSettingsBtn');
+            if (btn) btn.disabled = true;
+            updateSettings()
+                .then(r => {
+                    if (r && !r.ok) throw new Error(r.statusText || 'Failed');
+                    showToast('Settings saved');
+                })
+                .catch(() => showToast('Error saving settings'))
+                .finally(() => { if (btn) btn.disabled = false; });
         }
 
         function changeSize(delta) {

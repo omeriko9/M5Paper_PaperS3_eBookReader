@@ -36,12 +36,15 @@
 #include <unordered_set>
 #include <sys/stat.h>
 #include <limits>
+#include <iostream>
 
 // Image placeholder character (U+E000 in UTF-8)
 static const char IMAGE_PLACEHOLDER[] = "\xEE\x80\x80";
 static const size_t IMAGE_PLACEHOLDER_LEN = 3;
 
 static const char *TAG = "GUI";
+
+static constexpr int MENU_ICON_TARGET_SIZE = 96;
 
 namespace
 {
@@ -856,7 +859,7 @@ void GUI::metricsTaskLoop()
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         bool recentActivity = (now - lastUserActivityTime < 3000);
         bool notReading = (currentState != AppState::READER);
-        return coordinator.isCriticalPending() || coordinator.isHighPriorityPending() || 
+        return coordinator.isCriticalPending() || coordinator.isHighPriorityPending() ||
                renderingInProgress || readerRenderInProgress || recentActivity || notReading;
     };
 
@@ -972,9 +975,9 @@ void GUI::metricsTaskLoop()
 void GUI::backgroundIndexerTaskLoop()
 {
     esp_task_wdt_add(NULL);
-    
-    auto& coordinator = TaskCoordinator::getInstance();
-    
+
+    auto &coordinator = TaskCoordinator::getInstance();
+
     // Wait for initial redraw to complete
     while (needsRedraw || coordinator.isCriticalPending())
     {
@@ -986,7 +989,7 @@ void GUI::backgroundIndexerTaskLoop()
     // Lambda to check if we should pause for high-priority operations
     auto shouldPause = [this, &coordinator]() -> bool
     {
-        return renderingInProgress || 
+        return renderingInProgress ||
                readerRenderInProgress ||
                coordinator.isCriticalPending() ||
                coordinator.isHighPriorityPending();
@@ -1007,8 +1010,8 @@ void GUI::backgroundIndexerTaskLoop()
         {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
             bool readerActive = (currentState == AppState::READER) && (now - lastUserActivityTime < 8 * 1000);
-            if (!renderingInProgress && 
-                !readerRenderInProgress && 
+            if (!renderingInProgress &&
+                !readerRenderInProgress &&
                 !readerActive &&
                 !coordinator.isCriticalPending() &&
                 !coordinator.isHighPriorityPending())
@@ -1086,8 +1089,18 @@ void GUI::backgroundIndexerTaskLoop()
         uint32_t now = xTaskGetTickCount();
         if (currentState == AppState::MAIN_MENU && (now - lastRedraw > pdMS_TO_TICKS(500)))
         {
-            needsRedraw = true;
-            lastRedraw = now;
+            // Do a small partial update so we don't force a full main-menu redraw/refresh
+            if (!renderingInProgress && !readerRenderInProgress)
+            {
+                drawIndexingProgressPartial();
+                lastRedraw = now;
+            }
+            else
+            {
+                // Fallback: schedule a full redraw later if UI is busy
+                needsRedraw = true;
+                lastRedraw = now;
+            }
         }
         wdtResetIfRegistered(); },
                                               shouldPause);
@@ -1115,9 +1128,10 @@ void GUI::backgroundIndexerTaskLoop()
         processedCount++;
         indexingCurrent = processedCount;
         wdtResetIfRegistered();
-        
+
         // Check for high-priority operations
-        if (shouldPause()) {
+        if (shouldPause())
+        {
             waitForHighPriority();
         }
         waitForUiIdle();
@@ -1126,8 +1140,16 @@ void GUI::backgroundIndexerTaskLoop()
         uint32_t now = xTaskGetTickCount();
         if (currentState == AppState::MAIN_MENU && (now - lastRedrawTime > pdMS_TO_TICKS(1000)))
         {
-            needsRedraw = true;
-            lastRedrawTime = now;
+            if (!renderingInProgress && !readerRenderInProgress)
+            {
+                drawIndexingProgressPartial();
+                lastRedrawTime = now;
+            }
+            else
+            {
+                needsRedraw = true;
+                lastRedrawTime = now;
+            }
         }
 
         if (shouldPause())
@@ -1166,7 +1188,8 @@ void GUI::backgroundIndexerTaskLoop()
                 // Save periodically to avoid losing progress on crash/reboot
                 if (updatesCount >= 20)
                 {
-                    if (shouldPause()) waitForHighPriority();
+                    if (shouldPause())
+                        waitForHighPriority();
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1266,7 +1289,8 @@ void GUI::backgroundIndexerTaskLoop()
                     sums[i + 1] = cumulative;
                 }
 
-                if (shouldPause()) waitForHighPriority();
+                if (shouldPause())
+                    waitForHighPriority();
                 // Save metrics but NOT the index file yet (pass false)
                 bookIndex.saveBookMetrics(book.id, cumulative, sums, false);
                 indexNeedsSave = true;
@@ -1275,7 +1299,8 @@ void GUI::backgroundIndexerTaskLoop()
                 // Save periodically
                 if (updatesCount >= 5)
                 {
-                    if (shouldPause()) waitForHighPriority();
+                    if (shouldPause())
+                        waitForHighPriority();
                     ESP_LOGI(TAG, "BgIndexer: Saving intermediate index...");
                     bookIndex.save();
                     updatesCount = 0;
@@ -1299,7 +1324,8 @@ void GUI::backgroundIndexerTaskLoop()
 
     if (indexNeedsSave)
     {
-        if (shouldPause()) waitForHighPriority();
+        if (shouldPause())
+            waitForHighPriority();
         ESP_LOGI(TAG, "BgIndexer: Saving updated index with found metrics...");
         bookIndex.save();
     }
@@ -1502,7 +1528,6 @@ void GUI::update()
         }
         needsRedraw = false;
     }
-
 }
 
 void GUI::drawStatusBar(LovyanGFX *target)
@@ -3164,6 +3189,7 @@ void GUI::drawStatusBarBusyIndicator(LovyanGFX *target)
 
     gfx->fillRect(clearX, 0, clearW, STATUS_BAR_HEIGHT, TFT_WHITE);
     gfx->setTextDatum(textdatum_t::middle_right);
+    gfx->setTextFont(&lgfx::v1::fonts::FreeMonoBold12pt7b );// Font2);
     gfx->drawString(indicatorBuf, indicatorRight, centerY);
 }
 
@@ -3381,6 +3407,153 @@ void GUI::drawSleepSymbol(const char *symbol)
     M5.Display.waitDisplay();
 }
 
+
+void GUI::drawIndexingProgressPartial()
+{
+    // Only draw when main menu is visible
+    if (currentState != AppState::MAIN_MENU)
+        return;
+
+    // Avoid conflicts with other rendering
+    if (renderingInProgress || readerRenderInProgress)
+        return;
+
+    LovyanGFX &disp = M5.Display;
+
+    // Recompute layout for main menu (must match drawMainMenu computations)
+    int screenW = disp.width();
+    int screenH = disp.height();
+    int availableH = screenH - STATUS_BAR_HEIGHT - 20; // Leave margin at bottom
+    int availableW = screenW - 20;                     // 10px margin each side
+    int cols = (screenW > screenH) ? 3 : 2;
+    int rows = (screenW > screenH) ? 2 : 3;
+    int btnGap = 12;
+    int btnW = (availableW - btnGap * (cols - 1)) / cols;
+    int btnH = (availableH - btnGap * (rows - 1)) / rows;
+    int startX = 10;
+    int startY = STATUS_BAR_HEIGHT + 10;
+
+    // Button index for "Books"
+    int i = 1;
+    int row = i / cols;
+    int col = i % cols;
+
+    int bx = startX + col * (btnW + btnGap);
+    int by = startY + row * (btnH + btnGap);
+
+    // Derive label and icon positions same as in drawMainMenu
+    int textY = by + 12; // Top margin
+    disp.setFont(&lgfx::v1::fonts::Font2);
+    disp.setTextSize(2.4f);
+    int labelBottom = textY + disp.fontHeight();
+
+    disp.setTextSize(1.5f);
+    int sublabelHeight = disp.fontHeight();
+    int sublabelBottom = by + btnH - 8;
+    int sublabelTop = sublabelBottom - sublabelHeight;
+
+    int iconTop = labelBottom + 2;
+    int iconBottom = sublabelTop - 2;
+    int progressBarH = 6;
+    bool showIndexingBar = (indexingScanActive || indexingProcessingActive);
+    int indexingLabelH = 0;
+    if (showIndexingBar)
+    {
+        disp.setTextSize(1.0f);
+        indexingLabelH = disp.fontHeight();
+        iconBottom -= (progressBarH + indexingLabelH + 6);
+    }
+    int iconH = iconBottom - iconTop;
+    int iconW = btnW - 12;
+    int iconSize = std::min(MENU_ICON_TARGET_SIZE, std::min(iconW, iconH));
+    int iconX = bx + (btnW - iconSize) / 2;
+    int iconY = iconTop + (iconH - iconSize) / 2;
+
+    if (!showIndexingBar)
+        return;
+
+    int barW = btnW - 30;
+    int barX = bx + (btnW - barW) / 2;
+    int labelY = iconY + iconSize + 2; // anchor under actual icon bottom
+    int barY = labelY + indexingLabelH + 2;
+
+    int current = indexingCurrent;
+    int total = indexingTotal;
+    float pct = 0.0f;
+    if (total > 0)
+    {
+        pct = (float)current / (float)total;
+    }
+    pct = std::max(0.0f, std::min(1.0f, pct));
+
+    // Draw directly to display (partial region) and use fast mode
+    uint16_t bgColor = TFT_WHITE;
+
+    // Clear background behind label+bar first
+    disp.startWrite();
+    disp.setTextDatum(textdatum_t::top_center);
+    disp.setTextSize(1.0f);
+    disp.setTextColor(TFT_DARKGREY, bgColor);
+
+    // Clear area (wider to avoid artifacts)
+    int clearX = barX - 2;
+    int clearW = barW + 4;
+    int clearY = labelY - 2;
+    int clearH = indexingLabelH + 4 + progressBarH + 4;
+    disp.fillRect(clearX, clearY, clearW, clearH, bgColor);
+
+    char idxBuf[24];
+    if (total > 0)
+        snprintf(idxBuf, sizeof(idxBuf), "%d/%d", current, total);
+    else
+        snprintf(idxBuf, sizeof(idxBuf), "%d/?", current);
+
+    disp.drawString(idxBuf, bx + btnW / 2, labelY);
+    disp.drawRect(barX, barY, barW, progressBarH, TFT_BLACK);
+    int fillW = (int)((barW - 2) * pct);
+    if (fillW > 0)
+    {
+        disp.fillRect(barX + 1, barY + 1, fillW, progressBarH - 2, TFT_BLACK);
+    }
+    disp.endWrite();
+
+    // Use partial refresh for the small region we've updated
+    int sx = clearX;
+    int sy = clearY;
+    int sw = clearW;
+    int sh = clearH;
+    // Clamp to display bounds
+    if (sx < 0)
+    {
+        sw += sx; // reduce width
+        sx = 0;
+    }
+    if (sy < 0)
+    {
+        sh += sy; // reduce height
+        sy = 0;
+    }
+    if (sx + sw > (int)disp.width())
+    {
+        sw = disp.width() - sx;
+    }
+    if (sy + sh > (int)disp.height())
+    {
+        sh = disp.height() - sy;
+    }
+    if (sw > 0 && sh > 0)
+    {
+        disp.display(sx, sy, sw, sh);
+        ESP_LOGI(TAG, "Progress bar partial update: %d/%d (%.2f%%) at bx=%d by=%d barX=%d barY=%d region=%d,%d %dx%d", current, total, pct * 100.0f, bx, by, barX, barY, sx, sy, sw, sh);
+    }
+    else
+    {
+        // Fallback to full display if region invalid
+        disp.display();
+        ESP_LOGW(TAG, "Progress bar partial update region invalid, performed full display");
+    }
+}
+
 void GUI::drawMainMenu()
 {
     // Main menu with 6 large buttons in a 3x2 grid
@@ -3439,7 +3612,7 @@ void GUI::drawMainMenu()
     const float labelTextSize = 2.4f;
     const float sublabelTextSize = 1.5f;
     ImageHandler &imgHandler = ImageHandler::getInstance();
-    static constexpr int MENU_ICON_TARGET_SIZE = 96;
+    
 
     struct MenuIconCache
     {
@@ -3578,6 +3751,7 @@ void GUI::drawMainMenu()
 
     for (int i = 0; i < 6; i++)
     {
+        ESP_LOGI(TAG, "Drawinggg menu button %d: %s", i, buttons[i].label);
         wdtResetIfRegistered();
         int row = i / cols;
         int col = i % cols;
@@ -3655,7 +3829,8 @@ void GUI::drawMainMenu()
             {
                 int barW = btnW - 30;
                 int barX = bx + (btnW - barW) / 2;
-                int labelY = iconBottom + 2;
+                // Place the label directly under the actually drawn icon (iconY + iconSize)
+                int labelY = iconY + iconSize + 2;
                 int barY = labelY + indexingLabelH + 2;
                 float pct = 0.0f;
                 int current = indexingCurrent;
@@ -3675,10 +3850,15 @@ void GUI::drawMainMenu()
                     snprintf(idxBuf, sizeof(idxBuf), "%d/?", current);
                 }
                 target->setTextDatum(textdatum_t::top_center);
-                target->setTextSize(1.0f);
+                target->setFont(&lgfx::v1::fonts::Font2);
+                target->setTextSize(1.5f);
                 target->setTextColor(TFT_DARKGREY, bgColor);
-                target->drawString(idxBuf, bx + btnW / 2, labelY);
+                target->drawString(idxBuf, bx + btnW / 2, by-10);
                 target->drawRect(barX, barY, barW, progressBarH, TFT_BLACK);
+                ESP_LOGI(TAG, "Progress bar drawing indexing progress bar: %d/%d (%.2f%%)", current, total, pct * 100.0f);
+                ESP_LOGI(TAG, "Progress bar dimensions: x=%d y=%d w=%d h=%d", barX, barY, barW, progressBarH);
+                ESP_LOGI(TAG, "Progress bar location: bx=%d by=%d btnW=%d", bx, by, btnW);
+                ESP_LOGI(TAG, "Progress bar text location: textY=%d indexingLabelH=%d", by-10, indexingLabelH);
                 int fillW = (int)((barW - 2) * pct);
                 if (fillW > 0)
                 {
@@ -3714,19 +3894,23 @@ void GUI::drawMainMenu()
     // Show indexing status if active (Issue 3)
     if (indexingScanActive)
     {
+        ESP_LOGI(TAG, "Drawing indexing scan status on main menu");
         char buf[64];
         snprintf(buf, sizeof(buf), "Scanning... %d/%d", indexingCurrent, indexingTotal);
         target->setTextDatum(textdatum_t::bottom_center);
         target->setTextSize(1.0f);
         target->drawString(buf, screenW / 2, screenH - 5);
+        ESP_LOGI(TAG, "Coordinates for indexing scan status drawn at (%d, %d)", screenW / 2, screenH - 5);
     }
     else if (indexingProcessingActive)
     {
+        ESP_LOGI(TAG, "Drawing indexing processing status on main menu");
         char buf[64];
         snprintf(buf, sizeof(buf), "Processing... %d/%d", indexingCurrent, indexingTotal);
         target->setTextDatum(textdatum_t::bottom_center);
         target->setTextSize(1.0f);
         target->drawString(buf, screenW / 2, screenH - 5);
+        ESP_LOGI(TAG, "Coordinates for indexing processing status drawn at (%d, %d)", screenW / 2, screenH - 5);
     }
 
     target->endWrite();
@@ -4851,6 +5035,8 @@ void GUI::handleTap(int x, int y)
         int toggleButtonY = layout.row3Y + (layout.rowHeight - layout.fontButtonH) / 2;
         int closeX = layout.panelWidth - layout.padding - layout.closeButtonW;
         int closeButtonY = layout.closeY;
+        int favButtonY = layout.row6Y + (layout.rowHeight - layout.fontButtonH) / 2;
+        int refreshButtonY = layout.row7Y + (layout.rowHeight - layout.fontButtonH) / 2;
 
         // Font Size [-]
         if (y >= fontButtonY && y <= fontButtonY + layout.fontButtonH && x >= layout.fontMinusX && x <= layout.fontMinusX + layout.fontButtonW)
@@ -4915,6 +5101,30 @@ void GUI::handleTap(int x, int y)
                 lightSleepMinutes++;
             saveSettings();
             settingsNeedsUnderlayRefresh = true;
+        }
+        // Favorite Toggle
+
+        else if (y >= favButtonY && y <= favButtonY + layout.fontButtonH && x >= layout.toggleButtonX && x <= layout.toggleButtonX + layout.toggleButtonW)
+        {
+            if (lastBookId > 0)
+            {
+                bool isFav = bookIndex.isFavorite(lastBookId);
+                bookIndex.setFavorite(lastBookId, !isFav);
+                // Provide simple feedback and request redraw of the settings overlay
+                deviceHAL.playClickSound();
+                settingsNeedsUnderlayRefresh = true;
+                needsRedraw = true;
+            }
+        }
+        // Refresh Toggle
+
+        else if (y >= refreshButtonY && y <= refreshButtonY + layout.fontButtonH && x >= layout.toggleButtonX && x <= layout.toggleButtonX + layout.toggleButtonW)
+        {
+            setFastRefresh(!fastRefresh);
+            // Feedback and ensure overlay refreshes to show new state
+            deviceHAL.playClickSound();
+            settingsNeedsUnderlayRefresh = true;
+            needsRedraw = true;
         }
         // Close
         else if (y >= closeButtonY && y <= closeButtonY + layout.closeButtonH && x >= closeX && x <= closeX + layout.closeButtonW)
@@ -5079,7 +5289,7 @@ void GUI::handleTouch()
             // For all other states, we let the GestureDetector handle the touch
             // to distinguish between TAP, LONG_PRESS, and SWIPE.
             // handleTap() will be called when a TAP is confirmed.
-            
+
             if (justWokeUp)
             {
                 ESP_LOGI(TAG, "Processing wake-up touch at %d, %d", t.x, t.y);
@@ -5174,7 +5384,7 @@ void GUI::loadingTaskLoop()
     int id = loadingTargetBookId;
     int targetChapter = loadingTargetChapter;
     size_t targetOffset = loadingTargetOffset;
-    
+
     ESP_LOGI(TAG, "Loading task started for book %d (ch=%d, off=%zu)", id, targetChapter, targetOffset);
 
     // Signal CRITICAL priority - all background tasks should pause immediately
@@ -5193,7 +5403,8 @@ void GUI::loadingTaskLoop()
     }
 
     // If we have a specific chapter/offset (from restore), use them
-    if (targetChapter != -1) {
+    if (targetChapter != -1)
+    {
         book.currentChapter = targetChapter;
         book.currentOffset = targetOffset;
     }
@@ -5344,10 +5555,10 @@ void GUI::loadingTaskLoop()
     saveLastBook();
 
     addToRecentBooks(id);
-    
+
     // Release critical priority - background tasks can resume
     TaskCoordinator::getInstance().releaseHighPriority(TaskPriority::CRITICAL);
-    
+
     loadingTaskHandle = nullptr;
     ESP_LOGI(TAG, "Loading task finished for book %d", id);
     vTaskDelete(NULL);
@@ -7692,7 +7903,7 @@ void GUI::onFontSelectionClick(int x, int y)
 
 void GUI::showWallpaperAndSleep()
 {
-//#ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3 
+// #ifdef CONFIG_EBOOK_DEVICE_M5PAPERS3
 #define USE_WALLPAPER_ON_SLEEP 1
 #ifdef USE_WALLPAPER_ON_SLEEP
     DeviceHAL &hal = DeviceHAL::getInstance();
@@ -7778,7 +7989,7 @@ void GUI::showWallpaperAndSleep()
                         std::string buf(required, '\0');
                         if (nvs_get_str(my_handle, NVS_KEY_WALLPAPERC, buf.data(), &required) == ESP_OK)
                         {
-                            buf.resize(required ? required - 1 : 0);  // drop the trailing '\0'
+                            buf.resize(required ? required - 1 : 0); // drop the trailing '\0'
                             ESP_LOGI(TAG, "Retrieved wallpaper list from NVS: %s", buf.c_str());
                             size_t start = 0;
                             while (start < buf.size())
@@ -7899,7 +8110,8 @@ void GUI::showWallpaperAndSleep()
                                 for (size_t j = 0; j < filtered.size(); ++j)
                                 {
                                     out += filtered[j];
-                                    if (j + 1 < filtered.size()) out += ";";
+                                    if (j + 1 < filtered.size())
+                                        out += ";";
                                 }
                                 if (out.empty())
                                     nvs_erase_key(my_handle, NVS_KEY_WALLPAPERC);
@@ -8043,7 +8255,6 @@ void GUI::showWallpaperAndSleep()
                         else // log error
                         {
                             ESP_LOGE(TAG, "Failed to decode wallpaper image: %s", result.errorMsg.c_str());
-
                         }
                     }
                 }
@@ -8074,7 +8285,6 @@ void GUI::showWallpaperAndSleep()
     drawSleepSymbol("Zz");
     deviceHAL.enterDeepSleepWithTouchWake();
 #endif
-    
 }
 
 // Static member function implementation
@@ -8085,8 +8295,10 @@ std::string GUI::decodeHtmlEntities(const std::string &str)
 
 void GUI::setLightSleepTimeout(int minutes)
 {
-    if (minutes < 1) minutes = 1;
-    if (minutes > 60) minutes = 60;
+    if (minutes < 1)
+        minutes = 1;
+    if (minutes > 60)
+        minutes = 60;
     lightSleepMinutes = minutes;
     saveSettings();
 }
@@ -8098,8 +8310,10 @@ int GUI::getLightSleepTimeout() const
 
 void GUI::setDeepSleepTimeout(int minutes)
 {
-    if (minutes < 1) minutes = 1;
-    if (minutes > 60) minutes = 60;
+    if (minutes < 1)
+        minutes = 1;
+    if (minutes > 60)
+        minutes = 60;
     deepSleepTimeout = minutes;
     saveSettings();
 }
@@ -8111,8 +8325,10 @@ int GUI::getDeepSleepTimeout() const
 
 void GUI::setWallpaperTimer(int minutes)
 {
-    if (minutes < 1) minutes = 1;
-    if (minutes > 60) minutes = 60;
+    if (minutes < 1)
+        minutes = 1;
+    if (minutes > 60)
+        minutes = 60;
     wallpaperTimer = minutes;
     saveSettings();
 }
@@ -8252,5 +8468,3 @@ void GUI::onRecentBooksClick(int x, int y)
         }
     }
 }
-
-
