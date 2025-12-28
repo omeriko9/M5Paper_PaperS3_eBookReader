@@ -12,7 +12,8 @@ enum class GameType {
     NONE,
     MINESWEEPER,
     SUDOKU,
-    WORDLE
+    WORDLE,
+    DRAWING
 };
 
 // Game state

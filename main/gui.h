@@ -29,6 +29,7 @@ enum class AppState
     CHAPTER_MENU,   // In-book chapter jump menu
     FONT_SELECTION, // Font selection screen (S3 only)
     MUSIC_COMPOSER, // Music sequencer screen
+    DRAWING_APP,    // Drawing application screen
     RECENT_BOOKS,   // Recent books list
     LOADING         // Loading a book screen
 };
@@ -262,6 +263,7 @@ private:
     void drawGamesMenu();     // Games selection menu
     void drawGame();          // Current game rendering
     void drawMusicComposer(); // Music sequencer rendering
+    void drawDrawingApp();    // Drawing application rendering
     void drawFontSelection(); // Font selection screen (S3 only)
     void drawWifiPassword();
     void drawImageViewer(); // Full-screen image display
@@ -282,6 +284,7 @@ private:
     void onChapterMenuClick(int x, int y);   // Handle chapter menu clicks
     void onGamesMenuClick(int x, int y);     // Handle games menu clicks
     void onMusicComposerClick(int x, int y); // Handle music composer clicks
+    void onDrawingAppClick(int x, int y);    // Handle drawing app clicks
     void onFontSelectionClick(int x, int y); // Handle font selection clicks
     void onRecentBooksClick(int x, int y);   // Handle recent books clicks
 

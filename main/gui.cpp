@@ -12,6 +12,7 @@
 #include "gesture_detector.h"
 #include "game_manager.h"
 #include "composer_ui.h"
+#include "drawing_app.h"
 #include "task_coordinator.h"
 #include <vector>
 #include <cctype>
@@ -1512,6 +1513,9 @@ void GUI::update()
             break;
         case AppState::MUSIC_COMPOSER:
             drawMusicComposer();
+            break;
+        case AppState::DRAWING_APP:
+            drawDrawingApp();
             break;
         case AppState::CHAPTER_MENU:
             drawChapterMenu();
@@ -4910,6 +4914,27 @@ void GUI::handleGesture(const GestureEvent &event)
                 needsRedraw = true;
             }
         }
+        else if (currentState == AppState::CHAPTER_MENU)
+        {
+            const int lineHeight = 45;
+            const int startY = STATUS_BAR_HEIGHT + 50;
+            const int visibleLines = (screenH - startY - 60) / lineHeight;
+            int totalChapters = 0;
+
+            if (xSemaphoreTake(epubMutex, portMAX_DELAY))
+            {
+                totalChapters = epubLoader.getTotalChapters();
+                xSemaphoreGive(epubMutex);
+            }
+
+            const int maxOffset = std::max(0, totalChapters - visibleLines);
+            const int page = std::max(1, visibleLines - 1);
+            if (chapterMenuScrollOffset < maxOffset)
+            {
+                chapterMenuScrollOffset = std::min(maxOffset, chapterMenuScrollOffset + page);
+                needsRedraw = true;
+            }
+        }
         else if (currentState == AppState::MUSIC_COMPOSER)
         {
             if (ComposerUI::getInstance().handleGesture(event))
@@ -4936,7 +4961,20 @@ void GUI::handleGesture(const GestureEvent &event)
         break;
 
     case GestureType::SWIPE_DOWN:
-        if (currentState == AppState::MUSIC_COMPOSER)
+        if (currentState == AppState::CHAPTER_MENU)
+        {
+            const int lineHeight = 45;
+            const int startY = STATUS_BAR_HEIGHT + 50;
+            const int visibleLines = (screenH - startY - 60) / lineHeight;
+            const int page = std::max(1, visibleLines - 1);
+
+            if (chapterMenuScrollOffset > 0)
+            {
+                chapterMenuScrollOffset = std::max(0, chapterMenuScrollOffset - page);
+                needsRedraw = true;
+            }
+        }
+        else if (currentState == AppState::MUSIC_COMPOSER)
         {
             if (ComposerUI::getInstance().handleGesture(event))
             {
@@ -5271,6 +5309,39 @@ void GUI::handleTouch()
                 {
                     ComposerUI::getInstance().clearExitFlag();
                     ComposerUI::getInstance().exit();
+                    currentState = AppState::GAMES_MENU;
+                    needsRedraw = true;
+                }
+            }
+
+            justWokeUp = false;
+            return;
+        }
+
+        // Drawing app needs continuous touch handling for smooth strokes
+        if (currentState == AppState::DRAWING_APP)
+        {
+            DrawingApp &drawApp = DrawingApp::getInstance();
+            
+            if (t.wasPressed() || (justWokeUp && t.isPressed()))
+            {
+                drawApp.handleTouchStart(t.x, t.y);
+                // Also check for toolbar/button taps
+                drawApp.handleTouch(t.x, t.y);
+            }
+
+            if (t.isPressed())
+            {
+                drawApp.handleTouchMove(t.x, t.y);
+            }
+
+            if (t.wasReleased())
+            {
+                drawApp.handleTouchEnd(t.x, t.y);
+                if (drawApp.shouldExit())
+                {
+                    drawApp.clearExitFlag();
+                    drawApp.exit();
                     currentState = AppState::GAMES_MENU;
                     needsRedraw = true;
                 }
@@ -7460,6 +7531,7 @@ void GUI::drawGamesMenu()
     target->setTextSize(2.5f);
     target->drawString("Utility", screenW / 2, utilityY);
 
+    // Utility buttons: Music Composer and Draw!
     int composerY = utilityY + 50;
     int cbx = centerX - btnW / 2;
     target->fillRect(cbx, composerY, btnW, btnH, TFT_WHITE);
@@ -7468,6 +7540,14 @@ void GUI::drawGamesMenu()
     target->setTextSize(2.0f);
     target->setTextDatum(textdatum_t::middle_center);
     target->drawString("Music Composer", centerX, composerY + btnH / 2);
+
+    // Draw! button
+    int drawY = composerY + btnH + btnGap;
+    target->fillRect(cbx, drawY, btnW, btnH, TFT_WHITE);
+    target->drawRect(cbx, drawY, btnW, btnH, TFT_BLACK);
+    target->drawRect(cbx + 1, drawY + 1, btnW - 2, btnH - 2, TFT_BLACK);
+    target->setTextDatum(textdatum_t::middle_center);
+    target->drawString("Draw!", centerX, drawY + btnH / 2);
 
     // Back button
     int backY = screenH - 70;
@@ -7541,6 +7621,18 @@ void GUI::onGamesMenuClick(int x, int y)
         return;
     }
 
+    // Check Draw! button
+    int drawY = composerY + btnH + btnGap;
+    if (x >= cbx && x < cbx + btnW && y >= drawY && y < drawY + btnH)
+    {
+        ESP_LOGI(TAG, "Draw! button pressed, launching drawing app");
+        DrawingApp::getInstance().init();
+        DrawingApp::getInstance().enter();
+        currentState = AppState::DRAWING_APP;
+        needsRedraw = true;
+        return;
+    }
+
     // Check back button
     int backY = screenH - 70;
     if (x >= centerX - 60 && x < centerX + 60 && y >= backY && y < backY + 50)
@@ -7584,6 +7676,32 @@ void GUI::onMusicComposerClick(int x, int y)
     {
         composer.clearExitFlag();
         composer.exit();
+        currentState = AppState::GAMES_MENU;
+        needsRedraw = true;
+    }
+}
+
+// ============================================
+// DRAWING APP
+// ============================================
+
+void GUI::drawDrawingApp()
+{
+    DrawingApp::getInstance().draw();
+}
+
+void GUI::onDrawingAppClick(int x, int y)
+{
+    DrawingApp &drawApp = DrawingApp::getInstance();
+    if (drawApp.handleTouch(x, y))
+    {
+        needsRedraw = true;
+    }
+
+    if (drawApp.shouldExit())
+    {
+        drawApp.clearExitFlag();
+        drawApp.exit();
         currentState = AppState::GAMES_MENU;
         needsRedraw = true;
     }
@@ -7678,6 +7796,13 @@ void GUI::drawChapterMenu()
         // Use drawStringMixed to support Hebrew/Arabic chapter titles
         drawStringMixed(name, 20, ty, sprite, 1.5f, false, false);
     }
+
+    // Hint for list navigation
+    target->setTextDatum(textdatum_t::bottom_center);
+    target->setTextSize(1.0f);
+    target->setTextColor(TFT_DARKGREY);
+    target->drawString("Swipe up/down to scroll", screenW / 2, screenH - 65);
+    target->setTextColor(TFT_BLACK);
 
     // Back button
     int backY = screenH - 55;
