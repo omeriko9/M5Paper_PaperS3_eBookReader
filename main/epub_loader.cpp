@@ -1494,13 +1494,18 @@ bool EpubLoader::jumpToChapter(int index) {
 }
 
 std::string EpubLoader::getText(size_t offset, size_t length) {
-    if (currentChapterSize == 0) return "";
-    if (offset >= currentChapterSize) return "";
-    
-    if (offset + length > currentChapterSize) {
-        length = currentChapterSize - offset;
+    const size_t contentSize = currentChapterContent.size();
+    if (contentSize == 0) return "";
+    if (offset >= contentSize) return "";
+
+    if (offset + length > contentSize) {
+        length = contentSize - offset;
     }
-    
+
+    if (currentChapterSize != contentSize) {
+        currentChapterSize = contentSize;
+    }
+
     return currentChapterContent.substr(offset, length);
 }
 

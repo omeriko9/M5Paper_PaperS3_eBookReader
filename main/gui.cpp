@@ -1466,7 +1466,7 @@ void GUI::update()
     handleTouch();
 
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    bool indexingActive = (backgroundIndexerTaskHandle != nullptr);
+    bool indexingActive = (indexingScanActive || indexingProcessingActive);
 
     // Check web server activity - if there's been recent HTTP activity, don't sleep
     uint32_t lastHttpActivity = webServer.getLastActivityTime();
@@ -1507,6 +1507,7 @@ void GUI::update()
 
     if (needsRedraw)
     {
+        needsRedraw = false;
         ESP_LOGI(TAG, "Needs redraw, current state: %d", (int)currentState);
         switch (currentState)
         {
@@ -1565,7 +1566,6 @@ void GUI::update()
             drawLoadingScreen();
             break;
         }
-        needsRedraw = false;
     }
 }
 
@@ -5038,6 +5038,7 @@ void GUI::handleGesture(const GestureEvent &event)
                 previousState = currentState;
                 currentState = AppState::CHAPTER_MENU;
                 chapterMenuScrollOffset = 0;
+                chapterMenuAutoScroll = true;
                 needsRedraw = true;
             }
         }
@@ -5081,6 +5082,7 @@ void GUI::handleGesture(const GestureEvent &event)
             const int page = std::max(1, visibleLines - 1);
             if (chapterMenuScrollOffset < maxOffset)
             {
+                chapterMenuAutoScroll = false;
                 chapterMenuScrollOffset = std::min(maxOffset, chapterMenuScrollOffset + page);
                 needsRedraw = true;
             }
@@ -5120,6 +5122,7 @@ void GUI::handleGesture(const GestureEvent &event)
 
             if (chapterMenuScrollOffset > 0)
             {
+                chapterMenuAutoScroll = false;
                 chapterMenuScrollOffset = std::max(0, chapterMenuScrollOffset - page);
                 needsRedraw = true;
             }
@@ -7917,11 +7920,26 @@ void GUI::drawChapterMenu()
     const int startY = STATUS_BAR_HEIGHT + 50;
     const int visibleLines = (screenH - startY - 60) / lineHeight;
 
-    // Calculate scroll offset to show current chapter
-    if (currentChapter < chapterMenuScrollOffset)
-        chapterMenuScrollOffset = currentChapter;
-    if (currentChapter >= chapterMenuScrollOffset + visibleLines)
-        chapterMenuScrollOffset = currentChapter - visibleLines + 1;
+    const int maxOffset = std::max(0, totalChapters - visibleLines);
+    if (chapterMenuAutoScroll)
+    {
+        // Auto-scroll only until the user manually scrolls.
+        if (currentChapter < chapterMenuScrollOffset)
+            chapterMenuScrollOffset = currentChapter;
+        if (currentChapter >= chapterMenuScrollOffset + visibleLines)
+            chapterMenuScrollOffset = currentChapter - visibleLines + 1;
+        if (chapterMenuScrollOffset > maxOffset)
+            chapterMenuScrollOffset = maxOffset;
+        if (chapterMenuScrollOffset < 0)
+            chapterMenuScrollOffset = 0;
+    }
+    else
+    {
+        if (chapterMenuScrollOffset > maxOffset)
+            chapterMenuScrollOffset = maxOffset;
+        if (chapterMenuScrollOffset < 0)
+            chapterMenuScrollOffset = 0;
+    }
 
     target->setTextSize(1.5f);
     target->setTextDatum(textdatum_t::middle_left);

@@ -205,6 +205,7 @@ private:
     std::vector<size_t> chapterPrefixSums;
     bool bookMetricsComputed = false;
     int chapterMenuScrollOffset = 0;
+    bool chapterMenuAutoScroll = true;
     bool bookIndexReady = false;
     bool pendingBookIndexSync = false;
     int pendingBookId = 0;
