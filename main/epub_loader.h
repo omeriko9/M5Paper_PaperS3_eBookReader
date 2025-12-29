@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cstdint>
 #include "zip_reader.h"
 
 // Special markers for inline math - using Private Use Area codepoints
@@ -20,6 +21,17 @@ struct EpubMath {
     bool isBlock;           // True if display math (centered), false for inline
 };
 
+enum class ImageVAlign : uint8_t {
+    BASELINE,
+    MIDDLE,
+    TEXT_TOP,
+    TEXT_BOTTOM,
+    TOP,
+    BOTTOM,
+    SUPER,
+    SUB
+};
+
 /**
  * @brief Represents an image reference embedded in chapter content
  */
@@ -32,7 +44,9 @@ struct EpubImage {
     bool isInlineMath;       // True if this is a small inline math symbol image
     int width;               // Specified width (-1 if not specified)
     int height;              // Specified height (-1 if not specified)
-    int verticalAlign;       // Vertical alignment offset in pixels (for baseline alignment)
+    float widthEm;           // CSS width in em units (-1 if not specified)
+    float heightEm;          // CSS height in em units (-1 if not specified)
+    ImageVAlign verticalAlign; // CSS vertical-align hint
 };
 
 class EpubLoader {
@@ -80,6 +94,15 @@ public:
      * @return true if successful
      */
     bool extractImage(const std::string& imagePath, std::vector<uint8_t>& outData);
+
+    /**
+     * @brief Peek image dimensions without extracting full binary
+     * @param imagePath Path to image within EPUB
+     * @param outWidth Output width
+     * @param outHeight Output height
+     * @return true if dimensions found
+     */
+    bool getImageDimensions(const std::string& imagePath, int& outWidth, int& outHeight);
     
     /**
      * @brief Find image at or near text offset

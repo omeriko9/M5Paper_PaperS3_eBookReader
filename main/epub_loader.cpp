@@ -5,6 +5,7 @@
 #include "esp_task_wdt.h"
 #include <stdio.h>
 #include <string.h>
+#include <cstdlib>
 #include <map>
 #include <unistd.h>
 #include <algorithm>
@@ -21,6 +22,264 @@ extern volatile bool g_metricsPauseRequested;
 static inline void wdtResetIfRegistered() {
     if (esp_task_wdt_status(NULL) == ESP_OK) {
         esp_task_wdt_reset();
+    }
+}
+
+struct CssImageStyle {
+    float widthEm = -1.0f;
+    float heightEm = -1.0f;
+    int widthPx = -1;
+    int heightPx = -1;
+    ImageVAlign valign = ImageVAlign::BASELINE;
+    bool hasValign = false;
+    bool displayBlock = false;
+    bool displayInline = false;
+};
+
+struct CssClassStyle {
+    std::string name;
+    CssImageStyle style;
+};
+
+static std::vector<CssClassStyle> g_cssImageStyles;
+
+static inline bool hasAnyCssStyle(const CssImageStyle& style) {
+    return style.widthEm >= 0.0f || style.heightEm >= 0.0f ||
+           style.widthPx >= 0 || style.heightPx >= 0 ||
+           style.hasValign || style.displayBlock || style.displayInline;
+}
+
+static inline std::string trimWhitespace(const std::string& input) {
+    size_t start = 0;
+    while (start < input.size() && std::isspace(static_cast<unsigned char>(input[start]))) {
+        start++;
+    }
+    size_t end = input.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(input[end - 1]))) {
+        end--;
+    }
+    return input.substr(start, end - start);
+}
+
+static inline std::string toLowerCopy(const std::string& input) {
+    std::string out = input;
+    for (char& c : out) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
+static inline void mergeCssStyle(CssImageStyle& base, const CssImageStyle& add) {
+    if (add.widthEm >= 0.0f) base.widthEm = add.widthEm;
+    if (add.heightEm >= 0.0f) base.heightEm = add.heightEm;
+    if (add.widthPx >= 0) base.widthPx = add.widthPx;
+    if (add.heightPx >= 0) base.heightPx = add.heightPx;
+    if (add.hasValign) {
+        base.valign = add.valign;
+        base.hasValign = true;
+    }
+    if (add.displayBlock) {
+        base.displayBlock = true;
+        base.displayInline = false;
+    } else if (add.displayInline) {
+        base.displayInline = true;
+    }
+}
+
+static inline void stripCssComments(std::string& css) {
+    size_t pos = 0;
+    while ((pos = css.find("/*", pos)) != std::string::npos) {
+        size_t end = css.find("*/", pos + 2);
+        if (end == std::string::npos) {
+            css.erase(pos);
+            break;
+        }
+        css.erase(pos, end - pos + 2);
+    }
+}
+
+static bool parseCssLength(const std::string& value, float& outValue, bool& isEm, bool& isPx) {
+    std::string trimmed = trimWhitespace(value);
+    if (trimmed.empty()) return false;
+    if (trimmed == "auto") return false;
+
+    char* endPtr = nullptr;
+    float number = strtof(trimmed.c_str(), &endPtr);
+    if (endPtr == trimmed.c_str()) return false;
+
+    while (*endPtr && std::isspace(static_cast<unsigned char>(*endPtr))) {
+        endPtr++;
+    }
+
+    std::string unit = toLowerCopy(endPtr);
+    isEm = false;
+    isPx = false;
+    if (unit.find("em") == 0) {
+        isEm = true;
+    } else if (unit.find("px") == 0 || unit.empty()) {
+        isPx = true;
+    } else {
+        return false;
+    }
+
+    outValue = number;
+    return true;
+}
+
+static void applyCssDeclarations(const std::string& decls, CssImageStyle& style) {
+    size_t pos = 0;
+    while (pos < decls.size()) {
+        while (pos < decls.size() && (decls[pos] == ';' || std::isspace(static_cast<unsigned char>(decls[pos])))) {
+            pos++;
+        }
+        if (pos >= decls.size()) break;
+
+        size_t colon = decls.find(':', pos);
+        if (colon == std::string::npos) break;
+        std::string name = toLowerCopy(trimWhitespace(decls.substr(pos, colon - pos)));
+
+        size_t valueEnd = decls.find(';', colon + 1);
+        if (valueEnd == std::string::npos) valueEnd = decls.size();
+        std::string value = trimWhitespace(decls.substr(colon + 1, valueEnd - colon - 1));
+
+        if (name == "width" || name == "height") {
+            float lengthValue = 0.0f;
+            bool isEm = false;
+            bool isPx = false;
+            if (parseCssLength(value, lengthValue, isEm, isPx)) {
+                if (name == "width") {
+                    if (isEm) style.widthEm = lengthValue;
+                    else if (isPx) style.widthPx = static_cast<int>(lengthValue + 0.5f);
+                } else {
+                    if (isEm) style.heightEm = lengthValue;
+                    else if (isPx) style.heightPx = static_cast<int>(lengthValue + 0.5f);
+                }
+            }
+        } else if (name == "vertical-align") {
+            std::string v = toLowerCopy(value);
+            if (v == "middle") style.valign = ImageVAlign::MIDDLE;
+            else if (v == "text-top") style.valign = ImageVAlign::TEXT_TOP;
+            else if (v == "text-bottom") style.valign = ImageVAlign::TEXT_BOTTOM;
+            else if (v == "top") style.valign = ImageVAlign::TOP;
+            else if (v == "bottom") style.valign = ImageVAlign::BOTTOM;
+            else if (v == "super") style.valign = ImageVAlign::SUPER;
+            else if (v == "sub") style.valign = ImageVAlign::SUB;
+            else style.valign = ImageVAlign::BASELINE;
+            style.hasValign = true;
+        } else if (name == "display") {
+            std::string v = toLowerCopy(value);
+            if (v.find("block") != std::string::npos) {
+                style.displayBlock = true;
+                style.displayInline = false;
+            } else if (v.find("inline") != std::string::npos) {
+                style.displayInline = true;
+            }
+        }
+
+        pos = valueEnd + 1;
+    }
+}
+
+static void extractClassNames(const std::string& selector, std::vector<std::string>& out) {
+    size_t pos = 0;
+    while ((pos = selector.find('.', pos)) != std::string::npos) {
+        size_t start = pos + 1;
+        size_t end = start;
+        while (end < selector.size()) {
+            char c = selector[end];
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_') {
+                end++;
+            } else {
+                break;
+            }
+        }
+        if (end > start) {
+            out.push_back(selector.substr(start, end - start));
+        }
+        pos = end;
+    }
+}
+
+static CssImageStyle* findCssStyle(const std::string& className) {
+    for (auto& entry : g_cssImageStyles) {
+        if (entry.name == className) {
+            return &entry.style;
+        }
+    }
+    g_cssImageStyles.push_back({className, CssImageStyle{}});
+    return &g_cssImageStyles.back().style;
+}
+
+static const CssImageStyle* lookupCssStyle(const std::string& className) {
+    for (const auto& entry : g_cssImageStyles) {
+        if (entry.name == className) {
+            return &entry.style;
+        }
+    }
+    return nullptr;
+}
+
+static void parseCssText(const std::string& cssText) {
+    if (cssText.empty()) return;
+    std::string css = cssText;
+    stripCssComments(css);
+
+    size_t pos = 0;
+    while (true) {
+        size_t braceOpen = css.find('{', pos);
+        if (braceOpen == std::string::npos) break;
+        size_t braceClose = css.find('}', braceOpen + 1);
+        if (braceClose == std::string::npos) break;
+
+        std::string selector = trimWhitespace(css.substr(pos, braceOpen - pos));
+        std::string decls = css.substr(braceOpen + 1, braceClose - braceOpen - 1);
+        pos = braceClose + 1;
+
+        if (selector.empty() || selector.find('@') != std::string::npos) {
+            continue;
+        }
+
+        CssImageStyle style;
+        applyCssDeclarations(decls, style);
+        if (!hasAnyCssStyle(style)) {
+            continue;
+        }
+
+        std::vector<std::string> classNames;
+        extractClassNames(selector, classNames);
+        for (const auto& className : classNames) {
+            CssImageStyle* target = findCssStyle(className);
+            mergeCssStyle(*target, style);
+        }
+    }
+}
+
+static void applyCssStylesForClasses(const std::string& classAttr, CssImageStyle& style) {
+    size_t pos = 0;
+    while (pos < classAttr.size()) {
+        while (pos < classAttr.size() && std::isspace(static_cast<unsigned char>(classAttr[pos]))) {
+            pos++;
+        }
+        size_t start = pos;
+        while (pos < classAttr.size() && !std::isspace(static_cast<unsigned char>(classAttr[pos]))) {
+            pos++;
+        }
+        if (pos > start) {
+            std::string className = classAttr.substr(start, pos - start);
+            const CssImageStyle* cssStyle = lookupCssStyle(className);
+            if (cssStyle) {
+                mergeCssStyle(style, *cssStyle);
+            }
+        }
+    }
+}
+
+static void applyInlineStyle(const std::string& inlineStyle, CssImageStyle& style) {
+    if (inlineStyle.empty()) return;
+    CssImageStyle inlineCss;
+    applyCssDeclarations(inlineStyle, inlineCss);
+    if (hasAnyCssStyle(inlineCss)) {
+        mergeCssStyle(style, inlineCss);
     }
 }
 
@@ -182,6 +441,7 @@ void EpubLoader::close() {
     currentChapterContent.shrink_to_fit();
     currentChapterImages.clear();
     currentChapterMath.clear();
+    g_cssImageStyles.clear();
 }
 
 std::string EpubLoader::getTitle() {
@@ -237,6 +497,7 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     if (aborted) return false;
     std::string xml = readFileFromZip(opfPath);
     if (xml.empty()) return false;
+    g_cssImageStyles.clear();
     
     // Parse Title
     title = "";
@@ -340,6 +601,20 @@ bool EpubLoader::parseOPF(const std::string& opfPath) {
     std::sort(manifest.begin(), manifest.end(), [](const ManifestItem& a, const ManifestItem& b) {
         return a.id < b.id;
     });
+
+    // Parse CSS stylesheets for inline image sizing and alignment
+    for (const auto& item : manifest) {
+        std::string hrefLower = item.href;
+        std::transform(hrefLower.begin(), hrefLower.end(), hrefLower.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        if (hrefLower.size() >= 4 && hrefLower.rfind(".css") == hrefLower.size() - 4) {
+            std::string cssPath = rootDir + item.href;
+            std::string cssText = readFileFromZip(cssPath);
+            if (!cssText.empty()) {
+                parseCssText(cssText);
+            }
+        }
+    }
     
     // 2. Find TOC (NCX for EPUB2 or NAV for EPUB3)
     std::string tocPath;
@@ -938,7 +1213,9 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                     EpubImage img;
                     img.textOffset = context->content->length();
                     img.isInlineMath = false;
-                    img.verticalAlign = 0;
+                    img.widthEm = -1.0f;
+                    img.heightEm = -1.0f;
+                    img.verticalAlign = ImageVAlign::BASELINE;
                     
                     // Extract src attribute
                     std::string src = extractAttribute(tag, "src");
@@ -962,12 +1239,26 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                         
                         // Extract CSS class - important for detecting inline math images
                         img.cssClass = extractAttribute(tag, "class");
+                        std::string inlineStyle = extractAttribute(tag, "style");
                         
                         // Extract dimensions if specified
                         std::string widthStr = extractAttribute(tag, "width");
                         std::string heightStr = extractAttribute(tag, "height");
                         img.width = widthStr.empty() ? -1 : atoi(widthStr.c_str());
                         img.height = heightStr.empty() ? -1 : atoi(heightStr.c_str());
+
+                        CssImageStyle cssStyle;
+                        if (!img.cssClass.empty()) {
+                            applyCssStylesForClasses(img.cssClass, cssStyle);
+                        }
+                        if (!inlineStyle.empty()) {
+                            applyInlineStyle(inlineStyle, cssStyle);
+                        }
+                        if (cssStyle.widthEm >= 0.0f) img.widthEm = cssStyle.widthEm;
+                        if (cssStyle.heightEm >= 0.0f) img.heightEm = cssStyle.heightEm;
+                        if (cssStyle.widthPx >= 0) img.width = cssStyle.widthPx;
+                        if (cssStyle.heightPx >= 0) img.height = cssStyle.heightPx;
+                        if (cssStyle.hasValign) img.verticalAlign = cssStyle.valign;
                         
                         // Detect inline math images by class name patterns
                         // Common patterns: "img2", "inline", "math", "symbol", "formula"
@@ -987,13 +1278,26 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                                           (lowerPath.find("/images/") != std::string::npos && 
                                               img.width > 0 && img.width < 80 && img.height > 0 && img.height < 40));
                         
-                        // Mark as inline math if small size or has inline-related class
-                        img.isInlineMath = hasInlineClass || isMathPath || 
+                        // Large em/px sizes are usually block equations; keep inline heuristics for small images.
+                        const float kInlineMaxEm = 4.0f;
+                        const int kInlineMaxPx = 120;
+                        bool cssInlineSizeHint = false;
+                        if (cssStyle.widthEm > 0.0f && cssStyle.widthEm <= kInlineMaxEm) cssInlineSizeHint = true;
+                        if (cssStyle.heightEm > 0.0f && cssStyle.heightEm <= kInlineMaxEm) cssInlineSizeHint = true;
+                        if (cssStyle.widthPx > 0 && cssStyle.widthPx <= kInlineMaxPx) cssInlineSizeHint = true;
+                        if (cssStyle.heightPx > 0 && cssStyle.heightPx <= kInlineMaxPx) cssInlineSizeHint = true;
+                        bool cssInlineHint = cssStyle.displayInline || cssInlineSizeHint;
+                        
+                        // Mark as inline math if small size, CSS inline hint, or has inline-related class
+                        img.isInlineMath = hasInlineClass || isMathPath || cssInlineHint ||
                                           (img.width > 0 && img.width < 100 && img.height > 0 && img.height < 50);
                         
                         // Determine if block-level
                         // Block = large images OR not detected as inline math
-                        if (img.isInlineMath) {
+                        if (cssStyle.displayBlock) {
+                            img.isInlineMath = false;
+                            img.isBlock = true;
+                        } else if (img.isInlineMath) {
                             img.isBlock = false;
                         } else {
                             img.isBlock = (img.width > 200 || img.height > 200 || 
@@ -1014,7 +1318,9 @@ static bool loadChapterCallback(const char* data, size_t len, void* ctx) {
                     EpubImage img;
                     img.textOffset = context->content->length();
                     img.isInlineMath = false;
-                    img.verticalAlign = 0;
+                    img.widthEm = -1.0f;
+                    img.heightEm = -1.0f;
+                    img.verticalAlign = ImageVAlign::BASELINE;
                     img.cssClass = "";
                     
                     std::string href = extractAttribute(tag, "xlink:href");
@@ -1317,6 +1623,57 @@ bool EpubLoader::extractImage(const std::string& imagePath, std::vector<uint8_t>
     }
     
     return zip.extractBinary(finalPath, outData);
+}
+
+bool EpubLoader::getImageDimensions(const std::string& imagePath, int& outWidth, int& outHeight) {
+    outWidth = 0;
+    outHeight = 0;
+    if (!isOpen || aborted) {
+        return false;
+    }
+    std::string finalPath = "";
+
+    if (zip.fileExists(imagePath)) {
+        finalPath = imagePath;
+    } else {
+        std::string fullPath = rootDir + imagePath;
+        if (zip.fileExists(fullPath)) {
+            finalPath = fullPath;
+        } else {
+            size_t lastSlash = imagePath.rfind('/');
+            if (lastSlash != std::string::npos) {
+                std::string filename = imagePath.substr(lastSlash + 1);
+                std::vector<std::string> searchPaths = {
+                    "images/" + filename,
+                    "Images/" + filename,
+                    "OEBPS/images/" + filename,
+                    "OEBPS/Images/" + filename,
+                    rootDir + "images/" + filename,
+                    rootDir + "Images/" + filename,
+                    filename
+                };
+
+                for (const auto& path : searchPaths) {
+                    if (zip.fileExists(path)) {
+                        finalPath = path;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (finalPath.empty()) {
+        return false;
+    }
+
+    uint8_t header[64];
+    size_t peekSize = zip.peekFile(finalPath, header, sizeof(header));
+    if (peekSize == 0) {
+        return false;
+    }
+
+    return ImageHandler::getInstance().getDimensions(header, peekSize, outWidth, outHeight);
 }
 
 const EpubImage* EpubLoader::findImageAtOffset(size_t textOffset, size_t tolerance) const {

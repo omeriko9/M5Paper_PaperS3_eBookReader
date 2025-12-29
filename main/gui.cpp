@@ -2317,7 +2317,10 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     int height = gfx->height();
     int maxWidth = width - rightMargin - x; // Width available for text
     int maxY = height - bottomMargin;
-    int lineHeight = gfx->fontHeight() * lineSpacing; // Configurable line spacing
+    int textHeight = gfx->fontHeight();
+    int lineHeight = textHeight * lineSpacing; // Configurable line spacing
+    int textAscent = static_cast<int>(textHeight * 0.75f);
+    int textDescent = textHeight - textAscent;
 
     // Fetch a large chunk
     std::string text;
@@ -2409,12 +2412,34 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         return nullptr;
     };
 
-    // Store indices (start, length, isMath) instead of strings to save memory
-    std::vector<std::tuple<size_t, size_t, bool>> currentLine;
+    struct LineItem
+    {
+        enum class Type
+        {
+            Text,
+            Math,
+            Image
+        };
+        Type type = Type::Text;
+        size_t offset = 0;
+        size_t length = 0;
+        const EpubMath *mathBlock = nullptr;
+        const EpubImage *image = nullptr;
+        int width = 0;
+        int height = 0;
+        int top = 0;
+        int bottom = 0;
+        int maxWidth = 0;
+        int maxHeight = 0;
+    };
+
+    // Store line items with precomputed layout metrics
+    std::vector<LineItem> currentLine;
     currentLine.reserve(20); // Pre-allocate to avoid reallocations
 
     int currentLineWidth = 0;
-    int currentLineXOffset = 0; // Offset for current line segment (for inline images)
+    int currentLineAscent = 0;
+    int currentLineDescent = 0;
     int currentY = y;
     size_t i = 0;
     bool inMathMode = false;
@@ -2422,24 +2447,41 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     int debugWordsLogged = 0;
     std::string tempWord; // Reusable buffer for measurements
 
-    auto drawLine = [&](const std::vector<std::tuple<size_t, size_t, bool>> &line, int xOffset = 0)
+    auto resetLineMetrics = [&]()
+    {
+        currentLineWidth = 0;
+        currentLineAscent = 0;
+        currentLineDescent = 0;
+    };
+
+    auto updateLineMetrics = [&](const LineItem &item)
+    {
+        int ascent = item.top < 0 ? -item.top : 0;
+        int descent = item.bottom > 0 ? item.bottom : 0;
+        if (ascent > currentLineAscent)
+            currentLineAscent = ascent;
+        if (descent > currentLineDescent)
+            currentLineDescent = descent;
+    };
+
+    auto drawLine = [&](const std::vector<LineItem> &line, int lineAscent, int lineDescent, int xOffset = 0)
     {
         if (!draw || line.empty())
             return;
+        (void)lineDescent;
 
         bool isRTL = isRTLDocument;
         if (!isRTL)
         {
-            ESP_LOGI(TAG, "drawLine: Checking for RTL in line with %zu words", line.size());
-            for (const auto &p : line)
+            ESP_LOGI(TAG, "drawLine: Checking for RTL in line with %zu items", line.size());
+            for (const auto &item : line)
             {
-                if (std::get<2>(p))
-                    continue; // Skip math for RTL check
-                // Check if word is Hebrew
-                size_t len = std::get<1>(p);
+                if (item.type != LineItem::Type::Text)
+                    continue;
+                size_t len = item.length;
                 if (len == 0)
-                    continue; // Skip math blocks (length=0 marks MathML)
-                const char *wordStart = text.c_str() + std::get<0>(p);
+                    continue;
+                const char *wordStart = text.c_str() + item.offset;
                 for (size_t k = 0; k < len; ++k)
                 {
                     unsigned char c = (unsigned char)wordStart[k];
@@ -2459,8 +2501,10 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         if (spaceW == 0)
             spaceW = 5; // Fallback if font has no space width
 
+        int baselineY = currentY + lineAscent;
+
         TickType_t lastYieldTick = xTaskGetTickCount();
-        for (const auto &p : line)
+        for (const auto &item : line)
         {
             TickType_t nowTick = xTaskGetTickCount();
             if (nowTick - lastYieldTick >= pdMS_TO_TICKS(30))
@@ -2469,28 +2513,19 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                 vTaskDelay(1);
                 lastYieldTick = xTaskGetTickCount();
             }
-            bool isMath = std::get<2>(p);
-            size_t wordOffset = std::get<0>(p);
-            size_t wordLen = std::get<1>(p);
 
-            // Handle inline MathML blocks (marked by isMath=true and wordLen=0)
-            if (isMath && wordLen == 0)
+            if (item.type == LineItem::Type::Math)
             {
-                // Look up the MathML content from cache (no mutex needed)
-                size_t mathTextOffset = startOffset + wordOffset;
-                ESP_LOGI(TAG, "drawLine: Inline math at text offset %zu", mathTextOffset);
-                const EpubMath *mathBlock = findCachedMath(mathTextOffset, 10);
-
+                const EpubMath *mathBlock = item.mathBlock;
                 if (mathBlock && !mathBlock->mathml.empty())
                 {
                     int mathWidth = 0, mathHeight = 0;
-                    // Render inline math at baseline
-                    ESP_LOGI(TAG, "drawLine: Measuring math block");
-                    renderMathInline(mathBlock->mathml, (M5Canvas *)target, startX, currentY, maxWidth, mathWidth, mathHeight);
+                    int drawX = isRTL ? (startX - item.width) : startX;
+                    renderMathInline(mathBlock->mathml, (M5Canvas *)target, drawX, baselineY, maxWidth, mathWidth, mathHeight);
 
                     if (debugWordsLogged < 20)
                     {
-                        ESP_LOGI(TAG, "drawLine: MATH w=%d h=%d startX=%d y=%d", mathWidth, mathHeight, startX, currentY);
+                        ESP_LOGI(TAG, "drawLine: MATH w=%d h=%d startX=%d y=%d", item.width, item.height, drawX, baselineY);
                     }
 
                     // Restore book font because renderMathInline switched to Math font
@@ -2509,76 +2544,99 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                     gfx->setTextSize(fontSize);
 
                     if (isRTL)
-                    {
-                        startX -= (mathWidth + spaceW);
-                    }
+                        startX -= (item.width + spaceW);
                     else
-                    {
-                        startX += (mathWidth + spaceW);
-                    }
+                        startX += (item.width + spaceW);
                 }
                 continue;
             }
 
-            std::string displayWord = text.substr(wordOffset, wordLen);
-
-            if (isMath)
+            if (item.type == LineItem::Type::Image)
             {
-                // Old-style math word (should not happen with new code, but keep for safety)
-                if (!fontDataMath.empty())
+                const EpubImage *image = item.image;
+                if (image)
                 {
-                    gfx->loadFont(fontDataMath.data());
+                    int imgX = isRTL ? (startX - item.width) : startX;
+                    int imgY = baselineY + item.top;
+                    if (imgY < currentY)
+                        imgY = currentY;
+
+                    std::vector<uint8_t> imageData;
+                    bool extracted = false;
+                    bool resumeWrite = false;
+                    if (target == nullptr && gfx->isEPD())
+                    {
+                        gfx->endWrite();
+                        resumeWrite = true;
+                    }
+                    if (takeEpubMutexWithWdt(epubMutex, abort))
+                    {
+                        extracted = epubLoader.extractImage(image->path, imageData);
+                        xSemaphoreGive(epubMutex);
+                    }
+                    if (resumeWrite)
+                    {
+                        gfx->startWrite();
+                        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+                    }
+
+                    if (extracted && !imageData.empty())
+                    {
+                        ImageHandler &imgHandler = ImageHandler::getInstance();
+                        int renderMaxWidth = (item.maxWidth > 0) ? item.maxWidth : item.width;
+                        int renderMaxHeight = (item.maxHeight > 0) ? item.maxHeight : item.height;
+                        ImageDecodeResult result = imgHandler.decodeAndRender(
+                            imageData.data(), imageData.size(),
+                            (M5Canvas *)target, imgX, imgY,
+                            renderMaxWidth, renderMaxHeight,
+                            ImageDisplayMode::INLINE);
+
+                        if (result.success && target == nullptr)
+                        {
+                            RenderedImageInfo ri;
+                            ri.x = imgX;
+                            ri.y = imgY;
+                            ri.width = result.scaledWidth;
+                            ri.height = result.scaledHeight;
+                            ri.image = *image;
+                            pageRenderedImages.push_back(ri);
+                        }
+                    }
                 }
+
+                if (isRTL)
+                    startX -= (item.width + spaceW);
+                else
+                    startX += (item.width + spaceW);
+                continue;
             }
-            else if (isHebrew(displayWord))
+
+            std::string displayWord = text.substr(item.offset, item.length);
+            if (isHebrew(displayWord))
             {
-                // Replace HTML entities
                 displayWord = decodeHtmlEntities(displayWord);
                 ESP_LOGD(TAG, "drawLine: Hebrew word before reverse: '%s'", displayWord.c_str());
                 displayWord = reverseHebrewWord(displayWord);
             }
 
-            int w = gfx->textWidth(displayWord.c_str());
-            int spaceWLocal = gfx->textWidth(" ");
-            if (spaceWLocal == 0)
-                spaceWLocal = 5;
-
             if (debugWordsLogged < 6)
             {
-                ESP_LOGV(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), w, spaceWLocal, isRTL, startX, currentY);
+                ESP_LOGV(TAG, "drawLine: word='%s' w=%d space=%d isRTL=%d startX=%d y=%d", displayWord.c_str(), item.width, spaceW, isRTL, startX, baselineY - textAscent);
                 debugWordsLogged++;
             }
 
+            int textY = baselineY - textAscent;
             if (isRTL)
             {
-                ESP_LOGV(TAG, "Drawing RTL word at x=%d", startX - w);
-                drawStringMixed(displayWord, startX - w, currentY, (M5Canvas *)target, fontSize, true);
-                startX -= (w + spaceWLocal);
+                ESP_LOGV(TAG, "Drawing RTL word at x=%d", startX - item.width);
+                drawStringMixed(displayWord, startX - item.width, textY, (M5Canvas *)target, fontSize, true);
+                startX -= (item.width + spaceW);
             }
             else
             {
                 ESP_LOGV(TAG, "Drawing LTR word at x=%d", startX);
-                drawStringMixed(displayWord, startX, currentY, (M5Canvas *)target, fontSize, true);
-                startX += (w + spaceWLocal);
-            }
-
-            if (isMath)
-            {
-                ESP_LOGI(TAG, "isMath true, loading font");
-                // Restore book font
-                if (currentFont == "Hebrew" && !fontDataHebrew.empty())
-                {
-                    gfx->loadFont(fontDataHebrew.data());
-                }
-                else if (currentFont != "Default" && !fontData.empty())
-                {
-                    gfx->loadFont(fontData.data());
-                }
-                else
-                {
-                    gfx->unloadFont();
-                }
-                ESP_LOGI(TAG, "Font restored after math word");
+                drawStringMixed(displayWord, startX, textY, (M5Canvas *)target, fontSize, true);
+                startX += (item.width + spaceW);
             }
         }
     };
@@ -2630,27 +2688,95 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
 
             if (isInlineImage)
             {
-                // For inline images (like math symbols), render inline with text
-                // We'll add this to the current line similar to how math is handled
-
-                // Calculate inline image constraints - scale to fit line height
-                int inlineMaxHeight = lineHeight * 0.9; // Slightly smaller than line height
-                int inlineMaxWidth = maxWidth / 3;
-
-                // For measurement, estimate width based on known dimensions or default
-                int estimatedWidth = image->width > 0 ? std::min(image->width, inlineMaxWidth) : lineHeight; // Default to square if unknown
-
-                // Check if it fits on current line
-                if (currentLineWidth + estimatedWidth > maxWidth && !currentLine.empty())
+                // Treat inline images as line items so line height can expand
+                int cssWidthPx = -1;
+                int cssHeightPx = -1;
+                if (image->widthEm > 0.0f)
                 {
-                    // Flush current line and start new one
-                    ESP_LOGV(TAG, "Inline image does not fit, flushing current line");
-                    drawLine(currentLine, currentLineXOffset);
+                    cssWidthPx = static_cast<int>(image->widthEm * textHeight + 0.5f);
+                }
+                else if (image->width > 0)
+                {
+                    cssWidthPx = image->width;
+                }
+                if (image->heightEm > 0.0f)
+                {
+                    cssHeightPx = static_cast<int>(image->heightEm * textHeight + 0.5f);
+                }
+                else if (image->height > 0)
+                {
+                    cssHeightPx = image->height;
+                }
+
+                int intrinsicW = -1;
+                int intrinsicH = -1;
+                bool hasIntrinsic = false;
+                bool needsIntrinsic = (cssWidthPx <= 0 || cssHeightPx <= 0);
+                if (needsIntrinsic)
+                {
+                    bool resumeWrite = false;
+                    if (draw && target == nullptr && gfx->isEPD())
+                    {
+                        gfx->endWrite();
+                        resumeWrite = true;
+                    }
+                    if (takeEpubMutexWithWdt(epubMutex, abort))
+                    {
+                        hasIntrinsic = epubLoader.getImageDimensions(image->path, intrinsicW, intrinsicH);
+                        xSemaphoreGive(epubMutex);
+                    }
+                    if (resumeWrite)
+                    {
+                        gfx->startWrite();
+                        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
+                    }
+                }
+
+                int targetWidth = -1;
+                int targetHeight = -1;
+                if (cssWidthPx > 0)
+                    targetWidth = cssWidthPx;
+                if (cssHeightPx > 0)
+                    targetHeight = cssHeightPx;
+
+                if (targetWidth > 0 && targetHeight <= 0 && hasIntrinsic && intrinsicW > 0)
+                {
+                    targetHeight = static_cast<int>((float)targetWidth * intrinsicH / intrinsicW + 0.5f);
+                }
+                else if (targetHeight > 0 && targetWidth <= 0 && hasIntrinsic && intrinsicH > 0)
+                {
+                    targetWidth = static_cast<int>((float)targetHeight * intrinsicW / intrinsicH + 0.5f);
+                }
+                else if (targetWidth <= 0 && targetHeight <= 0 && hasIntrinsic && intrinsicW > 0 && intrinsicH > 0)
+                {
+                    targetHeight = static_cast<int>(lineHeight * 0.9f);
+                    targetWidth = static_cast<int>((float)targetHeight * intrinsicW / intrinsicH + 0.5f);
+                }
+
+                if (targetWidth <= 0)
+                    targetWidth = lineHeight;
+                if (targetHeight <= 0)
+                    targetHeight = std::max(lineHeight, targetWidth / 3);
+
+                if (targetWidth > maxWidth)
+                {
+                    float scale = (float)maxWidth / targetWidth;
+                    targetWidth = maxWidth;
+                    targetHeight = static_cast<int>(targetHeight * scale + 0.5f);
+                }
+
+                int spaceW = gfx->textWidth(" ");
+                if (spaceW == 0)
+                    spaceW = 5;
+
+                if (currentLineWidth + targetWidth > maxWidth && !currentLine.empty())
+                {
+                    int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+                    drawLine(currentLine, currentLineAscent, currentLineDescent);
                     linesDrawn++;
                     currentLine.clear();
-                    currentLineWidth = 0;
-                    currentLineXOffset = 0;
-                    currentY += lineHeight;
+                    resetLineMetrics();
+                    currentY += lineAdvance;
 
                     if (currentY + lineHeight > maxY)
                     {
@@ -2658,82 +2784,48 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                     }
                 }
 
-                if (draw)
+                LineItem item;
+                item.type = LineItem::Type::Image;
+                item.image = image;
+                item.width = targetWidth;
+                item.height = targetHeight;
+                item.maxWidth = targetWidth;
+                item.maxHeight = targetHeight;
+
+                switch (image->verticalAlign)
                 {
-                    // Flush any pending text before drawing the image
-                    if (!currentLine.empty())
-                    {
-                        drawLine(currentLine, currentLineXOffset);
-                        currentLine.clear();
-                        // Update offset for next segment (skip what we just drew)
-                        currentLineXOffset = currentLineWidth;
-                    }
-
-                    // Extract and render inline image
-                    std::vector<uint8_t> imageData;
-                    ESP_LOGV(TAG, "Allocated imageData vector for inline image");
-                    bool extracted = false;
-                    bool resumeWrite = false;
-                    if (target == nullptr && gfx->isEPD())
-                    {
-                        gfx->endWrite();
-                        resumeWrite = true;
-                    }
-                    if (takeEpubMutexWithWdt(epubMutex, abort))
-                    {
-                        extracted = epubLoader.extractImage(image->path, imageData);
-                        xSemaphoreGive(epubMutex);
-                    }
-                    ESP_LOGV(TAG, "Extracted inline image data, extracted=%d", extracted);
-                    if (resumeWrite)
-                    {
-                        gfx->startWrite();
-                        gfx->setTextColor(TFT_BLACK, TFT_WHITE);
-                    }
-                    ESP_LOGV(TAG, "Resumed write if needed for inline image");
-
-                    if (extracted && !imageData.empty())
-                    {
-                        ImageHandler &imgHandler = ImageHandler::getInstance();
-                        ESP_LOGV(TAG, "Got ImageHandler instance for inline image");
-                        // Calculate X position based on current line width
-                        int imgX = (isRTLDocument ? (width - rightMargin - currentLineWidth - estimatedWidth) : (x + currentLineWidth));
-                        // Vertically center the image on the baseline
-                        int imgY = currentY + (lineHeight - inlineMaxHeight) / 2;
-                        if (imgY < currentY)
-                            imgY = currentY;
-
-                        ImageDecodeResult result = imgHandler.decodeAndRender(
-                            imageData.data(), imageData.size(),
-                            (M5Canvas *)target, imgX, imgY,
-                            inlineMaxWidth, inlineMaxHeight,
-                            ImageDisplayMode::INLINE);
-
-                        if (result.success)
-                        {
-                            ESP_LOGV(TAG, "Rendered inline image at (%d,%d) size=%dx%d", imgX, imgY, result.scaledWidth, result.scaledHeight);
-                            // Update estimated width with actual rendered width
-                            estimatedWidth = result.scaledWidth;
-
-                            // Track for tap detection
-                            if (target == nullptr)
-                            {
-                                RenderedImageInfo ri;
-                                ri.x = imgX;
-                                ri.y = imgY;
-                                ri.width = result.scaledWidth;
-                                ri.height = result.scaledHeight;
-                                ri.image = *image;
-                                pageRenderedImages.push_back(ri);
-                            }
-                        }
-                    }
+                case ImageVAlign::TEXT_TOP:
+                case ImageVAlign::TOP:
+                    item.top = -textAscent;
+                    item.bottom = item.top + targetHeight;
+                    break;
+                case ImageVAlign::TEXT_BOTTOM:
+                case ImageVAlign::BOTTOM:
+                    item.bottom = textDescent;
+                    item.top = item.bottom - targetHeight;
+                    break;
+                case ImageVAlign::MIDDLE:
+                    item.top = -(targetHeight / 2);
+                    item.bottom = targetHeight + item.top;
+                    break;
+                case ImageVAlign::SUPER:
+                    item.top = -(targetHeight + textAscent / 2);
+                    item.bottom = -textAscent / 2;
+                    break;
+                case ImageVAlign::SUB:
+                    item.top = -(targetHeight - textDescent / 2);
+                    item.bottom = textDescent / 2;
+                    break;
+                case ImageVAlign::BASELINE:
+                default:
+                    item.top = -targetHeight;
+                    item.bottom = 0;
+                    break;
                 }
 
-                // Advance cursor past the image
-                currentLineWidth += estimatedWidth + 5; // Add small spacing
-                // Update offset for next text segment to start after image
-                currentLineXOffset = currentLineWidth;
+                updateLineMetrics(item);
+                currentLine.push_back(item);
+                currentLineWidth += targetWidth + spaceW;
 
                 i += IMAGE_PLACEHOLDER_LEN;
                 continue;
@@ -2742,12 +2834,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
             // Block image - flush current line first
             if (!currentLine.empty())
             {
-                drawLine(currentLine, currentLineXOffset);
+                int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+                drawLine(currentLine, currentLineAscent, currentLineDescent);
                 linesDrawn++;
                 currentLine.clear();
-                currentLineWidth = 0;
-                currentLineXOffset = 0;
-                currentY += lineHeight;
+                resetLineMetrics();
+                currentY += lineAdvance;
             }
 
             if (draw)
@@ -2881,12 +2973,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                         // Flush current line first
                         if (!currentLine.empty())
                         {
-                            drawLine(currentLine, currentLineXOffset);
+                            int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+                            drawLine(currentLine, currentLineAscent, currentLineDescent);
                             linesDrawn++;
                             currentLine.clear();
-                            currentLineWidth = 0;
-                            currentLineXOffset = 0;
-                            currentY += lineHeight;
+                            resetLineMetrics();
+                            currentY += lineAdvance;
                         }
 
                         // Check if math block fits on page
@@ -2933,12 +3025,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                         if (currentLineWidth + mathWidth > maxWidth)
                         {
                             // Doesn't fit - flush line first
-                            drawLine(currentLine, currentLineXOffset);
+                            int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+                            drawLine(currentLine, currentLineAscent, currentLineDescent);
                             linesDrawn++;
                             currentLine.clear();
-                            currentLineWidth = 0;
-                            currentLineXOffset = 0;
-                            currentY += lineHeight;
+                            resetLineMetrics();
+                            currentY += lineAdvance;
 
                             if (currentY + lineHeight > maxY)
                             {
@@ -2946,10 +3038,20 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
                             }
                         }
 
-                        // Add as a special math entry - use negative length to mark as math block index
-                        // We'll store the text offset so drawLine can find the math
-                        currentLine.emplace_back(i, 0, true); // length=0 marks as MathML block
-                        currentLineWidth += mathWidth + gfx->textWidth(" ");
+                        LineItem mathItem;
+                        mathItem.type = LineItem::Type::Math;
+                        mathItem.mathBlock = mathBlock;
+                        mathItem.width = mathWidth;
+                        mathItem.height = mathHeight;
+                        mathItem.top = -mathBaseline;
+                        mathItem.bottom = mathHeight - mathBaseline;
+                        updateLineMetrics(mathItem);
+                        currentLine.push_back(mathItem);
+
+                        int spaceW = gfx->textWidth(" ");
+                        if (spaceW == 0)
+                            spaceW = 5;
+                        currentLineWidth += mathWidth + spaceW;
                     }
                 }
 
@@ -3044,12 +3146,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         if (currentLineWidth + w > maxWidth)
         {
             ESP_LOGV(TAG, "Word does not fit, flushing current line");
-            drawLine(currentLine, currentLineXOffset);
+            int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+            drawLine(currentLine, currentLineAscent, currentLineDescent);
             linesDrawn++;
             currentLine.clear();
-            currentLineWidth = 0;
-            currentLineXOffset = 0;
-            currentY += lineHeight;
+            resetLineMetrics();
+            currentY += lineAdvance;
 
             if (currentY + lineHeight > maxY)
             {
@@ -3058,7 +3160,16 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         }
         ESP_LOGV(TAG, "Checked if word fits");
 
-        currentLine.emplace_back(i, wordLen, inMathMode);
+        LineItem wordItem;
+        wordItem.type = LineItem::Type::Text;
+        wordItem.offset = i;
+        wordItem.length = wordLen;
+        wordItem.width = w;
+        wordItem.height = textHeight;
+        wordItem.top = -textAscent;
+        wordItem.bottom = textDescent;
+        updateLineMetrics(wordItem);
+        currentLine.push_back(wordItem);
         currentLineWidth += w + spaceW;
         ESP_LOGV(TAG, "Added word to current line");
 
@@ -3081,12 +3192,12 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
         ESP_LOGV(TAG, "Advanced i to %zu", i);
         if (isNewline)
         {
-            drawLine(currentLine, currentLineXOffset);
+            int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+            drawLine(currentLine, currentLineAscent, currentLineDescent);
             linesDrawn++;
             currentLine.clear();
-            currentLineWidth = 0;
-            currentLineXOffset = 0;
-            currentY += lineHeight;
+            resetLineMetrics();
+            currentY += lineAdvance;
             if (currentY + lineHeight > maxY)
             {
                 break; // Page full
@@ -3096,10 +3207,14 @@ size_t GUI::drawPageContentAt(size_t startOffset, bool draw, M5Canvas *target, v
     }
 
     // Flush remaining line
-    if (!currentLine.empty() && currentY + lineHeight <= maxY)
+    if (!currentLine.empty())
     {
-        drawLine(currentLine, currentLineXOffset);
-        linesDrawn++;
+        int lineAdvance = std::max(lineHeight, currentLineAscent + currentLineDescent);
+        if (currentY + lineAdvance <= maxY)
+        {
+            drawLine(currentLine, currentLineAscent, currentLineDescent);
+            linesDrawn++;
+        }
     }
 
     if (draw)
