@@ -166,6 +166,7 @@ private:
     TaskHandle_t loadingTaskHandle = nullptr;
     int metricsTaskTargetBookId = 0;
     int loadingTargetBookId = 0;
+    std::string loadingTargetPath; // Path for direct loading (e.g. restore last book)
     int loadingTargetChapter = -1;
     size_t loadingTargetOffset = 0;
     QueueHandle_t renderQueue = nullptr;

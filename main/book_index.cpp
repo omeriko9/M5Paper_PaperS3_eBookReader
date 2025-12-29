@@ -339,7 +339,8 @@ bool BookIndex::scanDirectory(const char *basePath, ProgressCallback callback, s
         }
 
         // Yield to let UI task run - but not too much
-        if (processedFiles % 5 == 0) vTaskDelay(1);
+        // Increased delay to prevent starvation of other tasks (like loading)
+        vTaskDelay(pdMS_TO_TICKS(5));
         
         if (entry->d_type == DT_REG)
         { // Regular file

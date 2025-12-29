@@ -1091,6 +1091,7 @@ void GUI::backgroundIndexerTaskLoop()
     waitForUiIdle();
     ESP_LOGI(TAG, "BgIndexer: Scanning for new books...");
     indexingScanActive = true;
+    needsRedraw = true; // Update status bar
     indexingCurrent = 0;
     indexingTotal = 0;
     bool newBooksFound = false;
@@ -1120,6 +1121,7 @@ void GUI::backgroundIndexerTaskLoop()
         wdtResetIfRegistered(); },
                                               shouldPause);
     indexingScanActive = false;
+    needsRedraw = true; // Update status bar
 
     if (newBooksFound)
     {
@@ -5624,7 +5626,17 @@ void GUI::loadingTaskLoop()
     // Signal CRITICAL priority - all background tasks should pause immediately
     TaskCoordinator::getInstance().requestHighPriority(TaskPriority::CRITICAL);
 
-    BookEntry book = bookIndex.getBook(id);
+    BookEntry book;
+    if (!loadingTargetPath.empty()) {
+        // Direct load (e.g. restore last book)
+        book.id = id;
+        book.path = loadingTargetPath;
+        book.title = "Restoring..."; // Temporary title
+        loadingTargetPath.clear(); // Clear it
+    } else {
+        book = bookIndex.getBook(id);
+    }
+
     if (book.id == 0)
     {
         ESP_LOGE(TAG, "Loading task: Book %d not found", id);
@@ -5800,7 +5812,8 @@ void GUI::loadingTaskLoop()
 
 bool GUI::openBookById(int id, int chapter, size_t offset)
 {
-    if (!bookIndexReady)
+    // If we have a specific path set (e.g. restore last book), bypass index check
+    if (!bookIndexReady && loadingTargetPath.empty())
         return false;
 
     if (loadingTaskHandle != nullptr)
@@ -6295,6 +6308,7 @@ bool GUI::loadLastBook()
     }
 
     ESP_LOGI(TAG, "Restoring last book %d via async loader", lastId);
+    loadingTargetPath = lastPath;
     return openBookById(lastId, lastChapter, lastOffset);
 }
 
